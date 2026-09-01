@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct ScreenHome: View {
-    var onSwitchMode: () -> Void
     @Binding var taskTutorialDone: Bool
     @State private var showNotifs = false
     @State private var openChildId: String?
@@ -46,18 +45,20 @@ struct ScreenHome: View {
                         Text("Evlin").font(Typography.font(16, weight: .heavy)).foregroundStyle(EColor.onSurface)
                     }
                 }
+                // Just notifications now — this used to also carry a gear
+                // icon that, despite looking like Settings, actually
+                // switched modes (back to the Parent/Child picker). That
+                // conflated two unrelated things under one icon; Settings is
+                // its own dedicated tab below (Telegram-style: Settings is
+                // its own place, not a shortcut bolted onto Home), and
+                // "leave this mode" now lives inside it as Sign Out.
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 4) {
-                        Button { showNotifs = true } label: {
-                            ZStack(alignment: .topTrailing) {
-                                Image(systemName: "bell.fill").foregroundStyle(EColor.onSurface)
-                                if unreadCount > 0 {
-                                    Circle().fill(EColor.danger).frame(width: 8, height: 8).offset(x: 3, y: -3)
-                                }
+                    Button { showNotifs = true } label: {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "bell.fill").foregroundStyle(EColor.onSurface)
+                            if unreadCount > 0 {
+                                Circle().fill(EColor.danger).frame(width: 8, height: 8).offset(x: 3, y: -3)
                             }
-                        }
-                        Button { onSwitchMode() } label: {
-                            Image(systemName: "gearshape.fill").foregroundStyle(EColor.onSurface)
                         }
                     }
                 }

@@ -32,6 +32,13 @@ struct TabletRootView: View {
                 if tab == 0 {
                     PlayTimeTopBar(minutesLeft: minutesLeft, minutesMax: limitMin, locked: locked, done: doneCount, total: tasks.count, onBreak: onBreak)
                 }
+                // No Settings tab here — its only content was the Parent
+                // Controls request, so a whole bottom-nav slot represented a
+                // single feature rather than an actual settings section
+                // (unlike, say, Telegram's Settings, which is genuinely its
+                // own place). That access point now lives behind a small
+                // gear icon in this tab's own toolbar (see ScreenTabletHome)
+                // instead of being mistaken for real settings.
                 TabView(selection: $tab) {
                     ScreenTabletHome(tasks: $tasks, onSwitchMode: onSwitchMode)
                         .tabItem { Label("Task", systemImage: "checkmark.circle.fill") }
@@ -42,9 +49,6 @@ struct TabletRootView: View {
                     ScreenTabletLibrary()
                         .tabItem { Label("Library", systemImage: "book.closed.fill") }
                         .tag(2)
-                    ScreenTabletSettings(onSwitchMode: onSwitchMode)
-                        .tabItem { Label("Settings", systemImage: "gearshape.fill") }
-                        .tag(3)
                 }
                 .tint(KidTheme.greenDeep)
                 // The native tab bar paints its own opaque system background

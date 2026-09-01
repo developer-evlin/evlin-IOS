@@ -7,7 +7,7 @@ struct ParentRootView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            ScreenHome(onSwitchMode: onSwitchMode, taskTutorialDone: $taskTutorialDone)
+            ScreenHome(taskTutorialDone: $taskTutorialDone)
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .tag(0)
             ScreenCalendar()
@@ -19,7 +19,7 @@ struct ParentRootView: View {
             ScreenLibrary()
                 .tabItem { Label("Library", systemImage: "book.pages") }
                 .tag(3)
-            ScreenSettings()
+            ScreenSettings(onSwitchMode: onSwitchMode)
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(4)
         }

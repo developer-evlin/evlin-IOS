@@ -21,6 +21,7 @@ enum SettingsRoute: Hashable {
 }
 
 struct ScreenSettings: View {
+    var onSwitchMode: () -> Void
     @State private var path = NavigationPath()
     @State private var openChildId: String?
 
@@ -726,6 +727,7 @@ struct ScreenSettings: View {
             Section("Confirm") {
                 Button(role: .destructive) {
                     path.removeLast(path.count)
+                    onSwitchMode()
                 } label: {
                     settingsRow(
                         title: "Sign Out",

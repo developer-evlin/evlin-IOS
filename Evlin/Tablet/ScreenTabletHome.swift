@@ -4,6 +4,10 @@ struct ScreenTabletHome: View {
     @Binding var tasks: [KidTask]
     var onSwitchMode: () -> Void
     @State private var selectedTask: KidTask?
+    // Settings/Parent Controls used to be its own bottom tab — its only
+    // content was this one request, so it's a toolbar icon here instead,
+    // out of the kid's main navigation entirely (see TabletRootView).
+    @State private var showSettings = false
     // This screen used to render identically on iPhone and iPad — same
     // fixed sizing just stretched across whatever width it landed on, which
     // read as an oversized phone layout with a lot of dead margin rather
@@ -71,9 +75,16 @@ struct ScreenTabletHome: View {
             .background(KidTheme.background)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Parent mode", action: onSwitchMode).font(Typography.font(11, weight: .semibold))
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape.fill")
+                            .foregroundStyle(KidTheme.inkSoft)
+                    }
+                    .accessibilityLabel("Settings")
                 }
             }
+        }
+        .sheet(isPresented: $showSettings) {
+            ScreenTabletSettings(onSwitchMode: onSwitchMode)
         }
         .fullScreenCover(item: $selectedTask) { task in
             TaskDetailView(task: task, onComplete: {

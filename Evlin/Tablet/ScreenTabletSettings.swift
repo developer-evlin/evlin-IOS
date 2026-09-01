@@ -16,12 +16,18 @@ struct ScreenTabletSettings: View {
     // still reflected here the next time this view checks it.
     @ObservedObject private var childProfile = FamilyStore.children.last ?? FamilyStore.child(TabletData.child.id)
     @State private var showApprovalWait = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Settings")
+                    // "Parent Controls," not "Settings" — this sheet's only
+                    // content is the one request below, and calling that
+                    // "Settings" is exactly the mislabeling that got this
+                    // pulled out of the kid's main tab bar in the first
+                    // place (see TabletRootView).
+                    Text("Parent Controls")
                         .font(Typography.display(30, weight: .heavy))
                         .foregroundStyle(KidTheme.ink)
                         .padding(.top, 4)
@@ -34,6 +40,16 @@ struct ScreenTabletSettings: View {
                 .padding(.bottom, 100)
             }
             .background(KidTheme.background)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(KidTheme.inkSoft)
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
         }
         .sheet(isPresented: $showApprovalWait) {
             ParentApprovalWaitingView(
