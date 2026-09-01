@@ -1,0 +1,509 @@
+import SwiftUI
+
+// Paged task review — opened when a parent taps a task row. Swipe left to
+// move to the next task, right to go back; Approve/Redo are button-only
+// decisions (not tied to swipe direction, since swiping is now navigation).
+// A Redo always pauses on a small compose step first so the parent can send
+// the kid a quick note or voice message about what to fix.
+struct TaskReviewDeckView: View {
+    @Binding var tasks: [ChildTask]
+    var childName: String
+    var startIndex: Int
+    var onDismiss: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var index: Int
+    @State private var showRedoCompose = false
+    @State private var editingTask: ChildTask?
+
+    init(tasks: Binding<[ChildTask]>, childName: String, startIndex: Int, onDismiss: @escaping () -> Void) {
+        self._tasks = tasks
+        self.childName = childName
+        self.startIndex = startIndex
+        self.onDismiss = onDismiss
+        _index = State(initialValue: startIndex)
+    }
+
+    private var currentTask: ChildTask? { tasks.indices.contains(index) ? tasks[index] : nil }
+
+    // Mirrors the branching the old single-task TaskDetailSheet had:
+    // .review/.bypass have a real "send it back" action (Redo / Deny —
+    // both just move the task to .pending). .pending/.overdue only have a
+    // one-way "mark complete". .done can still be sent back to redo even
+    // after approval — parents change their mind — so it keeps a Redo
+    // option too, with "Next task" standing in for "Approve" since it's
+    // already approved. .bypassed is the only truly final state, with no
+    // action buttons besides Next.
+    private func primaryLabel(for task: ChildTask) -> String {
+        switch task.state {
+        case .bypass: return "Allow bypass"
+        case .done: return "Next task"
+        default: return "Approve"
+        }
+    }
+    private func secondaryLabel(for task: ChildTask) -> String? {
+        switch task.state {
+        case .review, .done: return "Redo"
+        case .bypass: return "Deny"
+        default: return nil
+        }
+    }
+    private func canRedo(_ task: ChildTask) -> Bool { task.state == .review || task.state == .bypass || task.state == .done }
+    private func isResolved(_ task: ChildTask) -> Bool { task.state == .bypassed }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                EColor.surface.ignoresSafeArea()
+
+                if let task = currentTask {
+                    VStack(spacing: 18) {
+                        counter
+
+                        TabView(selection: $index) {
+                            ForEach(Array(tasks.enumerated()), id: \.offset) { i, t in
+                                TaskReviewCard(task: t, childName: childName)
+                                    .tag(i)
+                            }
+                        }
+                        .tabViewStyle(.page(indexDisplayMode: .never))
+                        // A spring (not a flat ease) so a button-triggered
+                        // advance still carries the same snap/settle a real
+                        // finger-drag page-swipe has, rather than reading as
+                        // a plain fade/slide.
+                        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: index)
+
+                        actionButtons(for: task)
+                    }
+                    .padding(20)
+                } else {
+                    doneState
+                }
+            }
+            .navigationTitle(childName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss(); onDismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if let task = currentTask {
+                        Button { editingTask = task } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(EColor.onSurface)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showRedoCompose) {
+            if let task = currentTask {
+                RedoComposeSheet(childName: childName, taskTitle: task.title, actionLabel: secondaryLabel(for: task) ?? "Redo", onSend: { note, hasVoice in
+                    applyRedo(note: note, hasVoice: hasVoice)
+                    showRedoCompose = false
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
+                }, onCancel: {
+                    showRedoCompose = false
+                })
+                .interactiveDismissDisabled()
+                .presentationDetents([.large])
+            }
+        }
+        .sheet(item: $editingTask) { task in
+            EditTaskReviewSheet(
+                task: task,
+                onSave: { updated in applyEdit(updated) },
+                onDelete: { applyDelete(task) },
+                onCancel: { editingTask = nil }
+            )
+            .interactiveDismissDisabled()
+            .presentationDetents([.large])
+        }
+    }
+
+    private var counter: some View {
+        HStack {
+            Text("\(min(index + 1, tasks.count)) of \(tasks.count)")
+                .font(Typography.font(12, weight: .heavy))
+                .foregroundStyle(EColor.onSurfaceVariant)
+            Spacer()
+            Text("Swipe to browse")
+                .font(Typography.font(11, weight: .medium))
+                .foregroundStyle(EColor.onSurfaceVariant)
+        }
+    }
+
+    private var doneState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "checkmark.seal.fill").font(.system(size: 44)).foregroundStyle(Color(hex: "25924A"))
+            Text("All caught up").font(Typography.font(20, weight: .heavy)).foregroundStyle(EColor.onSurface)
+            Text("You've been through every task for \(childName).")
+                .font(Typography.font(13, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+            PrimaryButton(title: "Done") { dismiss(); onDismiss() }
+                .padding(.top, 8)
+        }
+        .padding(28)
+    }
+
+    @ViewBuilder
+    private func actionButtons(for task: ChildTask) -> some View {
+        if isResolved(task) {
+            Button {
+                approve(task) // idempotent for an already-resolved task — just advances the deck
+            } label: {
+                Label("Next task", systemImage: "arrow.right")
+                    .font(Typography.font(15, weight: .heavy))
+                    .foregroundStyle(EColor.onSurface)
+                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(EColor.outlineVariant, lineWidth: 1.5))
+            }
+            .buttonStyle(.plain)
+        } else {
+            HStack(spacing: 12) {
+                if let secondary = secondaryLabel(for: task) {
+                    Button {
+                        showRedoCompose = true
+                    } label: {
+                        Label(secondary, systemImage: "arrow.uturn.backward")
+                            .font(Typography.font(15, weight: .heavy))
+                            .foregroundStyle(Color(hex: "B26A00"))
+                            .frame(maxWidth: .infinity).frame(height: 52)
+                            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(hex: "EF6C00"), lineWidth: 1.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    approve(task)
+                } label: {
+                    Label(primaryLabel(for: task), systemImage: "checkmark")
+                        .font(Typography.font(15, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .background(Brand.greenDeep)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func approve(_ task: ChildTask) {
+        if let i = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[i].state = task.state == .bypass ? .bypassed : .done
+        }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
+    }
+
+    private func applyRedo(note: String, hasVoice: Bool) {
+        guard let task = currentTask, let i = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        tasks[i].state = .pending
+        tasks[i].redoNote = note.isEmpty ? nil : note
+        tasks[i].redoHasVoiceNote = hasVoice
+    }
+
+    private func applyEdit(_ updated: ChildTask) {
+        if let i = tasks.firstIndex(where: { $0.id == updated.id }) {
+            tasks[i] = updated
+        }
+        editingTask = nil
+    }
+
+    private func applyDelete(_ task: ChildTask) {
+        tasks.removeAll { $0.id == task.id }
+        editingTask = nil
+    }
+
+    private func advance() {
+        index += 1
+    }
+}
+
+// One card's worth of the task under review — condensed from the full
+// TaskDetailSheet layout to fit a swipeable card instead of a scroll view.
+private struct TaskReviewCard: View {
+    var task: ChildTask
+    var childName: String
+
+    private var statusMeta: (label: String, tone: Color, bg: Color) {
+        switch task.state {
+        case .done: return ("Approved", Color(hex: "25924A"), Color(hex: "25924A").opacity(0.10))
+        case .bypassed: return ("Bypassed", EColor.onSurfaceVariant, EColor.outlineVariant.opacity(0.5))
+        case .review: return ("Awaiting your review", Color(hex: "B26A00"), Color(hex: "FFA726").opacity(0.12))
+        case .overdue: return ("Overdue · not submitted", EColor.danger, EColor.danger.opacity(0.10))
+        case .bypass: return ("Bypass requested", Color(hex: "7C3AED"), Color(hex: "7C3AED").opacity(0.10))
+        case .pending: return ("Waiting on \(childName)", EColor.onSurfaceVariant, EColor.outlineVariant.opacity(0.5))
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(task.category.uppercased())
+                        .font(Typography.font(10.5, weight: .bold)).tracking(0.6)
+                        .foregroundStyle(EColor.onSurfaceVariant)
+
+                    Text(task.title)
+                        .font(Typography.font(24, weight: .heavy))
+                        .foregroundStyle(EColor.onSurface)
+
+                    HStack(spacing: 8) {
+                        Circle().fill(statusMeta.tone).frame(width: 7, height: 7)
+                        Text(statusMeta.label).font(Typography.font(12, weight: .bold)).foregroundStyle(statusMeta.tone)
+                        if let due = task.dueLabel {
+                            Spacer(minLength: 8)
+                            Text("Due \(due)").font(Typography.font(11, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(statusMeta.bg).clipShape(Capsule())
+                }
+
+                if !task.description.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("WHAT TO DO").font(Typography.font(10, weight: .bold)).tracking(1).foregroundStyle(EColor.onSurfaceVariant)
+                        Text(task.description)
+                            .font(Typography.font(14.5, weight: .regular))
+                            .foregroundStyle(EColor.onSurface)
+                    }
+                }
+
+                if task.state != .bypass {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("\(childName.uppercased())'S SUBMISSION")
+                                .font(Typography.font(10, weight: .bold)).tracking(1).foregroundStyle(EColor.onSurfaceVariant)
+                            Spacer()
+                            if let at = task.submittedAt {
+                                Text("at \(at)").font(Typography.font(11, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                            }
+                        }
+                        if task.hasPhoto {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(EColor.outlineVariant.opacity(0.5))
+                                .frame(height: 150)
+                                .overlay(Image(systemName: "photo").font(.system(size: 26)).foregroundStyle(EColor.onSurfaceVariant))
+                        } else {
+                            emptySubmissionPlaceholder
+                        }
+                    }
+                }
+
+                if let note = task.note, !note.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(childName.uppercased())'S NOTE").font(Typography.font(10, weight: .bold)).foregroundStyle(EColor.onSurfaceVariant)
+                        Text("\"\(note)\"").font(Typography.font(13.5, weight: .regular)).foregroundStyle(EColor.onSurface)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(EColor.surfaceContainerHigh)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+
+                if task.hasVoiceNote {
+                    HStack(spacing: 10) {
+                        ZStack {
+                            Circle().fill(Color(hex: "7C3AED"))
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 34, height: 34)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Voice note").font(Typography.font(13.5, weight: .bold)).foregroundStyle(EColor.onSurface)
+                            Text("From \(childName)").font(Typography.font(11.5, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(12)
+                    .background(Color(hex: "7C3AED").opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(EColor.surfaceContainerLowest)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(EColor.outlineVariant.opacity(0.6), lineWidth: 1))
+        .shadow(color: .black.opacity(0.08), radius: 20, y: 10)
+    }
+
+    private var emptySubmissionPlaceholder: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                Circle().fill(EColor.surfaceContainerHigh).frame(width: 48, height: 48)
+                Image(systemName: task.state == .overdue ? "exclamationmark" : "hourglass")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(EColor.outline)
+            }
+            Text(task.state == .overdue ? "No photo submitted" : "Waiting for photo")
+                .font(Typography.font(13, weight: .bold)).foregroundStyle(EColor.onSurface)
+            Text(task.state == .overdue ? "\(childName) missed the deadline" : "\(childName) hasn't uploaded yet")
+                .font(Typography.font(11.5, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 26)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                .foregroundStyle(EColor.outlineVariant)
+        )
+    }
+}
+
+// Shown on Redo — a quick note and/or a (mocked, no real audio — matches
+// the kid-side task-photo capture pattern in TaskDetailView) voice note the
+// parent sends back explaining what needs fixing.
+// Same FormShell/FormField shell AddTaskForm uses (Cancel top-left, big
+// bold title, full-width Save pill) rather than a bespoke layout, so every
+// parent-facing compose sheet in the app reads as one consistent pattern.
+private struct RedoComposeSheet: View {
+    var childName: String
+    var taskTitle: String
+    var actionLabel: String
+    var onSend: (String, Bool) -> Void
+    var onCancel: () -> Void
+
+    @State private var note = ""
+    @State private var voiceRecorded = false
+
+    private var canSend: Bool { !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voiceRecorded }
+
+    var body: some View {
+        FormShell(
+            title: actionLabel,
+            onCancel: onCancel,
+            onSave: { onSend(note.trimmingCharacters(in: .whitespacesAndNewlines), voiceRecorded) },
+            canSave: canSend,
+            saveLabel: "Send & \(actionLabel.lowercased())"
+        ) {
+            Text(taskTitle)
+                .font(Typography.font(13, weight: .semibold))
+                .foregroundStyle(EColor.onSurfaceVariant)
+                .padding(.bottom, 14)
+
+            FormField(label: "Let \(childName) know why") {
+                TextField("e.g. Missed the desk, can you go back and wipe it down?", text: $note, axis: .vertical)
+                    .font(Typography.font(15, weight: .regular))
+                    .lineLimit(3...5)
+                    .padding(14)
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+
+            Button {
+                voiceRecorded.toggle()
+            } label: {
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle().fill(voiceRecorded ? FormGreen.accent : FormGreen.accentBg)
+                        Image(systemName: voiceRecorded ? "checkmark" : "mic.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(voiceRecorded ? .white : FormGreen.accent)
+                    }
+                    .frame(width: 40, height: 40)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(voiceRecorded ? "Voice note attached" : "Record a voice note")
+                            .font(Typography.font(14, weight: .heavy)).foregroundStyle(EColor.onSurface)
+                        Text(voiceRecorded ? "Tap to remove" : "Say it instead of typing it")
+                            .font(Typography.font(12, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(EColor.surfaceContainerLowest)
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(EColor.outlineVariant))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 18)
+
+            Button("\(actionLabel) without a note") { onSend("", false) }
+                .font(Typography.font(13, weight: .semibold))
+                .foregroundStyle(EColor.onSurfaceVariant)
+                .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+// Opened from the "..." button on the review deck's toolbar — same
+// FormShell/FormField shell AddTaskSheet uses, pre-filled from the task
+// under review, plus a Delete action (ScreenProfile's AddTaskSheet has no
+// delete equivalent since it only ever creates).
+private struct EditTaskReviewSheet: View {
+    var task: ChildTask
+    var onSave: (ChildTask) -> Void
+    var onDelete: () -> Void
+    var onCancel: () -> Void
+
+    @State private var title: String
+    @State private var description: String
+    @State private var dueDate = Date()
+    @State private var hasDueDate: Bool
+    @State private var repeatDays: Set<String>
+    @State private var showDeleteConfirm = false
+
+    init(task: ChildTask, onSave: @escaping (ChildTask) -> Void, onDelete: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        self.task = task
+        self.onSave = onSave
+        self.onDelete = onDelete
+        self.onCancel = onCancel
+        _title = State(initialValue: task.title)
+        _description = State(initialValue: task.description)
+        _hasDueDate = State(initialValue: task.dueLabel != nil)
+        _repeatDays = State(initialValue: task.repeats == "none"
+            ? []
+            : Set(task.repeats.split(separator: ",").map(String.init)))
+    }
+
+    private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    var body: some View {
+        FormShell(title: "Edit task", onCancel: onCancel, onSave: {
+            var updated = task
+            updated.title = title.trimmingCharacters(in: .whitespaces)
+            updated.description = description
+            updated.dueLabel = hasDueDate ? formatted(dueDate) : nil
+            let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
+            updated.repeats = repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
+            onSave(updated)
+        }, canSave: canSave, saveLabel: "Save changes", onDelete: { showDeleteConfirm = true }) {
+            FormField(label: "Task name") {
+                FormTextField(placeholder: "e.g. Make your bed", text: $title)
+            }
+            FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
+            RepeatPicker(selectedDays: $repeatDays)
+            MoreOptions {
+                FormField(label: "What to do") {
+                    TextField("Instructions for the student…", text: $description, axis: .vertical)
+                        .font(Typography.font(15, weight: .regular))
+                        .lineLimit(3...5)
+                        .padding(14)
+                        .background(FormGreen.fieldBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+            }
+        }
+        .alert("Delete \"\(task.title)\"?", isPresented: $showDeleteConfirm) {
+            Button("Delete", role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
+        }
+    }
+
+    private func formatted(_ date: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f.string(from: date)
+    }
+}

@@ -1,0 +1,47 @@
+name: Evlin
+options:
+  bundleIdPrefix: com.evlin
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+packages:
+  Lottie:
+    url: https://github.com/airbnb/lottie-ios
+    exactVersion: 4.6.1
+targets:
+  Evlin:
+    type: application
+    platform: iOS
+    sources:
+      - path: Evlin
+    dependencies:
+      - package: Lottie
+        product: Lottie
+    resources:
+      - path: Evlin/Resources
+    info:
+      path: Evlin/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+        UIAppFonts:
+          - PlusJakartaSans-Bold.ttf
+          - PlusJakartaSans-ExtraBold.ttf
+          - PlusJakartaSans-SemiBold.ttf
+          - PlusJakartaSans-Medium.ttf
+          - PlusJakartaSans-Regular.ttf
+          - Baloo2-ExtraBold.ttf
+          - Baloo2-Bold.ttf
+          - Baloo2-SemiBold.ttf
+          - Baloo2-Medium.ttf
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.evlin.app
+        TARGETED_DEVICE_FAMILY: "1,2"

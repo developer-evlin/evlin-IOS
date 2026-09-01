@@ -1,0 +1,101 @@
+import SwiftUI
+
+struct KidTask: Identifiable {
+    let id: String
+    var title: String
+    var iconTaskId: String
+    // Optional — a task doesn't have to have a deadline. nil tasks sit in
+    // the Ring's "anytime" cluster instead of on the clock face.
+    var due: String?
+    var done: Bool
+    var desc: String
+    // Set when the kid taps "Can't do it today?" on TaskDetailView instead
+    // of submitting a photo — mirrors the parent-side ChildTask.state ==
+    // .bypass concept, but this prototype's kid/parent data are separate
+    // mock arrays with no cross-device sync, so it only drives this task's
+    // own row/detail styling, not the parent app's review queue.
+    var bypassRequested: Bool = false
+    var bypassNote: String? = nil
+    var bypassHasVoiceNote: Bool = false
+}
+
+extension KidTask {
+    // Best-effort "missed" check for the demo's fixed `due` strings (e.g.
+    // "6:30 PM") — parses it as *today's* clock time. Good enough to drive
+    // the AI coach's goal_missed trigger without a real due-date model.
+    var isOverdue: Bool {
+        guard !done, let due else { return false }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        guard let time = formatter.date(from: due) else { return false }
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.hour, .minute], from: time)
+        guard let dueToday = cal.date(bySettingHour: comps.hour ?? 0, minute: comps.minute ?? 0, second: 0, of: Date()) else { return false }
+        return Date() > dueToday
+    }
+}
+
+struct HowToGuide: Identifiable {
+    let id: String
+    var emoji: String
+    var title: String
+    var blurb: String
+    var count: Int
+}
+
+struct KidChild {
+    let id: String
+    var name: String
+    var usedMin: Int
+    var limitMin: Int
+}
+
+enum TabletData {
+    static let child = KidChild(id: "liam", name: "Liam", usedMin: 94, limitMin: 120)
+
+    static var tasks: [KidTask] = [
+        KidTask(id: "t1", title: "Make your bed", iconTaskId: "t1", due: "8:00 AM", done: true, desc: "Pull up your covers, fluff your pillow, and put any clothes in the basket."),
+        KidTask(id: "t2", title: "Do your maths", iconTaskId: "t2", due: "6:00 PM", done: true, desc: "Complete questions 1 through 8 on page 24 of your maths book."),
+        KidTask(id: "t3", title: "Feed Biscuit", iconTaskId: "t3", due: "6:30 PM", done: false, desc: "Give Biscuit one scoop of dry food and fresh water."),
+        KidTask(id: "t4", title: "Read your book", iconTaskId: "t4", due: "7:30 PM", done: false, desc: "Read quietly for at least 20 minutes from your current book."),
+        KidTask(id: "t5", title: "Brush your teeth", iconTaskId: "t5", due: "8:30 PM", done: false, desc: "Brush for two full minutes, top and bottom."),
+    ]
+
+    // Six-panel comic strips, one per task — asset names are KidT{n}Panel{1-6}
+    // in Assets.xcassets, matching each task's iconTaskId.
+    static func comicPanels(for taskId: String) -> [ComicPanel] {
+        guard tasks.contains(where: { $0.iconTaskId == taskId }) else { return [] }
+        return (1...6).map { ComicPanel(imageName: "Kid\(taskId.uppercased())Panel\($0)", caption: "") }
+    }
+
+    // Shared between ScreenTabletHome's task rows and ScreenRing's clock
+    // face tokens, so both render the same icon for the same task.
+    static func sfIcon(for taskId: String) -> String {
+        switch taskId {
+        case "t1": return "bed.double.fill"
+        case "t2": return "function"
+        case "t3": return "pawprint.fill"
+        case "t4": return "book.fill"
+        case "t5": return "mouth.fill"
+        default: return "star.fill"
+        }
+    }
+
+    static let howToGuides: [HowToGuide] = [
+        HowToGuide(id: "boat", emoji: "⛵", title: "Origami Sailboat", blurb: "Fold a paper boat in 6 steps", count: 6),
+        HowToGuide(id: "crane", emoji: "🕊️", title: "Origami Paper Crane", blurb: "The classic lucky paper bird", count: 6),
+        HowToGuide(id: "airplane", emoji: "✈️", title: "Classic Paper Airplane", blurb: "A speedy dart that flies far", count: 6),
+    ]
+
+    // Asset names are Guide{OrigamiBoat|OrigamiCrane|PaperAirplane}Panel{1-6}.
+    static func guidePanelImage(_ guide: HowToGuide, step: Int) -> String {
+        let prefix: String
+        switch guide.id {
+        case "boat": prefix = "GuideOrigamiBoat"
+        case "crane": prefix = "GuideOrigamiCrane"
+        case "airplane": prefix = "GuidePaperAirplane"
+        default: prefix = "GuideOrigamiBoat"
+        }
+        return "\(prefix)Panel\(step + 1)"
+    }
+}

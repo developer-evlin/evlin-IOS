@@ -1,0 +1,13 @@
+# Xcode
+xcuserdata/
+*.xcuserstate
+.DS_Store
+DerivedData/
+*.xcworkspace/xcuserdata/
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# APNs private keys — never commit these
+*.p8
