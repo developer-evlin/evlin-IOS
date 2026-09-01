@@ -782,21 +782,21 @@ struct ScreenChat: View {
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 10) {
             TextField("Message Evlin…", text: $draft, axis: .vertical)
-                .font(Typography.font(14, weight: .regular))
+                .font(Typography.font(16, weight: .regular))
                 .lineLimit(1...4) // grows for a pasted paragraph, caps so the bar can't eat the whole screen
                 .focused($inputFocused)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
                 .background(EColor.surfaceContainerLowest)
-                .clipShape(RoundedRectangle(cornerRadius: 20))
-                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(EColor.outlineVariant))
+                .clipShape(RoundedRectangle(cornerRadius: 24))
+                .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(EColor.outlineVariant))
                 .onSubmit(send)
 
             Button(action: send) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 19, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 50, height: 50)
                     .background(canSend ? Brand.greenDeep : EColor.outlineVariant)
                     .clipShape(Circle())
             }
