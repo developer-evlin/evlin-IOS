@@ -402,7 +402,7 @@ struct ParentBetaAgreementStep: View {
             dotsCurrent: 1,
             onBack: onBack,
             content: {
-                VStack(alignment: .leading, spacing: Spacing.sm) {
+                VStack(alignment: .leading, spacing: Spacing.md) {
                     ContractSignLottieView(size: 160)
                         .frame(maxWidth: .infinity)
                         .padding(.bottom, Spacing.md)
@@ -447,9 +447,12 @@ struct AgreementCheckRow: View {
         Button {
             withAnimation(.easeOut(duration: 0.15)) { checked.toggle() }
         } label: {
-            HStack(spacing: Spacing.sm) {
+            // Bigger across the board — checkbox, row height, and text were
+            // all sized like a fine-print footnote for something that's
+            // actually the one required approval gating the whole flow.
+            HStack(spacing: Spacing.lg) {
                 Image(systemName: checked ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 20))
+                    .font(.system(size: 28))
                     .foregroundStyle(checked ? OnboardingV2Theme.Palette.secondary
                                               : OnboardingV2Theme.Palette.outline)
 
@@ -458,32 +461,33 @@ struct AgreementCheckRow: View {
                  + Text(linkText)
                     .foregroundStyle(OnboardingV2Theme.Palette.secondary)
                     .underline())
-                    .onboardingV2BodyXS()
+                    .font(Evlin.Typography.font(15, weight: .medium))
                     .multilineTextAlignment(.leading)
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, Spacing.md)
-            .frame(height: 52)
+            .padding(.horizontal, Spacing.lg)
+            .frame(minHeight: 68)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(checked ? OnboardingV2Theme.Palette.secondary.opacity(0.06)
                                   : OnboardingV2Theme.Palette.surfaceLowest)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(checked ? OnboardingV2Theme.Palette.secondary.opacity(0.4)
                                            : OnboardingV2Theme.Palette.outlineVariant,
-                                  lineWidth: 1)
+                                  lineWidth: checked ? 1.5 : 1)
             )
         }
         .buttonStyle(.plain)
         .overlay(alignment: .trailing) {
             // A second, smaller tap target over just the link text so opening
             // the document doesn't also toggle the checkbox underneath it.
+            // Sized to match the row's bigger text/height above.
             Button(action: onTapLink) { Color.clear }
-                .frame(width: 96, height: 52)
-                .padding(.trailing, Spacing.md)
+                .frame(width: 120, height: 68)
+                .padding(.trailing, Spacing.lg)
         }
     }
 }
