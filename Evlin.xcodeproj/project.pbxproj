@@ -18,6 +18,7 @@
 		3EF322A41505C157414E37A0 /* Baloo2-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3C1EA5CA2EF749300A9511A0 /* Baloo2-Bold.ttf */; };
 		3FEF485A64930BED9F97B5C7 /* ScreenHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 752627A3153FA4BAC917E81A /* ScreenHome.swift */; };
 		47E5A82E81FB42FAF0817531 /* OnboardingV2ChildSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818AC7F90F32DFC21EF0ABCD /* OnboardingV2ChildSteps.swift */; };
+		4AACFAADF8DEB0286BD9011F /* ScreenTabletSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */; };
 		4B4DA3E1DA59F8F34BCE4DDF /* SettingsMemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4C498EADEBE897F3057604C /* SettingsMemoryView.swift */; };
 		4D70C02A86B5F3D2CFB4C74A /* PlusJakartaSans-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 88F7804CB00AEEE75276DFA2 /* PlusJakartaSans-Regular.ttf */; };
 		5029518C72E408C60F160118 /* Baloo2-ExtraBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = ACBE52D14408BCE1201654E8 /* Baloo2-ExtraBold.ttf */; };
@@ -30,7 +31,6 @@
 		6EC57528204E0DBB3F3CBA5D /* AddFormComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52A3A4F008D897EF73D1585D /* AddFormComponents.swift */; };
 		747A3974B9EC1F202ED70584 /* ScreenSkillMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40B3B23D94D1FAA164BB97AB /* ScreenSkillMap.swift */; };
 		772ABBF2DA791D6E54546BC6 /* ScreenTabletLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */; };
-		26609411E61B91C2E5E9306F /* ScreenTabletSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94741CFEAFF97B17C3950E1 /* ScreenTabletSettings.swift */; };
 		77B012F945BCE8A13D70F9EC /* TabletData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CDCCC05BBAE584A4035390 /* TabletData.swift */; };
 		7B2C1B749F7F3D3AAF4887F8 /* Baloo2-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B6AD197EC03506109DFC3815 /* Baloo2-Medium.ttf */; };
 		7DA992EF8FCF4EC60D62F2B1 /* ScreenTimeGrant.lottie in Resources */ = {isa = PBXBuildFile; fileRef = CFF12EEBA62C5D2DF0ACA4C6 /* ScreenTimeGrant.lottie */; };
@@ -54,6 +54,7 @@
 		C00DCF7BBB942A465AB60FB9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C45B887714E40ADEA10C9103 /* Assets.xcassets */; };
 		C895FB379F58FF4789EF58F4 /* LibraryData.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C3ABFD36105EFE6EE6C0EE /* LibraryData.swift */; };
 		CB3EAC09260310DFC1B20DA2 /* LessonReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */; };
+		DC41F1DF55F3583A080BD7F1 /* Keyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CF5B901EEEEE19804D8030 /* Keyboard.swift */; };
 		DD71A4DD17F3570749AD6DA2 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2695F864BB0C2A358F00D312 /* RootView.swift */; };
 		DF3F65290A9265772F1A46B0 /* ScreenLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2550BFA96ADB16E4610FB30 /* ScreenLibrary.swift */; };
 		E0ACC783C6200F1E835FCFB1 /* ContractSign.lottie in Resources */ = {isa = PBXBuildFile; fileRef = DEB584CD5AEDBED16CCF6A0E /* ContractSign.lottie */; };
@@ -77,13 +78,12 @@
 		35BFBEFD1BE687497AFA1F11 /* NotificationsData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsData.swift; sourceTree = "<group>"; };
 		3C1EA5CA2EF749300A9511A0 /* Baloo2-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Baloo2-Bold.ttf"; sourceTree = "<group>"; };
 		40B3B23D94D1FAA164BB97AB /* ScreenSkillMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenSkillMap.swift; sourceTree = "<group>"; };
+		44311D15F27B98B2B7978988 /* Evlin.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Evlin.entitlements; sourceTree = "<group>"; };
 		44B83D7E8795D19DE2A8EC42 /* ComicViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComicViewerView.swift; sourceTree = "<group>"; };
 		49E21D3FF95D075AF53A0C55 /* OnboardingV2Coordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Coordinator.swift; sourceTree = "<group>"; };
 		4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LessonReaderView.swift; sourceTree = "<group>"; };
 		52A3A4F008D897EF73D1585D /* AddFormComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddFormComponents.swift; sourceTree = "<group>"; };
-		5437D1BC30424BBA006DA0ED /* Evlin.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Evlin.entitlements; sourceTree = "<group>"; };
 		68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletLibrary.swift; sourceTree = "<group>"; };
-		C94741CFEAFF97B17C3950E1 /* ScreenTabletSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletSettings.swift; sourceTree = "<group>"; };
 		7235C9F06F3B36BEC827AACB /* ScreenTimePINVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimePINVideoView.swift; sourceTree = "<group>"; };
 		752627A3153FA4BAC917E81A /* ScreenHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenHome.swift; sourceTree = "<group>"; };
 		7794A43F9156EA4254043CA3 /* CalendarData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarData.swift; sourceTree = "<group>"; };
@@ -114,11 +114,13 @@
 		E2550BFA96ADB16E4610FB30 /* ScreenLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenLibrary.swift; sourceTree = "<group>"; };
 		E372C2D464BC26D17E9DD43E /* DataSecurity.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = DataSecurity.json; sourceTree = "<group>"; };
 		E412DA621462B4F83B57FF73 /* PlusJakartaSans-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-Medium.ttf"; sourceTree = "<group>"; };
+		E6CF5B901EEEEE19804D8030 /* Keyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keyboard.swift; sourceTree = "<group>"; };
 		E708678BD054B24BF7AE4495 /* TaskReviewDeck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskReviewDeck.swift; sourceTree = "<group>"; };
 		EA6BD1B156CBB84E08FAA023 /* ScreenTabletHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletHome.swift; sourceTree = "<group>"; };
 		ECA8F6DEBD7ADA92781241C1 /* EvlinApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EvlinApp.swift; sourceTree = "<group>"; };
 		EEB765EA0B6A70CD8AC83D0E /* TabletRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabletRootView.swift; sourceTree = "<group>"; };
 		EFFF0CA102C1CCA42653C334 /* ScreenCalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCalendar.swift; sourceTree = "<group>"; };
+		EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletSettings.swift; sourceTree = "<group>"; };
 		F05C585F4AEC30CBFE0A4629 /* PlusJakartaSans-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-SemiBold.ttf"; sourceTree = "<group>"; };
 		F0C3ABFD36105EFE6EE6C0EE /* LibraryData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryData.swift; sourceTree = "<group>"; };
 		F6429EA9A106FA7A030F074A /* Baloo2-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Baloo2-SemiBold.ttf"; sourceTree = "<group>"; };
@@ -218,6 +220,7 @@
 			isa = PBXGroup;
 			children = (
 				B6A0F89562B8F59E2F601E60 /* Components.swift */,
+				E6CF5B901EEEEE19804D8030 /* Keyboard.swift */,
 				7235C9F06F3B36BEC827AACB /* ScreenTimePINVideoView.swift */,
 				AE355C0A6FCB8D50FB0E1618 /* SecurityLottieView.swift */,
 				CFDCFF95587B9B1C93392CB9 /* Theme.swift */,
@@ -248,6 +251,7 @@
 		A4A77BC720872DDCE4DDAFD0 /* Evlin */ = {
 			isa = PBXGroup;
 			children = (
+				44311D15F27B98B2B7978988 /* Evlin.entitlements */,
 				21D3DCE7BE6480B09C478F49 /* Info.plist */,
 				49A9F53760B2736BA3C5D8C9 /* App */,
 				100E6E67869D0FFA351B3FBC /* Data */,
@@ -256,7 +260,6 @@
 				B5A58069E6265962BD36902D /* Parent */,
 				9CADA8AAAEE24E3E8CD17FD6 /* Resources */,
 				AECF209188E4A9CA00140CDC /* Tablet */,
-				5437D1BC30424BBA006DA0ED /* Evlin.entitlements */,
 			);
 			path = Evlin;
 			sourceTree = "<group>";
@@ -269,7 +272,7 @@
 				40B3B23D94D1FAA164BB97AB /* ScreenSkillMap.swift */,
 				EA6BD1B156CBB84E08FAA023 /* ScreenTabletHome.swift */,
 				68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */,
-				C94741CFEAFF97B17C3950E1 /* ScreenTabletSettings.swift */,
+				EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */,
 				EEB765EA0B6A70CD8AC83D0E /* TabletRootView.swift */,
 				90FD88DD9F5911F37061E2AB /* TaskDetailView.swift */,
 			);
@@ -395,6 +398,7 @@
 				93DD2562F31193DC22691A81 /* Components.swift in Sources */,
 				8981DFDD4250E877E419BE29 /* EvlinApp.swift in Sources */,
 				2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */,
+				DC41F1DF55F3583A080BD7F1 /* Keyboard.swift in Sources */,
 				CB3EAC09260310DFC1B20DA2 /* LessonReaderView.swift in Sources */,
 				C895FB379F58FF4789EF58F4 /* LibraryData.swift in Sources */,
 				8819F6AB3C97E70A536C7F84 /* NotificationsData.swift in Sources */,
@@ -415,7 +419,7 @@
 				747A3974B9EC1F202ED70584 /* ScreenSkillMap.swift in Sources */,
 				BD538B4E14DDD3CB0BF7C6D3 /* ScreenTabletHome.swift in Sources */,
 				772ABBF2DA791D6E54546BC6 /* ScreenTabletLibrary.swift in Sources */,
-				26609411E61B91C2E5E9306F /* ScreenTabletSettings.swift in Sources */,
+				4AACFAADF8DEB0286BD9011F /* ScreenTabletSettings.swift in Sources */,
 				FA987F694C383251CBF531A2 /* ScreenTimePINVideoView.swift in Sources */,
 				934B4680FD244C8DB77CFD51 /* SecurityLottieView.swift in Sources */,
 				92DC34646CFAF122652CB8C6 /* SettingsLockListManagerView.swift in Sources */,
@@ -436,7 +440,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Evlin/Evlin.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = D9FM36P37F;
 				INFOPLIST_FILE = Evlin/Info.plist;
@@ -444,7 +447,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = io.evlin.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.evlin.app;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -513,7 +516,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Evlin/Evlin.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = D9FM36P37F;
 				INFOPLIST_FILE = Evlin/Info.plist;
@@ -521,7 +523,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = io.evlin.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.evlin.app;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

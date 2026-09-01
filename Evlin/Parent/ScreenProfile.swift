@@ -1125,7 +1125,7 @@ private struct EditRuleSheet: View {
                 updated.detail = "\(ChildRule.fmtClock(updated.downtimeFrom)) – \(ChildRule.fmtClock(updated.downtimeTo))"
             }
             onSave(updated)
-        }, canSave: !rule.title.trimmingCharacters(in: .whitespaces).isEmpty) {
+        }, canSave: !rule.title.trimmingCharacters(in: .whitespaces).isEmpty, onDelete: onDelete != nil ? { showDeleteConfirm = true } : nil) {
             switch rule.kind {
             case .downtime:
                 FormField(label: "Schedule") {
@@ -1155,24 +1155,15 @@ private struct EditRuleSheet: View {
                 // switch stays exhaustive.
                 EmptyView()
             }
-
-            if let onDelete {
-                Button(role: .destructive) { showDeleteConfirm = true } label: {
-                    Text("Delete Rule")
-                        .font(Typography.font(15, weight: .heavy))
-                        .foregroundStyle(EColor.danger)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 4)
-                .alert("Delete \"\(rule.title)\"?", isPresented: $showDeleteConfirm) {
-                    Button("Delete", role: .destructive) { onDelete() }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("This can't be undone.")
-                }
-            }
+        }
+        // Trash icon lives in FormShell's top header now (next to Cancel),
+        // matching EditTaskReviewSheet's delete affordance — same alert,
+        // just triggered from the header button instead of a bottom row.
+        .alert("Delete \"\(rule.title)\"?", isPresented: $showDeleteConfirm) {
+            Button("Delete", role: .destructive) { onDelete?() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
         }
     }
 }

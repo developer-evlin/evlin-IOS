@@ -48,6 +48,7 @@ struct SettingsMemoryView: View {
             .padding(.bottom, 60)
         }
         .background(EColor.surface)
+        .dismissKeyboardOnTap()
         .navigationTitle("What Evlin remembers")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $editing) { memory in
@@ -110,6 +111,7 @@ private struct SettingsEditMemorySheet: View {
             }
             .padding(20)
             .background(EColor.surface)
+            .dismissKeyboardOnTap()
             .navigationTitle("Edit memory")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

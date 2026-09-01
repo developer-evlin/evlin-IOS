@@ -450,6 +450,8 @@ private struct EventDetailSheet: View {
             ScrollView {
                 if editing { editContent } else { viewContent }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .dismissKeyboardOnTap()
         }
         .background(EColor.surface)
         .alert("Delete \"\(dayEvent.event.title)\"?", isPresented: $showDeleteConfirm) {

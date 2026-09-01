@@ -28,6 +28,14 @@ private struct ChatMessage: Identifiable {
 // many messages exist or whether the typing indicator is showing.
 private let bottomAnchorID = "chat-bottom-anchor"
 
+// Feeds a GeometryReader probe pinned to the top of the scrolled content up
+// to the chrome-hiding logic below — see `chatScrollSpace` / `chromeHidden`.
+private struct ChatScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private let chatScrollSpace = "chatScrollSpace"
+
 // Bubbles are capped so a long unbroken token (a URL, a hash, code with no
 // spaces) wraps inside the bubble instead of forcing the whole HStack wider
 // than the screen. `fixedSize(horizontal:false,...)` is the actual fix —
@@ -492,8 +500,6 @@ private struct ChatSuggestion: Identifiable {
 private let welcomeSuggestions: [ChatSuggestion] = [
     ChatSuggestion(icon: "apps", title: "Lock TikTok for 30 min", prompt: "Lock TikTok for Liam for 30 minutes"),
     ChatSuggestion(icon: "gavel", title: "Set a bedtime rule", prompt: "Lock all apps at 9pm on school nights"),
-    ChatSuggestion(icon: "sf:figure.mind.and.body", title: "Help with pushback", prompt: "Liam is upset his screen got locked, what do I say?"),
-    ChatSuggestion(icon: "sf:location.fill", title: "Check where they are", prompt: "Is Liam home right now?"),
     ChatSuggestion(icon: "sf:checklist", title: "Add a task", prompt: "Add a task for Liam", card: .addTask),
     ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for Liam", card: .blockApp),
 ]
@@ -512,6 +518,13 @@ struct ScreenChat: View {
     // history list. Cleared on "New chat".
     @State private var selectedEntryID: UUID?
     @FocusState private var inputFocused: Bool
+    // Instagram-style collapse: scrolling down hides the nav bar + tab bar so
+    // the transcript gets the full screen, matching a standalone chat app's
+    // scale (see the "make chat bigger, like Gemini" ask) rather than the
+    // cramped feel of a fifth of the screen permanently eaten by chrome.
+    // Scrolling back up (or landing near the top) restores it.
+    @State private var chromeHidden = false
+    @State private var lastChatScrollOffset: CGFloat = 0
 
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
@@ -604,9 +617,35 @@ struct ScreenChat: View {
                     .padding(.top, 8)
                     .padding(.bottom, 12)
                     .animation(.spring(response: 0.4, dampingFraction: 0.82), value: messages.count)
+                    // A `.background` on the LazyVStack itself, not a row
+                    // inside it — a row at the top would get pruned once
+                    // scrolled far enough offscreen in a long conversation,
+                    // silently freezing the chrome-hide tracking; a modifier
+                    // on the container isn't subject to that lazy culling.
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: ChatScrollOffsetKey.self, value: geo.frame(in: .named(chatScrollSpace)).minY)
+                        }
+                    )
                 }
+                .coordinateSpace(name: chatScrollSpace)
                 .background(EColor.surface)
                 .scrollDismissesKeyboard(.interactively)
+                .dismissKeyboardOnTap()
+                .onPreferenceChange(ChatScrollOffsetKey.self) { newOffset in
+                    let delta = newOffset - lastChatScrollOffset
+                    lastChatScrollOffset = newOffset
+                    if newOffset > -8 {
+                        // Back at the very top of the whole conversation —
+                        // always show chrome here regardless of the last
+                        // scroll direction, so it can't get stuck hidden.
+                        if chromeHidden { withAnimation(.easeOut(duration: 0.22)) { chromeHidden = false } }
+                    } else if delta < -10, !chromeHidden {
+                        withAnimation(.easeOut(duration: 0.22)) { chromeHidden = true }
+                    } else if delta > 10, chromeHidden {
+                        withAnimation(.easeOut(duration: 0.22)) { chromeHidden = false }
+                    }
+                }
                 // The input bar lives in the scroll view's bottom safe-area
                 // inset rather than a sibling VStack row: this is what keeps
                 // it pinned above the keyboard automatically (SwiftUI shrinks
@@ -644,6 +683,12 @@ struct ScreenChat: View {
                     Button { showHelp = true } label: { Image(systemName: "questionmark.circle") }
                 }
             }
+            // Instagram-style collapse on scroll (see chromeHidden) — hides
+            // both this screen's own nav bar and, since a tab's content can
+            // declare its own tab-bar visibility independent of the other
+            // tabs, ParentRootView's tab bar too, purely from in here.
+            .toolbar(chromeHidden ? .hidden : .visible, for: .navigationBar)
+            .toolbar(chromeHidden ? .hidden : .visible, for: .tabBar)
         }
         .sheet(isPresented: $showHelp) { HelpPanel() }
         // Full-screen history (Gemini's pattern, not a partial-width drawer)
@@ -686,42 +731,46 @@ struct ScreenChat: View {
     // pattern: greeting up top, then a 2-column grid of ready-to-run
     // prompts instead of a lone welcome bubble.
     private var welcomeGrid: some View {
-        VStack(spacing: 24) {
-            VStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+        VStack(spacing: 32) {
+            VStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(EColor.primary)
-                    .frame(width: 56, height: 56)
-                    .overlay(Image(systemName: "flame.fill").font(.system(size: 24)).foregroundStyle(Color(hex: "8CE6A8")))
+                    .frame(width: 64, height: 64)
+                    .overlay(Image(systemName: "flame.fill").font(.system(size: 27)).foregroundStyle(Color(hex: "8CE6A8")))
                 Text("Hi, I'm Evlin")
-                    .font(Typography.font(22, weight: .heavy))
+                    .font(Typography.font(25, weight: .heavy))
                     .foregroundStyle(EColor.onSurface)
                 Text(welcomeMessage.text)
-                    .font(Typography.font(13, weight: .medium))
+                    .font(Typography.font(14, weight: .medium))
                     .foregroundStyle(EColor.onSurfaceVariant)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 20)
             }
-            .padding(.top, 28)
+            .padding(.top, 36)
 
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+            // Only 4 tiles now (Pushback/Location were cut), which is exactly
+            // one clean 2x2 — sized up from the old 6-tile grid's cramped
+            // 100pt rows so the empty state reads as roomy, not a leftover
+            // grid with two slots removed.
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
                 ForEach(welcomeSuggestions) { s in
                     Button { sendSuggestion(s) } label: {
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 14) {
                             Image(systemName: EIcon.sf(s.icon))
-                                .font(.system(size: 18, weight: .semibold))
+                                .font(.system(size: 21, weight: .semibold))
                                 .foregroundStyle(EColor.primary)
                             Text(s.title)
-                                .font(Typography.font(13, weight: .semibold))
+                                .font(Typography.font(14.5, weight: .semibold))
                                 .foregroundStyle(EColor.onSurface)
                                 .multilineTextAlignment(.leading)
                             Spacer(minLength: 0)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: 100)
-                        .padding(14)
+                        .frame(height: 132)
+                        .padding(16)
                         .background(EColor.surfaceContainerLowest)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(EColor.outlineVariant))
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(EColor.outlineVariant))
                     }
                     .buttonStyle(.plain)
                     .disabled(isSending)
@@ -1005,6 +1054,8 @@ private struct ChatHistorySidebar: View {
                     .padding(.top, 4)
                     .padding(.bottom, 24)
                 }
+                .scrollDismissesKeyboard(.interactively)
+                .dismissKeyboardOnTap()
             }
         }
         .alert("Rename Chat", isPresented: Binding(get: { renamingEntry != nil }, set: { if !$0 { renamingEntry = nil } })) {

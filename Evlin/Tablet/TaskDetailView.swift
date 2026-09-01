@@ -313,6 +313,7 @@ private struct BypassRequestSheet: View {
             }
             .padding(20)
             .background(KidTheme.background)
+            .dismissKeyboardOnTap()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel", action: onCancel) }
             }

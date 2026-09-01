@@ -4,7 +4,7 @@
 # incremental builds. Logs: /tmp/evlin_swift_build.log
 set -u
 
-PROJECT_DIR="/Users/esendashnyam/Desktop/Evlin_app_frontend/EvlinSwift"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DERIVED_DATA="/tmp/evlinswift_build"
 BUNDLE_ID="com.evlin.app"
 DEVICE_NAME="${1:-iPhone 17 Pro}"

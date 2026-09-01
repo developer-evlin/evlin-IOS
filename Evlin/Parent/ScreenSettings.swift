@@ -645,6 +645,7 @@ struct ScreenSettings: View {
         }
         .navigationTitle("Parent Profile")
         .navigationBarTitleDisplayMode(.inline)
+        .dismissKeyboardOnTap()
     }
 
     private var parentProfileHero: some View {
@@ -976,6 +977,7 @@ private struct SettingsAddChildSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
             }
+            .dismissKeyboardOnTap()
         }
     }
 

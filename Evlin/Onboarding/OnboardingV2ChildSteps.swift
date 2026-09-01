@@ -284,8 +284,16 @@ struct ChildScreenTimeStep: View {
                     Text(message)
                         .onboardingV2Body()
                         .multilineTextAlignment(.center)
+                    // Not an actual retry of AuthorizationCenter — Screen
+                    // Time authorization reliably fails on the Simulator
+                    // (and can fail for other reasons on-device too), which
+                    // would otherwise strand this prototype's onboarding on
+                    // a real system dialog it can't get past. Matches every
+                    // other "backend" call in this flow (pairing, sign-in):
+                    // mocked to just succeed rather than gating progress on
+                    // something this standalone frontend can't fulfill.
                     OnboardingV2PrimaryButton("Try Again", systemImage: "arrow.clockwise", role: .child) {
-                        stage = .initial
+                        stage = .granted
                     }
                     .padding(.top, 8)
                 }

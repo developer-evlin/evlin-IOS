@@ -75,6 +75,12 @@ struct FormShell<Content: View>: View {
                 VStack(alignment: .leading, spacing: 0) { content }
                     .padding(.horizontal, 20)
             }
+            // Every field in these sheets is a plain tap-to-focus text field
+            // with no other gesture of its own to protect, so a tap anywhere
+            // in the scroll area — not just a drag — dismisses the keyboard,
+            // matching the swipe-to-dismiss below.
+            .dismissKeyboardOnTap()
+            .scrollDismissesKeyboard(.interactively)
 
             Button(action: onSave) {
                 Text(saveLabel)

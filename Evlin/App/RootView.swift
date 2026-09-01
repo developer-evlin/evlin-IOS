@@ -68,6 +68,12 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: mode)
+        // App-wide fallback: taps anywhere in mode picker/onboarding/tab
+        // content that aren't already claimed by a button or field dismiss
+        // the keyboard. Sheets and full-screen covers are separate
+        // presentation contexts this doesn't reach, so those get the same
+        // modifier applied locally at their own root.
+        .dismissKeyboardOnTap()
         .task {
             try? await Task.sleep(nanoseconds: 1_100_000_000)
             withAnimation(.easeInOut(duration: 0.3)) { showSplash = false }
