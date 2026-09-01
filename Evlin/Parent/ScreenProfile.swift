@@ -43,7 +43,11 @@ struct ScreenProfile: View {
     @State private var showApprovalVerify = false
     @ObservedObject private var billing = BillingState.shared
     @State private var isUpgrading = false
-    @State private var showPlanSheet = false
+    // Pops the trial-exhausted upgrade prompt up the moment this profile
+    // opens (see TrialExhaustedPopupCard) — set once on appear, not tied to
+    // child.trialExhausted directly, so dismissing it ("Not now") doesn't
+    // immediately reappear from some other body re-evaluation.
+    @State private var showTrialPopup = false
 
     enum AddMode: String, Identifiable { case menu, task, rule
         var id: String { rawValue }
@@ -170,9 +174,30 @@ struct ScreenProfile: View {
                     .transition(.opacity)
             }
         }
+        .overlay {
+            if showTrialPopup {
+                TrialExhaustedPopupCard(
+                    childName: child.name,
+                    isUpgrading: isUpgrading,
+                    onUpgrade: {
+                        Task {
+                            isUpgrading = true
+                            try? await Task.sleep(nanoseconds: 900_000_000)
+                            isUpgrading = false
+                            withAnimation { billing.isPlus = true; showTrialPopup = false }
+                        }
+                    },
+                    onDismiss: { showTrialPopup = false }
+                )
+            }
+        }
+        .task {
+            if child.trialExhausted { showTrialPopup = true }
+        }
         .animation(.easeOut(duration: 0.2), value: showUnlockConfirm)
         .animation(.easeOut(duration: 0.2), value: showApprovalVerify)
         .animation(.easeOut(duration: 0.25), value: tutorialActive)
+        .animation(.easeOut(duration: 0.2), value: showTrialPopup)
         .animation(.easeOut(duration: 0.2), value: child.parentApprovalStatus)
         .navigationTitle("\(child.name)'s Space")
         .navigationBarTitleDisplayMode(.inline)
@@ -347,42 +372,6 @@ struct ScreenProfile: View {
                         }
                     }
                     Spacer()
-                }
-
-                // A compact, always-visible link into the same plan status
-                // shown on the Settings > Parent Profile page (and the
-                // upsell row on the Settings root list) — sharing
-                // BillingState.shared so upgrading from any of the three
-                // reflects everywhere immediately, not just where it happened.
-                Button { showPlanSheet = true } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(billing.isPlus ? Brand.greenDeep : EColor.onSurfaceVariant)
-                        Text("Evlin Plan")
-                            .font(Typography.font(13, weight: .semibold))
-                            .foregroundStyle(EColor.onSurface)
-                        Spacer(minLength: 8)
-                        Text(billing.isPlus ? "PLUS" : "FREE")
-                            .font(Typography.font(10, weight: .bold))
-                            .foregroundStyle(billing.isPlus ? Brand.greenDeep : EColor.onSurfaceVariant)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(billing.isPlus ? Brand.greenTint : EColor.surfaceContainerHigh)
-                            .clipShape(Capsule())
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(EColor.onSurfaceVariant)
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(height: 40)
-                    .background(EColor.surfaceContainerHigh.opacity(0.6))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 14)
-                .sheet(isPresented: $showPlanSheet) {
-                    ProfilePlanSheet(billing: billing, isUpgrading: $isUpgrading)
                 }
 
                 if child.status != .downtime, child.reflection == nil {
@@ -676,62 +665,42 @@ struct ScreenProfile: View {
 
 }
 
-// MARK: - Evlin Plan (profile's compact link into the shared plan status)
+// MARK: - Trial-exhausted popup (Mia's "Evlin Plan" prompt)
 
-// Mirrors the same BillingState.shared source ScreenSettings' billing page
-// and upsell row read from, so upgrading here — or there — shows up
-// everywhere immediately. A smaller, single-screen version of that page
-// (no billing-cycle picker or feature list) since this is a quick "what am
-// I on" check reached from a kid's profile, not the place to manage a plan.
-private struct ProfilePlanSheet: View {
-    @ObservedObject var billing: BillingState
-    @Binding var isUpgrading: Bool
-    @Environment(\.dismiss) private var dismiss
-
-    private let plusFeatures = [
-        "Unlimited custom rules & app-time limits",
-        "AI-powered de-escalation strategies in chat",
-        "Weekly behavior insights & trend reports",
-    ]
+// The plan status itself lives only in Settings > Parent Profile (and the
+// Settings root's upsell row) — one place for an account-wide setting,
+// not repeated per child. This is a different thing: a one-time nudge that
+// pops up the moment a trial-exhausted child's profile opens (Mia, in the
+// mock data), same floating-card-over-scrim language as UnlockConfirmCard
+// elsewhere in this file, instead of a flat card sitting in the scroll
+// content that's easy to miss by not scrolling down to it.
+private struct TrialExhaustedPopupCard: View {
+    var childName: String
+    var isUpgrading: Bool
+    var onUpgrade: () -> Void
+    var onDismiss: () -> Void
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(billing.isPlus ? Brand.greenTint : EColor.surfaceContainerHigh)
-                    .frame(width: 56, height: 56)
-                    .overlay(
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(billing.isPlus ? Brand.greenDeep : EColor.onSurfaceVariant)
-                    )
+        ZStack {
+            Color.black.opacity(0.32)
+                .ignoresSafeArea()
+                .onTapGesture { onDismiss() }
 
-                VStack(spacing: 6) {
-                    Text(billing.isPlus ? "You're on Evlin Plus" : "Evlin Plan: Free")
-                        .font(Typography.font(20, weight: .heavy))
+            VStack(spacing: 0) {
+                Spacer()
+                VStack(alignment: .leading, spacing: 14) {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(EColor.primaryContainer)
+                        .frame(width: 44, height: 44)
+                        .overlay(Image(systemName: "sparkles").font(.system(size: 19, weight: .semibold)).foregroundStyle(EColor.primary))
+
+                    Text("You've used your free trial")
+                        .font(Typography.font(18, weight: .heavy))
                         .foregroundStyle(EColor.onSurface)
-                    Text(billing.isPlus
-                         ? "Billed \(billing.billingCycle == .yearly ? "yearly" : "monthly") · unlimited rules & AI insights are active for every child."
-                         : "Upgrade for unlimited custom rules and AI-powered insights across every child.")
+                    Text("Upgrade to Evlin Plus to keep managing \(childName)'s screen time, tasks, and rules.")
                         .font(Typography.font(13, weight: .regular))
                         .foregroundStyle(EColor.onSurfaceVariant)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 12)
-                }
-
-                if !billing.isPlus {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(plusFeatures, id: \.self) { feature in
-                            HStack(spacing: 10) {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(EColor.secondary)
-                                Text(feature).font(Typography.font(13.5, weight: .medium)).foregroundStyle(EColor.onSurface)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .background(EColor.surfaceContainerLowest)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .fixedSize(horizontal: false, vertical: true)
 
                     if isUpgrading {
                         HStack(spacing: 8) {
@@ -740,26 +709,23 @@ private struct ProfilePlanSheet: View {
                         }
                         .frame(maxWidth: .infinity).frame(height: 52)
                     } else {
-                        PrimaryButton(title: "Upgrade to Evlin Plus", systemIcon: "sparkles") {
-                            Task {
-                                isUpgrading = true
-                                try? await Task.sleep(nanoseconds: 900_000_000)
-                                isUpgrading = false
-                                withAnimation { billing.isPlus = true }
-                            }
-                        }
+                        PrimaryButton(title: "Upgrade to Evlin Plus", systemIcon: "sparkles", action: onUpgrade)
+                        Button("Not now", action: onDismiss)
+                            .font(Typography.font(14, weight: .semibold))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
                     }
                 }
-
-                Spacer(minLength: 0)
+                .padding(20)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 30)
             }
-            .padding(24)
-            .background(EColor.surface)
-            .navigationTitle("Evlin Plan")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
-        .presentationDetents([.medium])
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 }
 

@@ -616,6 +616,7 @@ struct ParentPairScanStep: View {
                         Spacer(minLength: 0)
                         ZStack {
                             OnboardingV2FauxQR(size: 200)
+                            OnboardingV2ScanLine(size: 200)
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .stroke(Color.white.opacity(0.9), lineWidth: 3)
                                 .padding(18)

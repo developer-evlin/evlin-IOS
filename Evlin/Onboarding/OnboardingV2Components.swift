@@ -481,6 +481,33 @@ struct OnboardingV2FauxQR: View {
     }
 }
 
+// A moving line sweeping the faux QR, selling the "camera preview" as
+// actively looking for a code instead of a static frozen graphic — shared
+// by both pairing screens the app has (this onboarding step and Settings'
+// Add Child flow), so a fix/tweak here doesn't need repeating twice.
+struct OnboardingV2ScanLine: View {
+    var size: CGFloat = 200
+    @State private var atBottom = false
+
+    var body: some View {
+        Capsule()
+            .fill(
+                LinearGradient(
+                    colors: [.clear, Color(hex: "3FCE64"), .clear],
+                    startPoint: .leading, endPoint: .trailing
+                )
+            )
+            .frame(width: size, height: 3)
+            .shadow(color: Color(hex: "3FCE64").opacity(0.8), radius: 6)
+            .offset(y: atBottom ? size / 2 - 4 : -(size / 2 - 4))
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                    atBottom = true
+                }
+            }
+    }
+}
+
 // MARK: - Real, scannable QR (kid's pairing code) — pure CoreImage, no camera
 // / photo-library permission needed.
 

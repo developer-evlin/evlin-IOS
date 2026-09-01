@@ -47,6 +47,7 @@ struct ScreenSettings: View {
     // that closes without touching `FamilyStore.children` (that list is a
     // shared static mock read by several other screens).
     @State private var showAddChild = false
+    @State private var showDeleteAccountConfirm = false
     // No @Published/ObservableObject wiring on FamilyStore (it's a static
     // mock namespace) — bumping this after a mutation is what makes
     // SwiftUI re-evaluate body and pick up the change, same trick used
@@ -643,10 +644,29 @@ struct ScreenSettings: View {
                     )
                 }
             }
+
+            Section("Danger Zone") {
+                Button(role: .destructive) { showDeleteAccountConfirm = true } label: {
+                    settingsRow(
+                        title: "Delete Account",
+                        subtitle: "Permanently delete your account and all family data",
+                        systemImage: "trash",
+                        accent: EColor.danger,
+                        danger: true
+                    )
+                }
+                .buttonStyle(.plain)
+            }
         }
         .navigationTitle("Parent Profile")
         .navigationBarTitleDisplayMode(.inline)
         .dismissKeyboardOnTap()
+        .alert("Delete your account?", isPresented: $showDeleteAccountConfirm) {
+            Button("Delete", role: .destructive) { onSwitchMode() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes your account, family data, and every child's profile. This can't be undone.")
+        }
     }
 
     private var parentProfileHero: some View {
@@ -999,6 +1019,7 @@ private struct SettingsAddChildSheet: View {
 
             ZStack {
                 OnboardingV2FauxQR(size: 200)
+                OnboardingV2ScanLine(size: 200)
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(Color.white.opacity(0.9), lineWidth: 3)
                     .padding(18)
