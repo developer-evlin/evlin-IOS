@@ -170,15 +170,32 @@ private struct BlockAppCard: View {
     @State private var selectedApps: Set<UUID> = []
     @State private var selectedCategories: Set<UUID> = []
     @State private var submitted = false
+    // Only the top few show by default — the full 8-app/4-category catalog
+    // made this card tall enough to need scrolling inside a chat bubble
+    // before a parent could even see the pick button. Search (which
+    // already existed) or "Show all" reach the rest.
+    @State private var showAllApps = false
+    @State private var showAllCategories = false
+    private let topCount = 3
+
+    private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private var filteredApps: [MockApp] {
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return mockAppCatalog }
+        guard isSearching else { return mockAppCatalog }
         return mockAppCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
     private var filteredCategories: [MockCategory] {
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return mockCategoryCatalog }
+        guard isSearching else { return mockCategoryCatalog }
         return mockCategoryCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var visibleApps: [MockApp] {
+        (isSearching || showAllApps) ? filteredApps : Array(filteredApps.prefix(topCount))
+    }
+
+    private var visibleCategories: [MockCategory] {
+        (isSearching || showAllCategories) ? filteredCategories : Array(filteredCategories.prefix(topCount))
     }
 
     private var totalSelected: Int { selectedApps.count + selectedCategories.count }
@@ -215,50 +232,31 @@ private struct BlockAppCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 10))
 
             if tab == .apps {
-                VStack(spacing: 4) {
-                    ForEach(filteredApps) { app in
-                        Button { toggleApp(app) } label: {
-                            HStack(spacing: 10) {
-                                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    .fill(app.color)
-                                    .frame(width: 34, height: 34)
-                                    .overlay(Image(systemName: app.icon).font(.system(size: 14)).foregroundStyle(.white))
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(app.name).font(Typography.font(13.5, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                                    Text(app.bundleID).font(Typography.font(10.5, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                                }
-                                Spacer(minLength: 8)
-                                Image(systemName: selectedApps.contains(app.id) ? "checkmark.square.fill" : "square")
-                                    .font(.system(size: 17))
-                                    .foregroundStyle(selectedApps.contains(app.id) ? EColor.danger : EColor.outlineVariant)
-                            }
-                            .padding(.horizontal, 10).padding(.vertical, 8)
-                            .background(selectedApps.contains(app.id) ? EColor.danger.opacity(0.07) : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                VStack(spacing: 6) {
+                    ForEach(visibleApps) { app in
+                        targetRow(
+                            icon: app.icon, color: app.color, title: app.name, subtitle: app.bundleID,
+                            selected: selectedApps.contains(app.id)
+                        ) { toggleApp(app) }
+                    }
+                    if !isSearching, !showAllApps, filteredApps.count > topCount {
+                        showMoreButton(count: filteredApps.count - topCount, noun: "app") {
+                            withAnimation(.easeOut(duration: 0.15)) { showAllApps = true }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             } else {
-                VStack(spacing: 4) {
-                    ForEach(filteredCategories) { cat in
-                        Button { toggleCategory(cat) } label: {
-                            HStack(spacing: 10) {
-                                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    .fill(cat.color)
-                                    .frame(width: 34, height: 34)
-                                    .overlay(Image(systemName: cat.icon).font(.system(size: 14)).foregroundStyle(.white))
-                                Text(cat.name).font(Typography.font(13.5, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                                Spacer(minLength: 8)
-                                Image(systemName: selectedCategories.contains(cat.id) ? "checkmark.square.fill" : "square")
-                                    .font(.system(size: 17))
-                                    .foregroundStyle(selectedCategories.contains(cat.id) ? EColor.danger : EColor.outlineVariant)
-                            }
-                            .padding(.horizontal, 10).padding(.vertical, 8)
-                            .background(selectedCategories.contains(cat.id) ? EColor.danger.opacity(0.07) : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                VStack(spacing: 6) {
+                    ForEach(visibleCategories) { cat in
+                        targetRow(
+                            icon: cat.icon, color: cat.color, title: cat.name, subtitle: nil,
+                            selected: selectedCategories.contains(cat.id)
+                        ) { toggleCategory(cat) }
+                    }
+                    if !isSearching, !showAllCategories, filteredCategories.count > topCount {
+                        showMoreButton(count: filteredCategories.count - topCount, noun: "category") {
+                            withAnimation(.easeOut(duration: 0.15)) { showAllCategories = true }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -289,12 +287,61 @@ private struct BlockAppCard: View {
 
     private func toggleApp(_ app: MockApp) {
         guard !submitted else { return }
-        if selectedApps.contains(app.id) { selectedApps.remove(app.id) } else { selectedApps.insert(app.id) }
+        withAnimation(.easeOut(duration: 0.12)) {
+            if selectedApps.contains(app.id) { selectedApps.remove(app.id) } else { selectedApps.insert(app.id) }
+        }
     }
 
     private func toggleCategory(_ cat: MockCategory) {
         guard !submitted else { return }
-        if selectedCategories.contains(cat.id) { selectedCategories.remove(cat.id) } else { selectedCategories.insert(cat.id) }
+        withAnimation(.easeOut(duration: 0.12)) {
+            if selectedCategories.contains(cat.id) { selectedCategories.remove(cat.id) } else { selectedCategories.insert(cat.id) }
+        }
+    }
+
+    // Bigger than the old row (44pt icon vs 34, more padding, a filled
+    // circle instead of a small square) plus a colored border on top of the
+    // tint fill when selected — a parent picking an app to block should be
+    // able to hit the row without aiming, and see at a glance what's
+    // already picked without reading each checkbox individually.
+    private func targetRow(icon: String, color: Color, title: String, subtitle: String?, selected: Bool, onTap: @escaping () -> Void) -> some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(color)
+                    .frame(width: 44, height: 44)
+                    .overlay(Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.white))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
+                    if let subtitle {
+                        Text(subtitle).font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 23))
+                    .foregroundStyle(selected ? EColor.danger : EColor.outlineVariant)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            .background(selected ? EColor.danger.opacity(0.08) : EColor.surfaceContainerLowest)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? EColor.danger.opacity(0.5) : EColor.outlineVariant, lineWidth: selected ? 1.5 : 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func showMoreButton(count: Int, noun: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text("Show \(count) more \(noun)\(count == 1 ? "" : "s")")
+                    .font(Typography.font(13, weight: .semibold))
+                Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(EColor.primary)
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
+        }
+        .buttonStyle(.plain)
     }
 }
 
