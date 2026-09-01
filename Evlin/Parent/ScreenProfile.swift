@@ -92,8 +92,6 @@ struct ScreenProfile: View {
 
                 if child.reflection != nil {
                     reflectionSummaryCard
-                } else if child.trialExhausted {
-                    upgradeOfferCard
                 } else {
                     tasksSection
                 }
@@ -447,49 +445,6 @@ struct ScreenProfile: View {
             VStack(spacing: 10) {
                 ForEach(Array(tasks.enumerated()), id: \.element.id) { i, task in
                     TaskRowView(task: task, onOpen: { reviewStartIndex = i }, onApprove: { setState(task.id, task.state == .bypass ? .bypassed : .done) }, onRedo: { setState(task.id, .pending) })
-                }
-            }
-        }
-    }
-
-    // Shown in place of tasksSection for a child whose free trial has run
-    // out (child.trialExhausted) — a preview of the paywall nudge that
-    // would gate the rest of a profile once a real trial/entitlement
-    // system exists.
-    private var upgradeOfferCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionHead("Free Trial")
-
-            Card {
-                VStack(alignment: .leading, spacing: 14) {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(EColor.primaryContainer)
-                        .frame(width: 44, height: 44)
-                        .overlay(Image(systemName: "sparkles").font(.system(size: 19, weight: .semibold)).foregroundStyle(EColor.primary))
-
-                    Text("You've used your free trial")
-                        .font(Typography.font(18, weight: .heavy))
-                        .foregroundStyle(EColor.onSurface)
-                    Text("Upgrade to Evlin Plus to keep managing \(child.name)'s screen time, tasks, and rules.")
-                        .font(Typography.font(13, weight: .regular))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-
-                    if isUpgrading {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("Upgrading…").font(Typography.font(13, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
-                        }
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                    } else {
-                        PrimaryButton(title: "Upgrade to Evlin Plus", systemIcon: "sparkles") {
-                            Task {
-                                isUpgrading = true
-                                try? await Task.sleep(nanoseconds: 900_000_000)
-                                isUpgrading = false
-                                withAnimation { billing.isPlus = true }
-                            }
-                        }
-                    }
                 }
             }
         }

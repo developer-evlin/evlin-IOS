@@ -985,6 +985,12 @@ private struct SettingsAddChildSheet: View {
     @State private var busy = false
     @State private var name = ""
     @State private var age = 8
+    // A real, decodable QR now (not OnboardingV2FauxQR's decorative noise)
+    // — same encode(code:) payload ChildShowCodeStep writes on the kid
+    // side, so this actually round-trips through a real QR scanner if
+    // someone points one at it, standing in for the child device's own
+    // generated code in this single-device prototype.
+    @State private var demoChildCode = String(format: "%06d", Int.random(in: 0...999999))
 
     var body: some View {
         NavigationStack {
@@ -1018,18 +1024,21 @@ private struct SettingsAddChildSheet: View {
             .padding(.top, 24)
 
             ZStack {
-                OnboardingV2FauxQR(size: 200)
+                OnboardingV2QRImage(string: OnboardingV2PairPayload.encode(code: demoChildCode), side: 168)
                 OnboardingV2ScanLine(size: 200)
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(Color.white.opacity(0.9), lineWidth: 3)
                     .padding(18)
-                Text("Camera preview (demo)")
-                    .font(Typography.font(11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
             }
             .frame(width: 240, height: 240)
             .background(Color(hex: "1B1F24"))
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(alignment: .bottom) {
+                Text("Camera preview (demo)")
+                    .font(Typography.font(11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.bottom, 10)
+            }
 
             OnboardingV2CodeField(code: $code)
                 .onChange(of: code) { _, newValue in
