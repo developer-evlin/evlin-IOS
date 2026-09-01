@@ -444,16 +444,42 @@ private struct EventDetailSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            Divider()
-            ScrollView {
-                if editing { editContent } else { viewContent }
+        Group {
+            // Editing now borrows AddCalendarSheet/AddTaskSheet's own
+            // chrome (green "Cancel," big bold title, mint fields, full-
+            // width Save pill) instead of the plain topBar+capsule-button
+            // layout it used to have — so editing an event reads as the
+            // same family of form as creating one, not a visually distinct
+            // screen. View mode keeps its own layout; FormShell is
+            // specifically an editing-form shell, not a fit for read-only
+            // display.
+            if editing {
+                FormShell(
+                    title: "Edit event",
+                    onCancel: { draft = dayEvent.event; editing = false },
+                    onSave: { onSave(draft) },
+                    canSave: canSave,
+                    saveLabel: "Save changes",
+                    onDelete: { showDeleteConfirm = true }
+                ) {
+                    editFields
+                }
+            } else {
+                VStack(spacing: 0) {
+                    topBar
+                    Divider()
+                    ScrollView { viewContent }
+                        .scrollDismissesKeyboard(.interactively)
+                        .dismissKeyboardOnTap()
+                }
+                .background(EColor.surface)
             }
-            .scrollDismissesKeyboard(.interactively)
-            .dismissKeyboardOnTap()
         }
-        .background(EColor.surface)
+        // Only while actually editing — a swipe-to-dismiss in view mode is
+        // perfectly safe (nothing to lose), but mid-edit it'd silently
+        // discard whatever was typed, same risk FormShell's other callers
+        // guard against.
+        .interactiveDismissDisabled(editing)
         .alert("Delete \"\(dayEvent.event.title)\"?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) { onDelete() }
             Button("Cancel", role: .cancel) {}
@@ -464,37 +490,17 @@ private struct EventDetailSheet: View {
 
     private var topBar: some View {
         HStack {
-            Button {
-                if editing { draft = dayEvent.event; editing = false } else { onClose() }
-            } label: {
-                Image(systemName: editing ? "chevron.left" : "xmark")
+            Button(action: onClose) {
+                Image(systemName: "xmark")
                     .foregroundStyle(EColor.onSurface)
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
-            Text(editing ? "Edit event" : "")
-                .font(Typography.font(13, weight: .bold))
-                .foregroundStyle(EColor.onSurfaceVariant)
             Spacer()
-            if editing {
-                Button {
-                    onSave(draft)
-                } label: {
-                    Text("Save")
-                        .font(Typography.font(14, weight: .heavy))
-                        .foregroundStyle(canSave ? .white : EColor.onSurfaceVariant)
-                        .padding(.horizontal, 20).frame(height: 36)
-                        .background(canSave ? EColor.primary : EColor.surfaceContainerHigh)
-                        .clipShape(Capsule())
-                }
+            Button { editing = true } label: { Image(systemName: "pencil").foregroundStyle(EColor.onSurface).frame(width: 40, height: 40) }
                 .buttonStyle(.plain)
-                .disabled(!canSave)
-            } else {
-                Button { editing = true } label: { Image(systemName: "pencil").foregroundStyle(EColor.onSurface).frame(width: 40, height: 40) }
-                    .buttonStyle(.plain)
-                Button { showDeleteConfirm = true } label: { Image(systemName: "trash").foregroundStyle(EColor.onSurface).frame(width: 40, height: 40) }
-                    .buttonStyle(.plain)
-            }
+            Button { showDeleteConfirm = true } label: { Image(systemName: "trash").foregroundStyle(EColor.onSurface).frame(width: 40, height: 40) }
+                .buttonStyle(.plain)
         }
         .padding(.horizontal, 8).padding(.top, 8)
     }
@@ -553,36 +559,34 @@ private struct EventDetailSheet: View {
         .overlay(alignment: .bottom) { if !last { Divider() } }
     }
 
-    private var editContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            FormField(label: "Title") { FormTextField(placeholder: "Event title", text: $draft.title) }
-            FormField(label: "Time") {
-                HStack(spacing: 8) {
-                    FormTextField(placeholder: "Start", text: $draft.start)
-                    Text("\u{2013}").foregroundStyle(EColor.onSurfaceVariant)
-                    FormTextField(placeholder: "End", text: $draft.end)
-                }
-            }
-            RepeatPicker(selectedDays: draftRepeatDays)
-            FormField(label: "Notes") {
-                TextField("Add a note\u{2026}", text: $draft.note, axis: .vertical)
-                    .font(Typography.font(15, weight: .regular))
-                    .lineLimit(3...5)
-                    .padding(14)
-                    .background(FormGreen.fieldBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            FormField(label: "Location") { FormTextField(placeholder: "Add location\u{2026}", text: $draft.location) }
-            FormField(label: "Reminder") {
-                HStack {
-                    Text("30 minutes before").font(Typography.font(14, weight: .regular)).foregroundStyle(EColor.onSurface)
-                    Spacer()
-                    EToggle(on: $reminder)
-                }
-                .padding(14).background(FormGreen.fieldBg).clipShape(RoundedRectangle(cornerRadius: 14))
+    @ViewBuilder
+    private var editFields: some View {
+        FormField(label: "Title") { FormTextField(placeholder: "Event title", text: $draft.title) }
+        FormField(label: "Time") {
+            HStack(spacing: 8) {
+                FormTextField(placeholder: "Start", text: $draft.start)
+                Text("\u{2013}").foregroundStyle(EColor.onSurfaceVariant)
+                FormTextField(placeholder: "End", text: $draft.end)
             }
         }
-        .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 24)
+        RepeatPicker(selectedDays: draftRepeatDays)
+        FormField(label: "Notes") {
+            TextField("Add a note\u{2026}", text: $draft.note, axis: .vertical)
+                .font(Typography.font(15, weight: .regular))
+                .lineLimit(3...5)
+                .padding(14)
+                .background(FormGreen.fieldBg)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        FormField(label: "Location") { FormTextField(placeholder: "Add location\u{2026}", text: $draft.location) }
+        FormField(label: "Reminder") {
+            HStack {
+                Text("30 minutes before").font(Typography.font(14, weight: .regular)).foregroundStyle(EColor.onSurface)
+                Spacer()
+                EToggle(on: $reminder)
+            }
+            .padding(14).background(FormGreen.fieldBg).clipShape(RoundedRectangle(cornerRadius: 14))
+        }
     }
 }
 
