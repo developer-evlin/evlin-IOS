@@ -741,6 +741,13 @@ private struct GrantExtraTimeSheet: View {
     // buttons) rather than reading as just another muted form field.
     private var customRuler: some View {
         let itemWidth: CGFloat = 68
+        let itemHeight: CGFloat = 56
+        // Each item gets the box's full height explicitly, rather than
+        // relying on the horizontal ScrollView to center shorter content
+        // on its cross axis — that centering isn't reliable, and without
+        // it the text pins to the top of the 56pt box, leaving the rest
+        // looking like a broken half-empty sliver instead of a clean
+        // white card.
         return GeometryReader { geo in
             let sideInset = max(0, (geo.size.width - itemWidth) / 2)
             ScrollView(.horizontal, showsIndicators: false) {
@@ -749,7 +756,7 @@ private struct GrantExtraTimeSheet: View {
                         Text(formatMinutes(minutes))
                             .font(Typography.font(minutes == selected ? 17 : 14, weight: minutes == selected ? .heavy : .semibold))
                             .foregroundStyle(minutes == selected ? EColor.primary : EColor.onSurfaceVariant)
-                            .frame(width: itemWidth)
+                            .frame(width: itemWidth, height: itemHeight)
                             .id(minutes)
                     }
                 }
@@ -765,7 +772,7 @@ private struct GrantExtraTimeSheet: View {
                     .allowsHitTesting(false)
             }
         }
-        .frame(height: 56)
+        .frame(height: itemHeight)
         .background(.white)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(EColor.outlineVariant, lineWidth: 1))
