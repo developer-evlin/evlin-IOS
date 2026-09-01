@@ -284,11 +284,13 @@ private struct TaskReviewCard: View {
                                 Text("at \(at)").font(Typography.font(11, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
                             }
                         }
-                        if task.hasPhoto {
+                        if task.photoCount == 1 {
                             RoundedRectangle(cornerRadius: 12)
                                 .fill(EColor.outlineVariant.opacity(0.5))
                                 .frame(height: 150)
                                 .overlay(Image(systemName: "photo").font(.system(size: 26)).foregroundStyle(EColor.onSurfaceVariant))
+                        } else if task.photoCount > 1 {
+                            submissionPhotoGrid(count: task.photoCount)
                         } else {
                             emptySubmissionPlaceholder
                         }
@@ -358,6 +360,35 @@ private struct TaskReviewCard: View {
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                 .foregroundStyle(EColor.outlineVariant)
         )
+    }
+
+    // Multi-page homework gets one photo per page rather than a single
+    // photo standing in for the whole submission — a 2-column grid instead
+    // of the single 150pt box, sized down per-tile so several still fit
+    // without the card growing unreasonably tall.
+    private func submissionPhotoGrid(count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(0..<count, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(EColor.outlineVariant.opacity(0.5))
+                        .frame(height: 104)
+                        .overlay(Image(systemName: "photo").font(.system(size: 20)).foregroundStyle(EColor.onSurfaceVariant))
+                        .overlay(alignment: .topLeading) {
+                            Text("\(i + 1)")
+                                .font(Typography.font(10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.black.opacity(0.45))
+                                .clipShape(Capsule())
+                                .padding(6)
+                        }
+                }
+            }
+            Text("\(count) photos")
+                .font(Typography.font(11, weight: .medium))
+                .foregroundStyle(EColor.onSurfaceVariant)
+        }
     }
 }
 

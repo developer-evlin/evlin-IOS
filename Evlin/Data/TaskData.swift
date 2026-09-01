@@ -13,7 +13,11 @@ struct ChildTask: Identifiable {
     var note: String?
     var submittedAt: String?
     var dueLabel: String?
-    var hasPhoto: Bool = false
+    // 0 = no photo, 1 = the original single-photo layout, 2+ = a grid —
+    // a kid submitting multi-page homework (see Math Practice) photographs
+    // each page separately rather than one photo standing in for the
+    // whole submission.
+    var photoCount: Int = 0
     var repeats: String = "none"
     // Whether the kid attached a voice note with `note` (e.g. a bypass
     // request explained by voice instead of/along with typing) — mirrors
@@ -54,7 +58,7 @@ enum TaskStore {
         }
         if childId == "zoe" {
             return [
-                ChildTask(id: 1, title: "Clean Table", state: .done, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", hasPhoto: true, repeats: "sun,mon,tue,wed,thu,fri,sat"),
+                ChildTask(id: 1, title: "Clean Table", state: .done, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),
                 ChildTask(id: 2, title: "Math Practice", state: .done, category: "Homework", description: "Questions 1–8, page 24.", note: "Finished before dinner.", submittedAt: "5:10 PM", dueLabel: "Today, 6:00 PM", repeats: "mon,tue,wed,thu,fri"),
                 ChildTask(id: 3, title: "Reading Essay", state: .done, category: "Homework", description: "300-word essay on this week's chapter.", note: "Turned in early.", submittedAt: "4:20 PM", dueLabel: "Today, 5:00 PM"),
                 ChildTask(id: 4, title: "Walk Dog", state: .done, category: "Chore", description: "Walk around the block, 15+ minutes.", note: "Done with Dad.", submittedAt: "5:45 PM", dueLabel: "Today, 5:00 PM", repeats: "sun,mon,tue,wed,thu,fri,sat"),
@@ -62,9 +66,12 @@ enum TaskStore {
             ]
         }
         return [
-            ChildTask(id: 1, title: "Clean Table", state: .done, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", hasPhoto: true, repeats: "sun,mon,tue,wed,thu,fri,sat"),
-            ChildTask(id: 2, title: "Science Project", state: .review, category: "Homework", description: "Finish the volcano diagram, page 14. Photo when done.", note: "Took longer than expected.", submittedAt: "3:18 PM", dueLabel: "Today, 4:00 PM", hasPhoto: true),
-            ChildTask(id: 3, title: "Math Practice", state: .pending, category: "Homework", description: "Questions 1–8, page 24. Photo when done.", dueLabel: "Today, 6:00 PM", repeats: "mon,tue,wed,thu,fri"),
+            ChildTask(id: 1, title: "Clean Table", state: .done, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),
+            ChildTask(id: 2, title: "Science Project", state: .review, category: "Homework", description: "Finish the volcano diagram, page 14. Photo when done.", note: "Took longer than expected.", submittedAt: "3:18 PM", dueLabel: "Today, 4:00 PM", photoCount: 1),
+            // Submitted with a photo of each worked page rather than one
+            // photo for the whole assignment — the multi-photo grid case
+            // (see TaskReviewDeck) most other tasks here don't exercise.
+            ChildTask(id: 3, title: "Math Practice", state: .review, category: "Homework", description: "Questions 1–8, page 24. Photo when done.", note: "Did all 8, #6 was tricky.", submittedAt: "5:40 PM", dueLabel: "Today, 6:00 PM", photoCount: 3, repeats: "mon,tue,wed,thu,fri"),
             ChildTask(id: 6, title: "Reading Essay", state: .review, category: "Homework", description: "300-word essay on this week's chapter.", note: "Kept it short like you said.", submittedAt: "4:12 PM", dueLabel: "Today, 5:00 PM"),
             ChildTask(id: 5, title: "Read for 20 minutes", state: .bypass, category: "Reading", description: "Any book, 20+ minutes.", note: "Had football practice, home too late. Can I double up tomorrow?", submittedAt: "7:42 PM", dueLabel: "Today, 8:00 PM", hasVoiceNote: true),
             ChildTask(id: 4, title: "Walk Dog", state: .overdue, category: "Chore", description: "Walk around the block, 15+ minutes.", dueLabel: "Yesterday, 5:00 PM", repeats: "sun,mon,tue,wed,thu,fri,sat"),

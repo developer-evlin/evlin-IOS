@@ -29,7 +29,7 @@ enum NotificationsData {
         // just opening the profile, so this one falls back to that instead.
         Notif(id: 2, child: "maya", icon: "music_note", title: "Piano Practice — needs review", body: "45-min session, clip uploaded.", time: "18m ago", unread: true),
         Notif(id: 6, child: "liam", icon: "priority_high", title: "Walk Dog — overdue", body: "Not checked off since yesterday.", time: "12h ago", unread: true, taskId: 4),
-        Notif(id: 7, child: "liam", icon: "schedule", title: "Math Practice — due soon", body: "Due at 6:00 PM today.", time: "30m ago", unread: false, taskId: 3),
+        Notif(id: 7, child: "liam", icon: "task_alt", title: "Math Practice — needs review", body: "3 photos submitted.", time: "30m ago", unread: false, taskId: 3),
         Notif(id: 8, child: "liam", icon: "pan_tool", title: "Bypass requested — Read for 20 minutes", body: "\"Had football practice, home late. Can I double up tomorrow?\"", time: "5m ago", unread: true, taskId: 5),
         Notif(id: 3, child: "liam", icon: "sports_soccer", title: "Soccer Practice", body: "Starts in 30 min at City Park.", time: "1h ago", unread: false),
         Notif(id: 4, child: "emma", icon: "menu_book", title: "Reading Goal Reached", body: "60 minutes today — new best!", time: "2h ago", unread: false),

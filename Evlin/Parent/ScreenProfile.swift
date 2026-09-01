@@ -1672,7 +1672,7 @@ private struct AddTaskSheet: View {
             onCreate(ChildTask(
                 id: 0, title: title, state: .pending, category: category,
                 description: description, note: nil, submittedAt: nil,
-                dueLabel: hasDueDate ? formatted(dueDate) : nil, hasPhoto: false,
+                dueLabel: hasDueDate ? formatted(dueDate) : nil, photoCount: 0,
                 repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
             ))
         }, canSave: canSave, saveLabel: "Create task") {
