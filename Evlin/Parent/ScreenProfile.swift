@@ -9,6 +9,11 @@ struct ScreenProfile: View {
     // RootView's `onboarded`/`taskTutorialDone`.
     var startInTutorial: Bool = false
     var onTutorialCompleted: (() -> Void)? = nil
+    // Set when this profile was opened by tapping a notification about a
+    // specific task (e.g. "Liam finished homework") — jumps straight into
+    // TaskReviewDeckView at that task instead of landing on the plain
+    // profile and making the parent find it themselves.
+    var openTaskId: Int? = nil
 
     @ObservedObject private var child: Child
     @State private var tasks: [ChildTask]
@@ -43,16 +48,21 @@ struct ScreenProfile: View {
         var id: String { rawValue }
     }
 
-    init(childId: String, onBack: @escaping () -> Void, startInTutorial: Bool = false, onTutorialCompleted: (() -> Void)? = nil) {
+    init(childId: String, onBack: @escaping () -> Void, startInTutorial: Bool = false, onTutorialCompleted: (() -> Void)? = nil, openTaskId: Int? = nil) {
         self.childId = childId
         self.onBack = onBack
         self.startInTutorial = startInTutorial
         self.onTutorialCompleted = onTutorialCompleted
+        self.openTaskId = openTaskId
         let c = FamilyStore.child(childId)
         _child = ObservedObject(wrappedValue: c)
-        _tasks = State(initialValue: TaskStore.tasks(for: childId))
+        let taskList = TaskStore.tasks(for: childId)
+        _tasks = State(initialValue: taskList)
         _rules = State(initialValue: TaskStore.rules(for: c))
         _tutorialActive = State(initialValue: startInTutorial)
+        if let openTaskId, let index = taskList.firstIndex(where: { $0.id == openTaskId }) {
+            _reviewStartIndex = State(initialValue: index)
+        }
     }
 
     private var doneCount: Int { tasks.filter { $0.state == .done }.count }

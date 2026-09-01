@@ -5,6 +5,9 @@ struct ScreenHome: View {
     @Binding var taskTutorialDone: Bool
     @State private var showNotifs = false
     @State private var openChildId: String?
+    // Set alongside openChildId when a notification about a specific task
+    // was tapped — see NotificationPanel's onOpenChild.
+    @State private var openTaskId: Int?
     // Fires once per Home appearance (not tied to taskTutorialDone) so
     // parents land straight on their first child's profile by default,
     // without permanently trapping them there — after this first auto-open,
@@ -61,9 +64,12 @@ struct ScreenHome: View {
             }
         }
         .sheet(isPresented: $showNotifs) {
-            NotificationPanel(onOpenChild: { id in
+            NotificationPanel(onOpenChild: { id, taskId in
                 showNotifs = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { openChildId = id }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    openTaskId = taskId
+                    openChildId = id
+                }
             })
         }
         // fullScreenCover, not .sheet — on iPad a .sheet presents as a small
@@ -72,9 +78,10 @@ struct ScreenHome: View {
             NavigationStack {
                 ScreenProfile(
                     childId: wrapped.value,
-                    onBack: { openChildId = nil },
+                    onBack: { openChildId = nil; openTaskId = nil },
                     startInTutorial: !taskTutorialDone && wrapped.value == FamilyStore.children.first?.id,
-                    onTutorialCompleted: { taskTutorialDone = true }
+                    onTutorialCompleted: { taskTutorialDone = true },
+                    openTaskId: openTaskId
                 )
             }
         }
@@ -235,7 +242,7 @@ struct SegmentedTimeBar: View {
 }
 
 private struct NotificationPanel: View {
-    var onOpenChild: (String) -> Void
+    var onOpenChild: (String, Int?) -> Void
     @State private var notifs = NotificationsData.notifs
     @Environment(\.dismiss) private var dismiss
 
@@ -254,7 +261,7 @@ private struct NotificationPanel: View {
                 ForEach(notifs) { n in
                     Button {
                         if let i = notifs.firstIndex(where: { $0.id == n.id }) { notifs[i].unread = false }
-                        if n.child != "family" { onOpenChild(n.child) }
+                        if n.child != "family" { onOpenChild(n.child, n.taskId) }
                     } label: {
                         HStack(alignment: .top, spacing: 12) {
                             if n.unread {

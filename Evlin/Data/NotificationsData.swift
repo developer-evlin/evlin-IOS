@@ -23,7 +23,11 @@ struct ChildEvent: Identifiable {
 enum NotificationsData {
     static let notifs: [Notif] = [
         Notif(id: 1, child: "liam", icon: "task_alt", title: "Science Project — needs review", body: "Tap to review and approve.", time: "2m ago", unread: true, taskId: 2),
-        Notif(id: 2, child: "maya", icon: "music_note", title: "Piano Practice — needs review", body: "45-min session, clip uploaded.", time: "18m ago", unread: true, taskId: 2),
+        // No taskId: TaskStore has no "Piano Practice" task for any child
+        // (id 2 in the default list is "Science Project") — jumping straight
+        // to a same-numbered but wrongly-titled task would be worse than
+        // just opening the profile, so this one falls back to that instead.
+        Notif(id: 2, child: "maya", icon: "music_note", title: "Piano Practice — needs review", body: "45-min session, clip uploaded.", time: "18m ago", unread: true),
         Notif(id: 6, child: "liam", icon: "priority_high", title: "Walk Dog — overdue", body: "Not checked off since yesterday.", time: "12h ago", unread: true, taskId: 4),
         Notif(id: 7, child: "liam", icon: "schedule", title: "Math Practice — due soon", body: "Due at 6:00 PM today.", time: "30m ago", unread: false, taskId: 3),
         Notif(id: 8, child: "liam", icon: "pan_tool", title: "Bypass requested — Read for 20 minutes", body: "\"Had football practice, home late. Can I double up tomorrow?\"", time: "5m ago", unread: true, taskId: 5),
