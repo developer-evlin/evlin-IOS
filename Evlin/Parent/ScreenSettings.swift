@@ -996,7 +996,7 @@ private struct SettingsAddChildSheet: View {
             .padding(.top, 24)
 
             ZStack {
-                OnboardingV2FauxQR(size: 200).opacity(0.35)
+                OnboardingV2FauxQR(size: 200)
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(Color.white.opacity(0.9), lineWidth: 3)
                     .padding(18)

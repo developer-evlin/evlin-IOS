@@ -1,9 +1,12 @@
 import SwiftUI
+import UIKit
 
 // Pulled 1:1 from Evlin_Parent_view/index.html's FORM_GREEN palette (the
 // "Virginia" New Task reference) — near-white mint fields, dark forest-green
 // heading, brighter leaf-green accent, lavender "Pro" badge. Distinct from
 // the app-wide Brand tokens; scoped to the add-task/add-rule sheets only.
+private let formBottomAnchorID = "form-bottom-anchor"
+
 enum FormGreen {
     static let fieldBg = Color(hex: "F5FAF7")
     static let title = Color(hex: "0F2115")
@@ -71,9 +74,23 @@ struct FormShell<Content: View>: View {
                 .padding(.top, 8)
                 .padding(.bottom, 18)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) { content }
-                    .padding(.horizontal, 20)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) { content }
+                        .padding(.horizontal, 20)
+                    // A "More options" field (the usual reason this needs
+                    // scrolling — see MoreOptions below) sits right above
+                    // Save, so scrolling to this anchor on keyboard-open
+                    // reliably surfaces whatever's actively being typed
+                    // without needing per-field FocusState plumbing that
+                    // every FormShell call site would otherwise have to add.
+                    Color.clear.frame(height: 1).id(formBottomAnchorID)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(formBottomAnchorID, anchor: .bottom)
+                    }
+                }
             }
             // Every field in these sheets is a plain tap-to-focus text field
             // with no other gesture of its own to protect, so a tap anywhere

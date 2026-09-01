@@ -43,6 +43,7 @@ struct ScreenProfile: View {
     @State private var showApprovalVerify = false
     @ObservedObject private var billing = BillingState.shared
     @State private var isUpgrading = false
+    @State private var showPlanSheet = false
 
     enum AddMode: String, Identifiable { case menu, task, rule
         var id: String { rawValue }
@@ -78,14 +79,6 @@ struct ScreenProfile: View {
     private var timePoolFilledMinutes: Int {
         guard child.status == .unlocked else { return 0 }
         return Int((Double(child.dailyLimitMin) * Double(child.timePct) / 100).rounded())
-    }
-
-    private var unlockWarningText: String {
-        let remaining = tasks.count - doneCount
-        if remaining > 0 {
-            return "\(child.name) still has \(remaining) task\(remaining == 1 ? "" : "s") left to do. Unlocking now teaches them screen time comes before responsibilities — it can build a bad habit."
-        }
-        return "Locked time is what makes the limits stick. Unlocking early — even occasionally — can undo that and make future locks harder to enforce."
     }
 
     var body: some View {
@@ -137,7 +130,7 @@ struct ScreenProfile: View {
             if showUnlockConfirm {
                 UnlockConfirmCard(
                     childName: child.name,
-                    warningText: unlockWarningText,
+                    remaining: tasks.count - doneCount,
                     onUnlock: {
                         child.status = .unlocked
                         child.timeLeft = formatMinutes(child.dailyLimitMin)
@@ -354,6 +347,42 @@ struct ScreenProfile: View {
                         }
                     }
                     Spacer()
+                }
+
+                // A compact, always-visible link into the same plan status
+                // shown on the Settings > Parent Profile page (and the
+                // upsell row on the Settings root list) — sharing
+                // BillingState.shared so upgrading from any of the three
+                // reflects everywhere immediately, not just where it happened.
+                Button { showPlanSheet = true } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(billing.isPlus ? Brand.greenDeep : EColor.onSurfaceVariant)
+                        Text("Evlin Plan")
+                            .font(Typography.font(13, weight: .semibold))
+                            .foregroundStyle(EColor.onSurface)
+                        Spacer(minLength: 8)
+                        Text(billing.isPlus ? "PLUS" : "FREE")
+                            .font(Typography.font(10, weight: .bold))
+                            .foregroundStyle(billing.isPlus ? Brand.greenDeep : EColor.onSurfaceVariant)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(billing.isPlus ? Brand.greenTint : EColor.surfaceContainerHigh)
+                            .clipShape(Capsule())
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 40)
+                    .background(EColor.surfaceContainerHigh.opacity(0.6))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 14)
+                .sheet(isPresented: $showPlanSheet) {
+                    ProfilePlanSheet(billing: billing, isUpgrading: $isUpgrading)
                 }
 
                 if child.status != .downtime, child.reflection == nil {
@@ -647,6 +676,93 @@ struct ScreenProfile: View {
 
 }
 
+// MARK: - Evlin Plan (profile's compact link into the shared plan status)
+
+// Mirrors the same BillingState.shared source ScreenSettings' billing page
+// and upsell row read from, so upgrading here — or there — shows up
+// everywhere immediately. A smaller, single-screen version of that page
+// (no billing-cycle picker or feature list) since this is a quick "what am
+// I on" check reached from a kid's profile, not the place to manage a plan.
+private struct ProfilePlanSheet: View {
+    @ObservedObject var billing: BillingState
+    @Binding var isUpgrading: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    private let plusFeatures = [
+        "Unlimited custom rules & app-time limits",
+        "AI-powered de-escalation strategies in chat",
+        "Weekly behavior insights & trend reports",
+    ]
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(billing.isPlus ? Brand.greenTint : EColor.surfaceContainerHigh)
+                    .frame(width: 56, height: 56)
+                    .overlay(
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(billing.isPlus ? Brand.greenDeep : EColor.onSurfaceVariant)
+                    )
+
+                VStack(spacing: 6) {
+                    Text(billing.isPlus ? "You're on Evlin Plus" : "Evlin Plan: Free")
+                        .font(Typography.font(20, weight: .heavy))
+                        .foregroundStyle(EColor.onSurface)
+                    Text(billing.isPlus
+                         ? "Billed \(billing.billingCycle == .yearly ? "yearly" : "monthly") · unlimited rules & AI insights are active for every child."
+                         : "Upgrade for unlimited custom rules and AI-powered insights across every child.")
+                        .font(Typography.font(13, weight: .regular))
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                }
+
+                if !billing.isPlus {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(plusFeatures, id: \.self) { feature in
+                            HStack(spacing: 10) {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(EColor.secondary)
+                                Text(feature).font(Typography.font(13.5, weight: .medium)).foregroundStyle(EColor.onSurface)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(EColor.surfaceContainerLowest)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    if isUpgrading {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Upgrading…").font(Typography.font(13, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                        }
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                    } else {
+                        PrimaryButton(title: "Upgrade to Evlin Plus", systemIcon: "sparkles") {
+                            Task {
+                                isUpgrading = true
+                                try? await Task.sleep(nanoseconds: 900_000_000)
+                                isUpgrading = false
+                                withAnimation { billing.isPlus = true }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+            .background(EColor.surface)
+            .navigationTitle("Evlin Plan")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium])
+    }
+}
+
 // MARK: - Grant extra time (tasks already done, allowance used up)
 
 // Ported concept from the reflection/earn-back philosophy elsewhere in the
@@ -664,12 +780,18 @@ private struct GrantExtraTimeSheet: View {
     // The two-hour mark is the general guideline for kids' daily recreational
     // screen time — the warning below is pinned to *that*, not to the size
     // of the top-up. 15 more minutes reads very differently for a kid who's
-    // had 20 minutes today than one who's already had 2 hours; a flat
-    // "15/30/45/60" set of options with a warning keyed only to the
-    // increment couldn't tell those apart.
+    // had 20 minutes today than one who's already had 2 hours; a flat set of
+    // fixed options with a warning keyed only to the increment couldn't tell
+    // those apart.
     private let twoHours = 120
-    private let options = [15, 30, 45, 60]
+    private let presetOptions = [15, 30, 60]
+    // Every 15 minutes from 15m up to 4h — a horizontal scroll-to-pick ruler
+    // (the 4th "Custom" slot) rather than a text field, so any in-between
+    // amount is still just a scroll away instead of typing digits.
+    private let customOptions: [Int] = Array(stride(from: 15, through: 240, by: 15))
     @State private var selected = 15
+    @State private var isCustomActive = false
+    @State private var customScrollID: Int? = 15
 
     private var projectedTotal: Int { usageTodayMin + selected }
 
@@ -687,6 +809,47 @@ private struct GrantExtraTimeSheet: View {
         default:
             return (EColor.danger, "exclamationmark.octagon.fill",
                     "\(childName) would be at \(total) today — well past 2 hours. Extended screen time like this is linked to worse sleep, mood, and attention.")
+        }
+    }
+
+    // Horizontal scroll-to-pick strip for the "Custom" slot — snaps to
+    // 15-minute increments as the parent scrolls sideways through
+    // customOptions, rather than a text field or a vertical wheel. White,
+    // not the app's usual light-gray field fill, to match the crisp white
+    // boxes used elsewhere for a deliberate choice (e.g. UnlockConfirmCard's
+    // buttons) rather than reading as just another muted form field.
+    private var customRuler: some View {
+        let itemWidth: CGFloat = 68
+        return GeometryReader { geo in
+            let sideInset = max(0, (geo.size.width - itemWidth) / 2)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(customOptions, id: \.self) { minutes in
+                        Text(formatMinutes(minutes))
+                            .font(Typography.font(minutes == selected ? 17 : 14, weight: minutes == selected ? .heavy : .semibold))
+                            .foregroundStyle(minutes == selected ? EColor.primary : EColor.onSurfaceVariant)
+                            .frame(width: itemWidth)
+                            .id(minutes)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $customScrollID)
+            .contentMargins(.horizontal, sideInset, for: .scrollContent)
+            .overlay {
+                Capsule()
+                    .fill(EColor.primary.opacity(0.1))
+                    .frame(width: itemWidth - 10, height: 40)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(height: 56)
+        .background(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(EColor.outlineVariant, lineWidth: 1))
+        .onChange(of: customScrollID) { _, newValue in
+            if let newValue { selected = newValue }
         }
     }
 
@@ -719,23 +882,44 @@ private struct GrantExtraTimeSheet: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("HOW MUCH EXTRA TIME?").font(Typography.font(11, weight: .bold)).foregroundStyle(EColor.onSurfaceVariant)
                         HStack(spacing: 8) {
-                            ForEach(options, id: \.self) { minutes in
+                            ForEach(presetOptions, id: \.self) { minutes in
                                 Button {
-                                    withAnimation(.easeOut(duration: 0.15)) { selected = minutes }
+                                    withAnimation(.easeOut(duration: 0.15)) { selected = minutes; isCustomActive = false }
                                 } label: {
                                     Text(formatMinutes(minutes))
                                         .font(Typography.font(14, weight: .bold))
-                                        .foregroundStyle(selected == minutes ? .white : EColor.onSurface)
+                                        .foregroundStyle(!isCustomActive && selected == minutes ? .white : EColor.onSurface)
                                         .frame(maxWidth: .infinity)
                                         .frame(height: 48)
-                                        .background(selected == minutes ? EColor.primary : EColor.surfaceContainerLowest)
+                                        .background(!isCustomActive && selected == minutes ? EColor.primary : EColor.surfaceContainerLowest)
                                         .clipShape(Capsule())
-                                        .overlay(Capsule().strokeBorder(EColor.outlineVariant, lineWidth: selected == minutes ? 0 : 1))
+                                        .overlay(Capsule().strokeBorder(EColor.outlineVariant, lineWidth: !isCustomActive && selected == minutes ? 0 : 1))
                                 }
                                 .buttonStyle(.plain)
                             }
+
+                            Button {
+                                customScrollID = selected
+                                withAnimation(.easeOut(duration: 0.15)) { isCustomActive = true }
+                            } label: {
+                                Text("Custom")
+                                    .font(Typography.font(14, weight: .bold))
+                                    .foregroundStyle(isCustomActive ? .white : EColor.onSurface)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 48)
+                                    .background(isCustomActive ? EColor.primary : EColor.surfaceContainerLowest)
+                                    .clipShape(Capsule())
+                                    .overlay(Capsule().strokeBorder(EColor.outlineVariant, lineWidth: isCustomActive ? 0 : 1))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if isCustomActive {
+                            customRuler
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
+                    .animation(.easeOut(duration: 0.2), value: isCustomActive)
 
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: warning.icon).foregroundStyle(warning.color)
@@ -822,9 +1006,28 @@ private struct ParentApprovalVerifyingOverlay: View {
 // second's pause, not a quick reflex tap.
 private struct UnlockConfirmCard: View {
     var childName: String
-    var warningText: String
+    // Raw count, not pre-formatted text — lets this card pick its own
+    // severity color the same way GrantExtraTimeSheet's warning box escalates
+    // with the selected amount, instead of a flat gray box regardless of how
+    // much is still left undone.
+    var remaining: Int
     var onUnlock: () -> Void
     var onCancel: () -> Void
+
+    private var warning: (color: Color, icon: String, text: String) {
+        guard remaining > 0 else {
+            return (Color(hex: "25924A"), "checkmark.circle.fill",
+                    "Locked time is what makes the limits stick. Unlocking early — even occasionally — can undo that and make future locks harder to enforce.")
+        }
+        let task = remaining == 1 ? "task" : "tasks"
+        let text = "\(childName) still has \(remaining) \(task) left to do. Unlocking now teaches them screen time comes before responsibilities — it can build a bad habit."
+        // One task left reads as "almost done" (amber); several still open is
+        // the more serious "unlocking before real progress" case (red) —
+        // same two-tier escalation GrantExtraTimeSheet uses for its amount.
+        return remaining == 1
+            ? (Color(hex: "B26A00"), "exclamationmark.triangle.fill", text)
+            : (EColor.danger, "exclamationmark.octagon.fill", text)
+    }
 
     var body: some View {
         ZStack {
@@ -843,10 +1046,17 @@ private struct UnlockConfirmCard: View {
                             .font(Typography.font(18, weight: .heavy))
                             .foregroundStyle(EColor.onSurface)
                     }
-                    Text(warningText)
-                        .font(Typography.font(14, weight: .regular))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: warning.icon).foregroundStyle(warning.color)
+                        Text(warning.text)
+                            .font(Typography.font(14, weight: .regular))
+                            .foregroundStyle(EColor.onSurface)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                    .background(warning.color.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     VStack(spacing: 10) {
                         cardButton("Unlock anyway", tint: EColor.danger, action: onUnlock)
