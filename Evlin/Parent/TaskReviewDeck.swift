@@ -230,6 +230,12 @@ private struct TaskReviewCard: View {
     var task: ChildTask
     var childName: String
 
+    // Which photo a tap in the grid should open the full-screen viewer to
+    // — set together right before showPhotoViewer flips true, so the
+    // viewer never has a stale/mismatched starting page.
+    @State private var viewerIndex = 0
+    @State private var showPhotoViewer = false
+
     private var statusMeta: (label: String, tone: Color, bg: Color) {
         switch task.state {
         case .done: return ("Approved", Color(hex: "25924A"), Color(hex: "25924A").opacity(0.10))
@@ -338,6 +344,9 @@ private struct TaskReviewCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(EColor.outlineVariant.opacity(0.6), lineWidth: 1))
         .shadow(color: .black.opacity(0.08), radius: 20, y: 10)
+        .fullScreenCover(isPresented: $showPhotoViewer) {
+            PhotoGalleryViewer(count: task.photoCount, index: $viewerIndex, onClose: { showPhotoViewer = false })
+        }
     }
 
     private var emptySubmissionPlaceholder: some View {
@@ -365,30 +374,187 @@ private struct TaskReviewCard: View {
     // Multi-page homework gets one photo per page rather than a single
     // photo standing in for the whole submission — a 2-column grid instead
     // of the single 150pt box, sized down per-tile so several still fit
-    // without the card growing unreasonably tall.
+    // without the card growing unreasonably tall. Each tile opens the same
+    // photo full-screen (see PhotoGalleryViewer) starting on that page.
     private func submissionPhotoGrid(count: Int) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(0..<count, id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(EColor.outlineVariant.opacity(0.5))
-                        .frame(height: 104)
-                        .overlay(Image(systemName: "photo").font(.system(size: 20)).foregroundStyle(EColor.onSurfaceVariant))
-                        .overlay(alignment: .topLeading) {
-                            Text("\(i + 1)")
-                                .font(Typography.font(10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Color.black.opacity(0.45))
-                                .clipShape(Capsule())
-                                .padding(6)
-                        }
+                    Button {
+                        viewerIndex = i
+                        showPhotoViewer = true
+                    } label: {
+                        MockHomeworkPhoto(pageNumber: i + 1)
+                            .frame(height: 104)
+                            .overlay(alignment: .topLeading) {
+                                Text("\(i + 1)")
+                                    .font(Typography.font(10, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Color.black.opacity(0.45))
+                                    .clipShape(Capsule())
+                                    .padding(6)
+                            }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            Text("\(count) photos")
+            Text("\(count) photos · tap to view")
                 .font(Typography.font(11, weight: .medium))
                 .foregroundStyle(EColor.onSurfaceVariant)
         }
+    }
+}
+
+// A stand-in "photographed homework page" — ruled lines, a bit of
+// handwriting-like scribble, a checkmark — used for both the grid
+// thumbnail and (scaled up) the full-screen viewer, so tapping a thumbnail
+// visibly opens "the same photo" bigger rather than a generic gray box.
+// There's no real camera capture in this prototype (see TaskDetailView),
+// so this is what a submitted photo looks like everywhere it appears.
+private struct MockHomeworkPhoto: View {
+    var pageNumber: Int
+    var detailed: Bool = false
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: detailed ? 20 : 12, style: .continuous)
+                    .fill(Color(hex: "FFFDF6"))
+
+                VStack(alignment: .leading, spacing: geo.size.height / (detailed ? 11 : 7)) {
+                    ForEach(0..<(detailed ? 9 : 5), id: \.self) { _ in
+                        Rectangle().fill(Color(hex: "E4DFCE")).frame(height: 1)
+                    }
+                }
+                .padding(.top, geo.size.height * 0.28)
+                .padding(.horizontal, geo.size.width * 0.12)
+
+                Text("Page \(pageNumber)")
+                    .font(Typography.font(detailed ? 15 : 9, weight: .bold))
+                    .foregroundStyle(Color(hex: "8A8064"))
+                    .padding(.top, geo.size.height * 0.1)
+                    .padding(.leading, geo.size.width * 0.12)
+
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: geo.size.width * 0.16))
+                    .foregroundStyle(Brand.greenDeep.opacity(0.55))
+                    .rotationEffect(.degrees(-12))
+                    .position(x: geo.size.width * 0.82, y: geo.size.height * 0.8)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: detailed ? 20 : 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: detailed ? 20 : 12, style: .continuous).strokeBorder(Color(hex: "E4DFCE"), lineWidth: 1))
+    }
+}
+
+// MARK: - Full-screen photo viewer
+
+// Opened by tapping any tile in submissionPhotoGrid. Three things make
+// switching between several pages easy for a parent skimming a
+// submission: native page-swipe (TabView), a direct-jump thumbnail strip
+// so they don't have to swipe past pages one at a time, and a
+// swipe-down-to-dismiss that mirrors Photos/Messages instead of hunting
+// for a close button.
+private struct PhotoGalleryViewer: View {
+    var count: Int
+    @Binding var index: Int
+    var onClose: () -> Void
+
+    @State private var dragOffset: CGFloat = 0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            TabView(selection: $index) {
+                ForEach(0..<count, id: \.self) { i in
+                    MockHomeworkPhoto(pageNumber: i + 1, detailed: true)
+                        .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                        .padding(.horizontal, 28)
+                        .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+
+            VStack {
+                HStack {
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(.white.opacity(0.16))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
+
+                    Spacer()
+
+                    if count > 1 {
+                        Text("\(index + 1) of \(count)")
+                            .font(Typography.font(13, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(.white.opacity(0.16))
+                            .clipShape(Capsule())
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+                Spacer()
+
+                // Direct-jump strip — faster than swiping through several
+                // pages one at a time to find a specific one.
+                if count > 1 {
+                    ScrollViewReader { proxy in
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(0..<count, id: \.self) { i in
+                                    Button {
+                                        withAnimation(.easeOut(duration: 0.2)) { index = i }
+                                    } label: {
+                                        MockHomeworkPhoto(pageNumber: i + 1)
+                                            .frame(width: 46, height: 60)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .strokeBorder(.white, lineWidth: index == i ? 2.5 : 0)
+                                            )
+                                            .opacity(index == i ? 1 : 0.55)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id(i)
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                        }
+                        .onChange(of: index) { _, newValue in
+                            withAnimation { proxy.scrollTo(newValue, anchor: .center) }
+                        }
+                    }
+                    .padding(.bottom, 26)
+                }
+            }
+        }
+        .offset(y: dragOffset)
+        // Only a mostly-vertical drag counts, so this doesn't fight the
+        // TabView's own horizontal swipe-between-photos gesture.
+        .gesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { value in
+                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                    dragOffset = max(0, value.translation.height)
+                }
+                .onEnded { value in
+                    if value.translation.height > 90, abs(value.translation.height) > abs(value.translation.width) {
+                        onClose()
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
+                    }
+                }
+        )
     }
 }
 
