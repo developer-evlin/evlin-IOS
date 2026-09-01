@@ -263,10 +263,6 @@ struct ScreenProfile: View {
         }
     }
 
-    private func setState(_ id: Int, _ state: TaskState) {
-        if let i = tasks.firstIndex(where: { $0.id == id }) { tasks[i].state = state }
-    }
-
     // Replaces the old kid-device PIN gate: a kid tapping "Parent controls"
     // sets child.parentApprovalStatus to .pending (see ScreenTabletHome) and
     // this is the only place that can clear it — there's no code to guess,
@@ -434,17 +430,13 @@ struct ScreenProfile: View {
 
     private var tasksSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionHead("Current Tasks") {
-                Text("\(doneCount)/\(tasks.count)")
-                    .font(Typography.font(11, weight: .heavy))
-                    .foregroundStyle(Color(hex: "25924A"))
-                    .padding(.horizontal, 10).frame(height: 24)
-                    .background(Color(hex: "E4F8E9"))
-                    .clipShape(Capsule())
-            }
+            // No done/total pill here anymore — headerCard's status line
+            // ("Locked · 1/5 tasks") already says how many are left, so
+            // this was the same count shown twice on one screen.
+            SectionHead("Current Tasks")
             VStack(spacing: 10) {
                 ForEach(Array(tasks.enumerated()), id: \.element.id) { i, task in
-                    TaskRowView(task: task, onOpen: { reviewStartIndex = i }, onApprove: { setState(task.id, task.state == .bypass ? .bypassed : .done) }, onRedo: { setState(task.id, .pending) })
+                    TaskRowView(task: task, onOpen: { reviewStartIndex = i })
                 }
             }
         }
@@ -1493,8 +1485,6 @@ private let bypassPurple = Color(hex: "7C3AED")
 private struct TaskRowView: View {
     var task: ChildTask
     var onOpen: () -> Void
-    var onApprove: () -> Void
-    var onRedo: () -> Void
 
     // dueLabel is stored as "Today, 1:00 PM" / "Yesterday, 5:00 PM" — the row
     // only has room for a quick glance, and task.state's own pill (Pending,
@@ -1515,20 +1505,17 @@ private struct TaskRowView: View {
         }
     }
 
+    // Approve/Redo (and Allow/Deny for a bypass request) used to live
+    // inline here too, duplicating what tapping into the task already
+    // offers via TaskReviewDeckView — a parent reviewing a submission
+    // needs to actually look at it first anyway, so the row is just an
+    // entry point now, not a second place to act without opening it.
     var body: some View {
         Button(action: onOpen) {
-            VStack(spacing: 14) {
-                mainRow
-                if task.state == .review {
-                    actionRow(primary: "APPROVE", primaryColor: Brand.greenDeep, primaryAction: onApprove, secondary: "REQUEST REDO", secondaryAction: onRedo)
-                }
-                if task.state == .bypass {
-                    actionRow(primary: "ALLOW", primaryColor: bypassPurple, primaryAction: onApprove, secondary: "DENY", secondaryAction: onRedo)
-                }
-            }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(cardBackground))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(EColor.outlineVariant.opacity(0.5), lineWidth: 1))
+            mainRow
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(cardBackground))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(EColor.outlineVariant.opacity(0.5), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -1584,30 +1571,6 @@ private struct TaskRowView: View {
             .foregroundStyle(fg)
             .padding(.horizontal, 8).padding(.vertical, 2)
             .background(bg).clipShape(Capsule())
-    }
-
-    private func actionRow(primary: String, primaryColor: Color, primaryAction: @escaping () -> Void, secondary: String, secondaryAction: @escaping () -> Void) -> some View {
-        HStack(spacing: 10) {
-            Button(action: primaryAction) {
-                Text(primary)
-                    .font(Typography.font(12, weight: .heavy)).tracking(0.8)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-                    .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(primaryColor))
-                    .shadow(color: primaryColor.opacity(0.3), radius: 8, y: 3)
-            }
-            .buttonStyle(.plain)
-
-            Button(action: secondaryAction) {
-                Text(secondary)
-                    .font(Typography.font(12, weight: .heavy)).tracking(0.8)
-                    .foregroundStyle(Color(hex: "B26A00"))
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-                    .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(.white))
-                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color(hex: "EF6C00"), lineWidth: 1.5))
-            }
-            .buttonStyle(.plain)
-        }
     }
 
     @ViewBuilder
