@@ -290,15 +290,11 @@ private struct TaskReviewCard: View {
                     .background(statusMeta.bg).clipShape(Capsule())
                 }
 
-                if !task.description.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("WHAT TO DO").font(Typography.font(10, weight: .bold)).tracking(1).foregroundStyle(EColor.onSurfaceVariant)
-                        Text(task.description)
-                            .font(Typography.font(14.5, weight: .regular))
-                            .foregroundStyle(EColor.onSurface)
-                    }
-                }
-
+                // The photo is the whole point of opening this card — a
+                // parent reviewing a submission wants to actually see it,
+                // not read instructions first. Moved above "What to do"
+                // (which a parent already knows, having assigned it) and
+                // sized as large as the card can reasonably give it.
                 if task.state != .bypass {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -317,6 +313,15 @@ private struct TaskReviewCard: View {
                         } else {
                             emptySubmissionPlaceholder
                         }
+                    }
+                }
+
+                if !task.description.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("WHAT TO DO").font(Typography.font(9.5, weight: .bold)).tracking(1).foregroundStyle(EColor.onSurfaceVariant)
+                        Text(task.description)
+                            .font(Typography.font(13, weight: .regular))
+                            .foregroundStyle(EColor.onSurfaceVariant)
                     }
                 }
 
@@ -412,26 +417,28 @@ private struct SubmissionPhotoStack: View {
     var count: Int
     var onTap: () -> Void
 
-    private let stackHeight: CGFloat = 240
+    // As large as the card can reasonably give it — this is the whole
+    // point of opening the card, not a supporting detail.
+    private let stackHeight: CGFloat = 340
 
     var body: some View {
         Button(action: onTap) {
             GeometryReader { geo in
-                let photoWidth = geo.size.width * 0.84
+                let photoWidth = geo.size.width * 0.93
                 ZStack {
                     if count >= 3 {
                         MockHomeworkPhoto(pageNumber: 3)
                             .frame(width: photoWidth, height: stackHeight - 24)
-                            .rotationEffect(.degrees(7))
-                            .offset(x: geo.size.width * 0.05, y: 10)
+                            .rotationEffect(.degrees(6))
+                            .offset(x: geo.size.width * 0.025, y: 10)
                             .opacity(0.75)
                             .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
                     }
                     if count >= 2 {
                         MockHomeworkPhoto(pageNumber: 2)
                             .frame(width: photoWidth, height: stackHeight - 24)
-                            .rotationEffect(.degrees(-5))
-                            .offset(x: -geo.size.width * 0.04, y: 5)
+                            .rotationEffect(.degrees(-4))
+                            .offset(x: -geo.size.width * 0.02, y: 5)
                             .opacity(0.88)
                             .shadow(color: .black.opacity(0.1), radius: 5, y: 2)
                     }
