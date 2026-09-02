@@ -323,13 +323,11 @@ private struct TaskReviewCard: View {
                                 Text("at \(at)").font(Typography.font(11, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
                             }
                         }
-                        if task.photoCount == 1 {
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(EColor.outlineVariant.opacity(0.5))
-                                .frame(height: 150)
-                                .overlay(Image(systemName: "photo").font(.system(size: 26)).foregroundStyle(EColor.onSurfaceVariant))
-                        } else if task.photoCount > 1 {
-                            submissionPhotoGrid(count: task.photoCount)
+                        if task.photoCount >= 1 {
+                            SubmissionPhotoStack(count: task.photoCount) {
+                                viewerIndex = 0
+                                showPhotoViewer = true
+                            }
                         } else {
                             emptySubmissionPlaceholder
                         }
@@ -409,38 +407,65 @@ private struct TaskReviewCard: View {
         )
     }
 
-    // Multi-page homework gets one photo per page rather than a single
-    // photo standing in for the whole submission — a 2-column grid instead
-    // of the single 150pt box, sized down per-tile so several still fit
-    // without the card growing unreasonably tall. Each tile opens the same
-    // photo full-screen (see PhotoGalleryViewer) starting on that page.
-    private func submissionPhotoGrid(count: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(0..<count, id: \.self) { i in
-                    Button {
-                        viewerIndex = i
-                        showPhotoViewer = true
-                    } label: {
-                        MockHomeworkPhoto(pageNumber: i + 1)
-                            .frame(height: 104)
-                            .overlay(alignment: .topLeading) {
-                                Text("\(i + 1)")
-                                    .font(Typography.font(10, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(Color.black.opacity(0.45))
-                                    .clipShape(Capsule())
-                                    .padding(6)
-                            }
+}
+
+// A layered stack rather than a flat grid — the front (first) photo shown
+// full-size and in focus, with the next couple of pages peeking out from
+// behind at a slight rotation/offset, Instagram-multi-photo-post style
+// (its carousel indicator + the physical feel of a small stack of instant
+// photos). Reads at a glance as "one submission, several pages" instead of
+// making a parent scan a grid of equally-weighted tiles before knowing
+// what they're even looking at. Tapping opens PhotoGalleryViewer at the
+// first page; swiping/the thumbnail strip there reaches the rest.
+private struct SubmissionPhotoStack: View {
+    var count: Int
+    var onTap: () -> Void
+
+    private let stackHeight: CGFloat = 168
+
+    var body: some View {
+        Button(action: onTap) {
+            GeometryReader { geo in
+                let photoWidth = geo.size.width * 0.84
+                ZStack {
+                    if count >= 3 {
+                        MockHomeworkPhoto(pageNumber: 3)
+                            .frame(width: photoWidth, height: stackHeight - 24)
+                            .rotationEffect(.degrees(7))
+                            .offset(x: geo.size.width * 0.05, y: 10)
+                            .opacity(0.75)
+                            .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
                     }
-                    .buttonStyle(.plain)
+                    if count >= 2 {
+                        MockHomeworkPhoto(pageNumber: 2)
+                            .frame(width: photoWidth, height: stackHeight - 24)
+                            .rotationEffect(.degrees(-5))
+                            .offset(x: -geo.size.width * 0.04, y: 5)
+                            .opacity(0.88)
+                            .shadow(color: .black.opacity(0.1), radius: 5, y: 2)
+                    }
+                    MockHomeworkPhoto(pageNumber: 1, detailed: true)
+                        .frame(width: photoWidth, height: stackHeight - 24)
+                        .shadow(color: .black.opacity(0.16), radius: 8, y: 4)
+                        .overlay(alignment: .topTrailing) {
+                            if count > 1 {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "square.stack.fill").font(.system(size: 10, weight: .bold))
+                                    Text("\(count)").font(Typography.font(11, weight: .bold))
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Color.black.opacity(0.55))
+                                .clipShape(Capsule())
+                                .padding(10)
+                            }
+                        }
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
-            Text("\(count) photos · tap to view")
-                .font(Typography.font(11, weight: .medium))
-                .foregroundStyle(EColor.onSurfaceVariant)
+            .frame(height: stackHeight)
         }
+        .buttonStyle(.plain)
     }
 }
 
