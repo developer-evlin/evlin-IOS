@@ -65,8 +65,6 @@ struct TaskReviewDeckView: View {
 
                 if let task = currentTask {
                     VStack(spacing: 18) {
-                        counter
-
                         // A hand-built pager (ScrollView + .paging target
                         // behavior), not TabView(.page) — TabView's page
                         // style is backed by a UICollectionView whose
@@ -155,18 +153,6 @@ struct TaskReviewDeckView: View {
             )
             .interactiveDismissDisabled()
             .presentationDetents([.large])
-        }
-    }
-
-    private var counter: some View {
-        HStack {
-            Text("\(min(index + 1, tasks.count)) of \(tasks.count)")
-                .font(Typography.font(12, weight: .heavy))
-                .foregroundStyle(EColor.onSurfaceVariant)
-            Spacer()
-            Text("Swipe to browse")
-                .font(Typography.font(11, weight: .medium))
-                .foregroundStyle(EColor.onSurfaceVariant)
         }
     }
 
@@ -421,7 +407,7 @@ private struct SubmissionPhotoStack: View {
     var count: Int
     var onTap: () -> Void
 
-    private let stackHeight: CGFloat = 168
+    private let stackHeight: CGFloat = 240
 
     var body: some View {
         Button(action: onTap) {
