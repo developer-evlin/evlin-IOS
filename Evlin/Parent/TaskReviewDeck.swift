@@ -270,12 +270,12 @@ private struct TaskReviewCard: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(task.category.uppercased())
-                        .font(Typography.font(10.5, weight: .bold)).tracking(0.6)
-                        .foregroundStyle(EColor.onSurfaceVariant)
-
+                    // No category label above the title anymore — it was
+                    // small, rarely useful (the title already says what
+                    // the task is), and just ate space the title could
+                    // use instead.
                     Text(task.title)
-                        .font(Typography.font(24, weight: .heavy))
+                        .font(Typography.font(30, weight: .heavy))
                         .foregroundStyle(EColor.onSurface)
 
                     HStack(spacing: 8) {
@@ -329,6 +329,11 @@ private struct TaskReviewCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(EColor.surfaceContainerHigh)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    // A bit more separation from the submission photo above
+                    // than the card's usual rhythm — on top of the outer
+                    // VStack's own 22pt spacing, so the note reads as its
+                    // own beat instead of sitting right under the photo.
+                    .padding(.top, 10)
                 }
 
                 if task.hasVoiceNote {
