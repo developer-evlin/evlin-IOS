@@ -413,8 +413,23 @@ private struct EventDetailSheet: View {
     @State private var draft: CalEvent
     @State private var showDeleteConfirm = false
     @State private var reminder = true
+    // Real hour/minute pickers for Start/End (see editFields) need Date
+    // state, but CalEvent stores them as display strings ("9:00 AM") — so
+    // these live alongside `draft` rather than replacing it, parsed once
+    // in init and re-parsed on Cancel (draft reverts there too; these
+    // wouldn't otherwise, since they're not part of `draft` itself).
+    @State private var startTime: Date
+    @State private var endTime: Date
 
     private let categories = ["Activity", "Lesson", "Sport", "Family", "Routine", "Study", "Chore"]
+
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+    }()
+
+    private static func parseClock(_ text: String, fallback: Date) -> Date {
+        clockFormatter.date(from: text) ?? fallback
+    }
 
     private var draftRepeatDays: Binding<Set<String>> {
         Binding(
@@ -432,6 +447,8 @@ private struct EventDetailSheet: View {
         self.onDelete = onDelete
         self.onClose = onClose
         _draft = State(initialValue: dayEvent.event)
+        _startTime = State(initialValue: Self.parseClock(dayEvent.event.start, fallback: Date()))
+        _endTime = State(initialValue: Self.parseClock(dayEvent.event.end, fallback: Date().addingTimeInterval(3600)))
     }
 
     private var person: FamilyPerson { CalendarData.person(dayEvent.event.personId) }
@@ -456,7 +473,12 @@ private struct EventDetailSheet: View {
             if editing {
                 FormShell(
                     title: "Edit event",
-                    onCancel: { draft = dayEvent.event; editing = false },
+                    onCancel: {
+                        draft = dayEvent.event
+                        startTime = Self.parseClock(dayEvent.event.start, fallback: startTime)
+                        endTime = Self.parseClock(dayEvent.event.end, fallback: endTime)
+                        editing = false
+                    },
                     onSave: { onSave(draft) },
                     canSave: canSave,
                     saveLabel: "Save changes",
@@ -564,11 +586,20 @@ private struct EventDetailSheet: View {
         FormField(label: "Title") { FormTextField(placeholder: "Event title", text: $draft.title) }
         FormField(label: "Time") {
             HStack(spacing: 8) {
-                FormTextField(placeholder: "Start", text: $draft.start)
+                FormTimeField(date: $startTime)
                 Text("\u{2013}").foregroundStyle(EColor.onSurfaceVariant)
-                FormTextField(placeholder: "End", text: $draft.end)
+                FormTimeField(date: $endTime)
             }
         }
+        // Nudges End along with Start so it doesn't silently end up before
+        // it, same convenience as the add-event form, then keeps `draft`
+        // (what Save actually writes back) in sync with both.
+        .onChange(of: startTime) { oldValue, newValue in
+            let span = endTime.timeIntervalSince(oldValue)
+            endTime = newValue.addingTimeInterval(max(span, 900))
+            draft.start = Self.clockFormatter.string(from: newValue)
+        }
+        .onChange(of: endTime) { _, newValue in draft.end = Self.clockFormatter.string(from: newValue) }
         RepeatPicker(selectedDays: draftRepeatDays)
         FormField(label: "Notes") {
             TextField("Add a note\u{2026}", text: $draft.note, axis: .vertical)
@@ -603,18 +634,24 @@ private struct AddCalendarSheet: View {
 
     @State private var personId = CalendarData.people[0].id
     @State private var title = ""
-    @State private var start = ""
-    @State private var end = ""
+    // Real hour/minute pickers now, not free-text — defaults to the next
+    // half-hour with a 1-hour span, so opening the sheet already shows a
+    // sensible time instead of an empty field to fill in.
+    @State private var startTime: Date = AddCalendarSheet.roundedToNextHalfHour(Date())
+    @State private var endTime: Date = AddCalendarSheet.roundedToNextHalfHour(Date()).addingTimeInterval(3600)
     // Fixed rather than parent-picked — see removed "Category" FormField
     // below. Still feeds CalEvent.category/emoji since other screens (the
     // day-view Pill, etc.) read those.
     private let category = "Activity"
     @State private var repeatDays: Set<String> = []
 
-    private var canSave: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty
-            && !start.trimmingCharacters(in: .whitespaces).isEmpty
-            && !end.trimmingCharacters(in: .whitespaces).isEmpty
+    private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    private static func roundedToNextHalfHour(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let minute = cal.component(.minute, from: date)
+        let addMinutes = minute < 30 ? 30 - minute : 60 - minute
+        return cal.date(byAdding: .minute, value: addMinutes, to: date) ?? date
     }
 
     var body: some View {
@@ -622,7 +659,7 @@ private struct AddCalendarSheet: View {
             let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
             onCreate(CalEvent(
                 personId: personId, title: title, emoji: emojiForCalendarCategory(category),
-                start: start, end: end, category: category,
+                start: ChildRule.fmtClock(startTime), end: ChildRule.fmtClock(endTime), category: category,
                 location: "", note: "", repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
             ))
         }, canSave: canSave, saveLabel: "Add event") {
@@ -638,10 +675,18 @@ private struct AddCalendarSheet: View {
             }
             FormField(label: "Time") {
                 HStack(spacing: 8) {
-                    FormTextField(placeholder: "Start, e.g. 9:00 AM", text: $start)
+                    FormTimeField(date: $startTime)
                     Text("-").font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurfaceVariant)
-                    FormTextField(placeholder: "End, e.g. 10:00 AM", text: $end)
+                    FormTimeField(date: $endTime)
                 }
+            }
+            // Nudges End along with Start so it doesn't silently end up
+            // before it — picking a new Start is the common edit; End only
+            // needs a parent's attention when they actually want a
+            // different duration, not every time.
+            .onChange(of: startTime) { oldValue, newValue in
+                let span = endTime.timeIntervalSince(oldValue)
+                endTime = newValue.addingTimeInterval(max(span, 900))
             }
             RepeatPicker(selectedDays: $repeatDays)
         }

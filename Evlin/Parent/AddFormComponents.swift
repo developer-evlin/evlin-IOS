@@ -263,6 +263,26 @@ struct FormDateTimeRow: View {
     }
 }
 
+// A single hour/minute picker in the same mint box as every other field —
+// tap to get the system's native wheel instead of typing "9:00 AM" and
+// hoping it parses the way the calendar list expects. Used for the
+// Start/End pair on both the add-event and edit-event forms, since a
+// free-text time field is exactly the kind of thing worth making a real
+// picker instead of leaving as "type it and hope."
+struct FormTimeField: View {
+    @Binding var date: Date
+
+    var body: some View {
+        DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .padding(.horizontal, 14)
+            .frame(height: 48)
+            .frame(maxWidth: .infinity)
+            .background(FormGreen.fieldBg)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
 // "Repeats" row: title + purple "Pro" badge, then seven small day-of-week
 // bubbles (S M T W T F S) a parent taps individually to build any
 // combination — no separate on/off toggle or preset list; an empty
