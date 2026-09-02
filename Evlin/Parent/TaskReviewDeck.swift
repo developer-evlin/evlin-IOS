@@ -13,6 +13,12 @@ struct TaskReviewDeckView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var index: Int
+    // Drives the actual paging (see the ScrollView pager in body); kept as
+    // a separate Optional Int rather than reusing `index` directly because
+    // .scrollPosition(id:) needs that shape. Synced both ways with equality
+    // guards below so neither a swipe nor a button-triggered advance() can
+    // fight the other into a feedback loop.
+    @State private var scrollPosition: Int?
     @State private var showRedoCompose = false
     @State private var editingTask: ChildTask?
 
@@ -22,6 +28,7 @@ struct TaskReviewDeckView: View {
         self.startIndex = startIndex
         self.onDismiss = onDismiss
         _index = State(initialValue: startIndex)
+        _scrollPosition = State(initialValue: startIndex)
     }
 
     private var currentTask: ChildTask? { tasks.indices.contains(index) ? tasks[index] : nil }
@@ -60,18 +67,44 @@ struct TaskReviewDeckView: View {
                     VStack(spacing: 18) {
                         counter
 
-                        TabView(selection: $index) {
-                            ForEach(Array(tasks.enumerated()), id: \.offset) { i, t in
-                                TaskReviewCard(task: t, childName: childName)
-                                    .tag(i)
+                        // A hand-built pager (ScrollView + .paging target
+                        // behavior), not TabView(.page) — TabView's page
+                        // style is backed by a UICollectionView whose
+                        // bounce/gesture handling is documented to conflict
+                        // with a nested ScrollView (exactly TaskReviewCard's
+                        // own vertical scroll for a long submission): after
+                        // scrolling down inside a card, the horizontal
+                        // swipe-to-next-task gesture could take a second or
+                        // two to respond again. A plain ScrollView is backed
+                        // by UIScrollView instead, which handles nested
+                        // orthogonal scroll views (this is exactly how
+                        // Photos/Mail's attachment browsers work) without
+                        // that conflict.
+                        ScrollView(.horizontal) {
+                            LazyHStack(spacing: 0) {
+                                ForEach(Array(tasks.enumerated()), id: \.offset) { i, t in
+                                    TaskReviewCard(task: t, childName: childName)
+                                        .containerRelativeFrame(.horizontal)
+                                        .id(i)
+                                }
                             }
+                            .scrollTargetLayout()
                         }
-                        .tabViewStyle(.page(indexDisplayMode: .never))
+                        .scrollTargetBehavior(.paging)
+                        .scrollPosition(id: $scrollPosition)
+                        .scrollIndicators(.hidden)
+                        .onChange(of: scrollPosition) { _, newValue in
+                            guard let newValue, newValue != index else { return }
+                            index = newValue
+                        }
                         // A spring (not a flat ease) so a button-triggered
                         // advance still carries the same snap/settle a real
                         // finger-drag page-swipe has, rather than reading as
                         // a plain fade/slide.
-                        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: index)
+                        .onChange(of: index) { _, newValue in
+                            guard scrollPosition != newValue else { return }
+                            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { scrollPosition = newValue }
+                        }
 
                         actionButtons(for: task)
                     }
@@ -339,6 +372,11 @@ private struct TaskReviewCard: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // No rubber-band overscroll when the content already fits — one
+        // less way this card's own scroll can still be "settling" for a
+        // beat after a drag ends, which is what made the outer swipe-to-
+        // next-task pager feel unresponsive right after scrolling here.
+        .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(EColor.surfaceContainerLowest)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
