@@ -623,12 +623,97 @@ private struct EventDetailSheet: View {
 
 // MARK: - Add event
 
+// A parent adding something to the calendar means two different things —
+// a Task (something the kid does and checks off, same as chat's "Add a
+// task" or a child profile's Add Task) or an Event (a family/kid activity
+// with a time range, no completion concept). Asking which up front, rather
+// than the old single "Add to Calendar" form, means each one only shows
+// the fields that actually apply instead of a event-shaped form standing
+// in for both. Both still land in the same eventsByDay store (the only
+// persistent-this-session state ScreenCalendar owns), so a task shows up
+// on the day timeline the same way an event does, just tagged category
+// "Task" — this prototype has no cross-screen task sync (see KidTask's
+// bypassRequested doc comment for the same limitation elsewhere), so it
+// isn't wired into a specific kid's own task list.
+private struct AddCalendarSheet: View {
+    var onCreate: (CalEvent) -> Void
+    var onCancel: () -> Void
+
+    private enum Kind { case task, event }
+    @State private var kind: Kind?
+
+    var body: some View {
+        switch kind {
+        case .none:
+            kindPicker
+        case .event:
+            AddCalendarEventForm(onCreate: onCreate, onCancel: { kind = nil })
+        case .task:
+            AddCalendarTaskForm(onCreate: onCreate, onCancel: { kind = nil })
+        }
+    }
+
+    private var kindPicker: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("What are you adding?")
+                    .font(Typography.font(15, weight: .medium))
+                    .foregroundStyle(EColor.onSurfaceVariant)
+                    .padding(.top, 4)
+
+                kindOption(
+                    title: "Task",
+                    subtitle: "Something for a kid to do and check off, like a chore or homework.",
+                    systemImage: "checkmark.circle.fill"
+                ) { kind = .task }
+
+                kindOption(
+                    title: "Event",
+                    subtitle: "Something on the family calendar with a time, like practice or an appointment.",
+                    systemImage: "calendar"
+                ) { kind = .event }
+
+                Spacer()
+            }
+            .padding(20)
+            .navigationTitle("Add to Calendar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+            }
+        }
+    }
+
+    private func kindOption(title: String, subtitle: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(EColor.primaryContainer)
+                    .frame(width: 46, height: 46)
+                    .overlay(Image(systemName: systemImage).font(.system(size: 19, weight: .semibold)).foregroundStyle(EColor.primary))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(Typography.font(16, weight: .bold)).foregroundStyle(EColor.onSurface)
+                    Text(subtitle).font(Typography.font(12.5, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(EColor.outline)
+            }
+            .padding(16)
+            .background(EColor.surfaceContainerLowest)
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(EColor.outlineVariant))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // Ported from Evlin-iOS's AddCalendarForm (Views/Profile/AddBottomSheet.swift):
 // Title, a free-text Start-End time pair, a category pill row (each with its
 // own emoji, via `emojiForCalendarCategory`), and a Repeat pill row - same
 // field set and FormShell chrome as AddTaskSheet, so "add event" feels like
 // the same family of sheet as "add task."
-private struct AddCalendarSheet: View {
+private struct AddCalendarEventForm: View {
     var onCreate: (CalEvent) -> Void
     var onCancel: () -> Void
 
@@ -637,8 +722,8 @@ private struct AddCalendarSheet: View {
     // Real hour/minute pickers now, not free-text — defaults to the next
     // half-hour with a 1-hour span, so opening the sheet already shows a
     // sensible time instead of an empty field to fill in.
-    @State private var startTime: Date = AddCalendarSheet.roundedToNextHalfHour(Date())
-    @State private var endTime: Date = AddCalendarSheet.roundedToNextHalfHour(Date()).addingTimeInterval(3600)
+    @State private var startTime: Date = AddCalendarEventForm.roundedToNextHalfHour(Date())
+    @State private var endTime: Date = AddCalendarEventForm.roundedToNextHalfHour(Date()).addingTimeInterval(3600)
     // Fixed rather than parent-picked — see removed "Category" FormField
     // below. Still feeds CalEvent.category/emoji since other screens (the
     // day-view Pill, etc.) read those.
@@ -655,7 +740,7 @@ private struct AddCalendarSheet: View {
     }
 
     var body: some View {
-        FormShell(title: "Add to Calendar", onCancel: onCancel, onSave: {
+        FormShell(title: "Add Event", onCancel: onCancel, onSave: {
             let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
             onCreate(CalEvent(
                 personId: personId, title: title, emoji: emojiForCalendarCategory(category),
@@ -687,6 +772,67 @@ private struct AddCalendarSheet: View {
             .onChange(of: startTime) { oldValue, newValue in
                 let span = endTime.timeIntervalSince(oldValue)
                 endTime = newValue.addingTimeInterval(max(span, 900))
+            }
+            RepeatPicker(selectedDays: $repeatDays)
+        }
+    }
+}
+
+// Task-shaped fields (title, who, due, what to do, repeat) instead of a
+// time range — a task's "when" is a single due moment, not a start/end
+// span, and it needs instructions the way an event doesn't. Still produces
+// a CalEvent (category "Task") since that's the only store this screen has
+// to put it in; the day timeline gives it a short nominal block at its due
+// time rather than the freeform span an event gets.
+private struct AddCalendarTaskForm: View {
+    var onCreate: (CalEvent) -> Void
+    var onCancel: () -> Void
+
+    @State private var personId = CalendarData.people.first { $0.id != "family" }?.id ?? CalendarData.people[0].id
+    @State private var title = ""
+    @State private var whatToDo = ""
+    @State private var dueTime: Date = AddCalendarTaskForm.roundedToNextHalfHour(Date())
+    @State private var repeatDays: Set<String> = []
+
+    private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    private static func roundedToNextHalfHour(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let minute = cal.component(.minute, from: date)
+        let addMinutes = minute < 30 ? 30 - minute : 60 - minute
+        return cal.date(byAdding: .minute, value: addMinutes, to: date) ?? date
+    }
+
+    var body: some View {
+        FormShell(title: "Add Task", onCancel: onCancel, onSave: {
+            let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
+            onCreate(CalEvent(
+                personId: personId, title: title, emoji: emojiForCalendarCategory("Task"),
+                start: ChildRule.fmtClock(dueTime), end: ChildRule.fmtClock(dueTime.addingTimeInterval(1800)),
+                category: "Task", location: "", note: whatToDo.trimmingCharacters(in: .whitespaces),
+                repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
+            ))
+        }, canSave: canSave, saveLabel: "Add task") {
+            FormField(label: "Title") {
+                FormTextField(placeholder: "e.g. Make your bed", text: $title)
+            }
+            FormField(label: "For") {
+                FlowChips {
+                    ForEach(CalendarData.people.filter { $0.id != "family" }) { p in
+                        DotChip(label: p.name, color: p.color, selected: personId == p.id) { personId = p.id }
+                    }
+                }
+            }
+            FormField(label: "Due") {
+                FormTimeField(date: $dueTime)
+            }
+            FormField(label: "What to do") {
+                TextField("Instructions…", text: $whatToDo, axis: .vertical)
+                    .font(Typography.font(15, weight: .regular))
+                    .lineLimit(2...4)
+                    .padding(14)
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             RepeatPicker(selectedDays: $repeatDays)
         }

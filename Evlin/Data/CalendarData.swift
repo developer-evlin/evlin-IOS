@@ -150,6 +150,7 @@ func emojiForCalendarCategory(_ category: String) -> String {
     case "Routine": return "🌙"
     case "Study": return "📐"
     case "Chore": return "🧹"
+    case "Task": return "✅"
     default: return "📅"
     }
 }
