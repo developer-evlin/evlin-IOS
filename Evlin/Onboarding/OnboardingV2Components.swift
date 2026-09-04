@@ -500,7 +500,15 @@ struct OnboardingV2ScanLine: View {
             .frame(width: size, height: 3)
             .shadow(color: Color(hex: "3FCE64").opacity(0.8), radius: 6)
             .offset(y: atBottom ? size / 2 - 4 : -(size / 2 - 4))
-            .onAppear {
+            .task {
+                // A repeatForever animation kicked off directly in
+                // .onAppear races with SwiftUI's own transaction for the
+                // view's initial appearance — it usually wins, but when it
+                // loses, the animation never actually starts and the line
+                // sticks at its starting position. .task always runs in
+                // its own transaction after appear, sidestepping the race.
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard !Task.isCancelled else { return }
                 withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
                     atBottom = true
                 }

@@ -104,7 +104,17 @@ struct SplashScreenView: View {
                     .padding(.bottom, 48)
             }
         }
-        .onAppear {
+        .task {
+            // A `repeatForever` animation kicked off directly in .onAppear
+            // races with SwiftUI's own transaction for the view's initial
+            // appearance — most of the time it wins and the pulse starts
+            // fine, but sometimes it loses that race and the animation
+            // never actually begins, leaving the bar stuck at its static
+            // starting opacity. A one-tick defer (this .task always runs
+            // in its own transaction, after appear) sidesteps the race
+            // instead of just narrowing the window.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard !Task.isCancelled else { return }
             withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                 pulse = true
             }
