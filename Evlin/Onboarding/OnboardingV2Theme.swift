@@ -566,26 +566,37 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
     }
 
     var body: some View {
-        if showsDeviceFrame {
-            screenBody
-                .clipShape(RoundedRectangle(
-                    cornerRadius: OnboardingV2Theme.Metrics.screenCornerRadius,
-                    style: .continuous))
-                .padding(OnboardingV2Theme.Metrics.devicePadding)
-                .background(
-                    RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.deviceCornerRadius,
-                                     style: .continuous)
-                        .fill(OnboardingV2Theme.Palette.deviceBody)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.deviceCornerRadius,
-                                     style: .continuous)
-                        .stroke(OnboardingV2Theme.Palette.deviceRing,
-                                lineWidth: OnboardingV2Theme.Metrics.deviceRingWidth)
-                )
-        } else {
-            screenBody
+        Group {
+            if showsDeviceFrame {
+                screenBody
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: OnboardingV2Theme.Metrics.screenCornerRadius,
+                        style: .continuous))
+                    .padding(OnboardingV2Theme.Metrics.devicePadding)
+                    .background(
+                        RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.deviceCornerRadius,
+                                         style: .continuous)
+                            .fill(OnboardingV2Theme.Palette.deviceBody)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.deviceCornerRadius,
+                                         style: .continuous)
+                            .stroke(OnboardingV2Theme.Palette.deviceRing,
+                                    lineWidth: OnboardingV2Theme.Metrics.deviceRingWidth)
+                    )
+            } else {
+                screenBody
+            }
         }
+        // Shared by every onboarding step (this is the one container all of
+        // them render through) — steps with a text field (name entry, code
+        // entry, …) relied on a blanket app-wide dismissKeyboardOnTap on
+        // RootView, which also sat on top of every other screen in the app
+        // including plain NavigationLink rows (Settings' root list) that
+        // don't need it and where it measurably delayed tap recognition —
+        // wired here instead so it's still covered, just no longer paid for
+        // by screens with nothing to dismiss.
+        .dismissKeyboardOnTap()
     }
 }
 

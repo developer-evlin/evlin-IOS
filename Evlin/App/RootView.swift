@@ -68,12 +68,17 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: mode)
-        // App-wide fallback: taps anywhere in mode picker/onboarding/tab
-        // content that aren't already claimed by a button or field dismiss
-        // the keyboard. Sheets and full-screen covers are separate
-        // presentation contexts this doesn't reach, so those get the same
-        // modifier applied locally at their own root.
-        .dismissKeyboardOnTap()
+        // Used to be a blanket dismissKeyboardOnTap() here covering the
+        // whole app (mode picker, every onboarding step, both tab roots) —
+        // sat on top of screens with no text fields at all too, including
+        // Settings' root list, where its simultaneousGesture measurably
+        // delayed plain NavigationLink row taps (a short tap stopped
+        // registering; only a longer press did). Removed in favor of
+        // wiring it onto the specific screens/containers that actually
+        // have fields (OnboardingV2ScreenContainer, FormShell, chat, etc.)
+        // — see dismissKeyboardOnTap()'s own doc comment for why
+        // simultaneousGesture alone doesn't fully prevent this at the
+        // scale of "every screen in the app."
         .task {
             // Was a 1.1s hold + 0.3s fade (~1.4s total) — a real wait to
             // sit through on every single launch, not just the first one.

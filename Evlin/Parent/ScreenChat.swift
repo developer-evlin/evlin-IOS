@@ -448,8 +448,25 @@ private struct AddTaskCard: View {
     // mocked elsewhere (see respondAfterDelay). Checked in order: an
     // explicit weekday/weekend cue wins over a bare "every day", which
     // wins over the one-time default.
+    // Named weekdays checked first — "every Tuesday and Thursday" should
+    // read as exactly that, not fall through to a vaguer daily/weekday
+    // bucket. Gives free-typed text the same day-by-day expressiveness the
+    // old manual bubble picker had, instead of only the three canned
+    // buckets below it.
+    private let namedWeekdays: [(name: String, code: String)] = [
+        ("sunday", "sun"), ("monday", "mon"), ("tuesday", "tue"), ("wednesday", "wed"),
+        ("thursday", "thu"), ("friday", "fri"), ("saturday", "sat"),
+    ]
+
     private var inferredRepeats: (label: String, codes: String) {
         let text = "\(title) \(whatToDo) \(due)".lowercased()
+
+        let mentioned = namedWeekdays.filter { text.contains($0.name) }
+        if !mentioned.isEmpty {
+            let codes = weekDayCodes.filter { code in mentioned.contains { $0.code == code } }
+            let codeString = codes.joined(separator: ",")
+            return ("Repeats \(repeatDisplayLabel(codeString))", codeString)
+        }
         if text.contains("weekend") {
             return ("Repeats weekends", "sat,sun")
         }

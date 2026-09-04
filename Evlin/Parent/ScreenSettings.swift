@@ -122,23 +122,18 @@ struct ScreenSettings: View {
             }
         }
 
-        // Upsell row — only worth showing while there's something to
-        // upgrade to. Once billing.isPlus flips true this whole section
-        // disappears from the root list; the "Plan" row inside Parent
-        // Profile (account management, not a pitch) is the permanent way
-        // back into billingPage after that.
-        if !billing.isPlus {
-            Section {
-                NavigationLink(value: SettingsRoute.billing) {
-                    settingsRow(
-                        title: "Evlin Plan",
-                        subtitle: "Upgrade for unlimited rules & AI insights",
-                        systemImage: "sparkles",
-                        pill: "FREE",
-                        pillTone: .neutral,
-                        accent: EColor.primary
-                    )
-                }
+        // Not duplicated at root any more — the "Plan" row inside Parent
+        // Profile (account management, not a pitch) is the one place for
+        // it now, so a parent isn't looking at two entry points into the
+        // same billingPage.
+        Section("Share") {
+            ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
+                settingsRow(
+                    title: "Share Evlin",
+                    subtitle: "Invite another parent to try it",
+                    systemImage: "square.and.arrow.up",
+                    accent: EColor.primary
+                )
             }
         }
 
@@ -184,17 +179,6 @@ struct ScreenSettings: View {
                 accent: EColor.secondary,
                 navigate: { path.append(SettingsRoute.notifications) }
             )
-        }
-
-        Section("Share") {
-            ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
-                settingsRow(
-                    title: "Share Evlin",
-                    subtitle: "Invite another parent to try it",
-                    systemImage: "square.and.arrow.up",
-                    accent: EColor.primary
-                )
-            }
         }
 
         Section("About") {
