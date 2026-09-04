@@ -23,6 +23,7 @@ struct KidTask: Identifiable {
     // TaskDetailView's local capture state is thrown away on dismiss.
     var submittedPhotoCount: Int = 0
     var submissionNote: String? = nil
+    var submissionHasVoiceNote: Bool = false
     // Submitting sets done + pendingApproval together — `done` alone used
     // to mean "fully finished," but a parent still needs to look at it, the
     // same review beat the parent-side TaskStore tracks with

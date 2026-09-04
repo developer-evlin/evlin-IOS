@@ -93,11 +93,12 @@ struct TabletRootView: View {
             }
         }
         .fullScreenCover(item: $selectedTask) { task in
-            TaskDetailView(task: task, onComplete: { photoCount, note in
+            TaskDetailView(task: task, onComplete: { photoCount, note, hasVoiceNote in
                 if let i = tasks.firstIndex(where: { $0.id == task.id }) {
                     tasks[i].done = true
                     tasks[i].submittedPhotoCount = photoCount
                     tasks[i].submissionNote = note
+                    tasks[i].submissionHasVoiceNote = hasVoiceNote
                     // Submitting means "a parent hasn't looked at it yet,"
                     // not "fully approved" — see KidTask.pendingApproval.
                     // Clearing redoRequested too: a resubmission after a

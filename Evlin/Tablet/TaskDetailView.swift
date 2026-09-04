@@ -5,7 +5,7 @@ private let taskDetailBottomAnchorID = "task-detail-bottom-anchor"
 
 struct TaskDetailView: View {
     let task: KidTask
-    var onComplete: (_ photoCount: Int, _ note: String?) -> Void
+    var onComplete: (_ photoCount: Int, _ note: String?, _ hasVoiceNote: Bool) -> Void
     var onRequestBypass: (String, Bool) -> Void = { _, _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var showComic = false
@@ -15,6 +15,7 @@ struct TaskDetailView: View {
     // disturbing the others.
     @State private var photos: [UUID] = []
     @State private var note = ""
+    @State private var hasVoiceNote = false
     @State private var submitted: Bool
     // Distinguishes "just tapped All done! this session" (shows the
     // "waiting for approval" beat) from "reopened an already-done task"
@@ -32,13 +33,14 @@ struct TaskDetailView: View {
     // photo" capture flow instead of seeing what they actually turned in,
     // since photos/note otherwise start empty every time this view is
     // freshly created.
-    init(task: KidTask, onComplete: @escaping (_ photoCount: Int, _ note: String?) -> Void, onRequestBypass: @escaping (String, Bool) -> Void = { _, _ in }) {
+    init(task: KidTask, onComplete: @escaping (_ photoCount: Int, _ note: String?, _ hasVoiceNote: Bool) -> Void, onRequestBypass: @escaping (String, Bool) -> Void = { _, _ in }) {
         self.task = task
         self.onComplete = onComplete
         self.onRequestBypass = onRequestBypass
         _submitted = State(initialValue: task.done)
         _photos = State(initialValue: (0..<task.submittedPhotoCount).map { _ in UUID() })
         _note = State(initialValue: task.submissionNote ?? "")
+        _hasVoiceNote = State(initialValue: task.submissionHasVoiceNote)
     }
 
     var body: some View {
@@ -181,6 +183,9 @@ struct TaskDetailView: View {
                             .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, lineWidth: 1.5))
                             .clipShape(RoundedRectangle(cornerRadius: 14))
 
+                        KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
+                            .padding(.top, 10)
+
                         // Elevated "kid" pill per the style guide: mascot green face,
                         // a solid green-deep base for the 3D lift — a duplicate
                         // offset rectangle behind the face, not a `.shadow()`
@@ -296,8 +301,15 @@ struct TaskDetailView: View {
                             .padding(.top, 20)
                         }
 
+                        if hasVoiceNote {
+                            Label("Voice note attached", systemImage: "waveform")
+                                .font(Typography.font(13.5, weight: .bold))
+                                .foregroundStyle(KidTheme.lavenderText)
+                                .padding(.top, 10)
+                        }
+
                         Button {
-                            if justSubmitted { onComplete(photos.count, note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note) }
+                            if justSubmitted { onComplete(photos.count, note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note, hasVoiceNote) }
                             dismiss()
                         } label: {
                             Text("Back to today")
@@ -476,42 +488,11 @@ private struct BypassRequestSheet: View {
     var onCancel: () -> Void
 
     @State private var reason = ""
-    private enum VoiceState { case idle, recording, recorded }
-    @State private var voiceState: VoiceState = .idle
-    @State private var recordSeconds = 0
-    @State private var recordingTask: Task<Void, Never>?
-    @State private var dotPulse = false
+    @State private var hasVoiceNote = false
 
     // Same either/or rule as the parent-side Redo compose sheet: a typed
     // reason or a recorded one, not necessarily both.
-    private var canSend: Bool { !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voiceState == .recorded }
-
-    private var recordedTimeLabel: String { String(format: "%d:%02d", recordSeconds / 60, recordSeconds % 60) }
-
-    private func startRecording() {
-        recordSeconds = 0
-        voiceState = .recording
-        recordingTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard !Task.isCancelled else { return }
-                recordSeconds += 1
-            }
-        }
-    }
-
-    private func stopRecording() {
-        recordingTask?.cancel()
-        recordingTask = nil
-        voiceState = .recorded
-    }
-
-    private func removeRecording() {
-        recordingTask?.cancel()
-        recordingTask = nil
-        voiceState = .idle
-        recordSeconds = 0
-    }
+    private var canSend: Bool { !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasVoiceNote }
 
     var body: some View {
         NavigationStack {
@@ -530,74 +511,11 @@ private struct BypassRequestSheet: View {
                     .background(KidTheme.muted)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
 
-                Button {
-                    switch voiceState {
-                    case .idle: startRecording()
-                    case .recording: stopRecording()
-                    case .recorded: removeRecording()
-                    }
-                } label: {
-                    HStack(spacing: 12) {
-                        ZStack {
-                            Circle().fill(voiceState == .idle ? KidTheme.lavender : KidTheme.lavenderText)
-                            switch voiceState {
-                            case .idle:
-                                Image(systemName: "mic.fill")
-                                    .font(.system(size: 16, weight: .bold))
-                                    .foregroundStyle(KidTheme.lavenderText)
-                            case .recording:
-                                Circle().fill(.white).frame(width: 12, height: 12).opacity(dotPulse ? 1 : 0.35)
-                            case .recorded:
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 16, weight: .bold))
-                                    .foregroundStyle(.white)
-                            }
-                        }
-                        .frame(width: 40, height: 40)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            switch voiceState {
-                            case .idle:
-                                Text("Record a voice note")
-                                    .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                                Text("Say it instead of typing it")
-                                    .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
-                            case .recording:
-                                Text("Recording… \(recordedTimeLabel)")
-                                    .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                                Text("Tap to stop")
-                                    .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
-                            case .recorded:
-                                Text("Voice note attached · \(recordedTimeLabel)")
-                                    .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                                Text("Tap to remove")
-                                    .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(12)
-                    .background(.white)
-                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(voiceState == .recording ? KidTheme.lavenderText : KidTheme.line, lineWidth: voiceState == .recording ? 2 : 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .buttonStyle(.plain)
-                // Deferred into .task rather than started directly from the
-                // state change, for the same reason the splash screen's
-                // pulse is deferred (see RootView.SplashScreenView) — a
-                // repeatForever kicked off at the same moment the view
-                // reappears can lose the race with SwiftUI's own initial
-                // transaction and never actually start.
-                .task(id: voiceState) {
-                    guard voiceState == .recording else { dotPulse = false; return }
-                    try? await Task.sleep(nanoseconds: 50_000_000)
-                    guard !Task.isCancelled, voiceState == .recording else { return }
-                    withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { dotPulse = true }
-                }
+                KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
 
                 Spacer(minLength: 0)
 
-                Button { onSend(reason.trimmingCharacters(in: .whitespacesAndNewlines), voiceState == .recorded) } label: {
+                Button { onSend(reason.trimmingCharacters(in: .whitespacesAndNewlines), hasVoiceNote) } label: {
                     Text("Send to a parent")
                         .font(Typography.display(18, weight: .heavy))
                         .foregroundStyle(canSend ? .white : Color(hex: "B5C8BC"))
@@ -629,6 +547,115 @@ private struct BypassRequestSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel", action: onCancel) }
             }
+        }
+    }
+}
+
+// Idle → recording (live timer + pulsing dot) → recorded (duration, tap to
+// remove) — shared between the bypass compose sheet above and the normal
+// task-submission note field, which used to have no voice option at all.
+private struct KidVoiceRecorderButton: View {
+    @Binding var hasVoiceNote: Bool
+
+    private enum VoiceState { case idle, recording, recorded }
+    @State private var voiceState: VoiceState = .idle
+    @State private var recordSeconds = 0
+    @State private var recordingTask: Task<Void, Never>?
+    @State private var dotPulse = false
+
+    private var recordedTimeLabel: String { String(format: "%d:%02d", recordSeconds / 60, recordSeconds % 60) }
+
+    private func startRecording() {
+        recordSeconds = 0
+        voiceState = .recording
+        recordingTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                recordSeconds += 1
+            }
+        }
+    }
+
+    private func stopRecording() {
+        recordingTask?.cancel()
+        recordingTask = nil
+        voiceState = .recorded
+        hasVoiceNote = true
+    }
+
+    private func removeRecording() {
+        recordingTask?.cancel()
+        recordingTask = nil
+        voiceState = .idle
+        recordSeconds = 0
+        hasVoiceNote = false
+    }
+
+    var body: some View {
+        Button {
+            switch voiceState {
+            case .idle: startRecording()
+            case .recording: stopRecording()
+            case .recorded: removeRecording()
+            }
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle().fill(voiceState == .idle ? KidTheme.lavender : KidTheme.lavenderText)
+                    switch voiceState {
+                    case .idle:
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(KidTheme.lavenderText)
+                    case .recording:
+                        Circle().fill(.white).frame(width: 12, height: 12).opacity(dotPulse ? 1 : 0.35)
+                    case .recorded:
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 40, height: 40)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    switch voiceState {
+                    case .idle:
+                        Text("Record a voice note")
+                            .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                        Text("Say it instead of typing it")
+                            .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
+                    case .recording:
+                        Text("Recording… \(recordedTimeLabel)")
+                            .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                        Text("Tap to stop")
+                            .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
+                    case .recorded:
+                        Text("Voice note attached · \(recordedTimeLabel)")
+                            .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                        Text("Tap to remove")
+                            .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(.white)
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(voiceState == .recording ? KidTheme.lavenderText : KidTheme.line, lineWidth: voiceState == .recording ? 2 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        // Deferred into .task rather than started directly from the state
+        // change, for the same reason the splash screen's pulse is
+        // deferred (see RootView.SplashScreenView) — a repeatForever
+        // kicked off at the same moment the view reappears can lose the
+        // race with SwiftUI's own initial transaction and never actually
+        // start.
+        .task(id: voiceState) {
+            guard voiceState == .recording else { dotPulse = false; return }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            guard !Task.isCancelled, voiceState == .recording else { return }
+            withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { dotPulse = true }
         }
     }
 }
