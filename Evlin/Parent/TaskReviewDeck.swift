@@ -473,7 +473,10 @@ private struct SubmissionPhotoStack: View {
 // visibly opens "the same photo" bigger rather than a generic gray box.
 // There's no real camera capture in this prototype (see TaskDetailView),
 // so this is what a submitted photo looks like everywhere it appears.
-private struct MockHomeworkPhoto: View {
+// Not private — TaskDetailView (kid side) reuses this same mock
+// "photographed page" visual for its own multi-photo capture UI, so a
+// submitted photo looks identical whichever side is looking at it.
+struct MockHomeworkPhoto: View {
     var pageNumber: Int
     var detailed: Bool = false
 
