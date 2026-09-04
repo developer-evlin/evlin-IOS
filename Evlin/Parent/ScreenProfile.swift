@@ -372,7 +372,11 @@ struct ScreenProfile: View {
                 .background(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
-                .padding(.horizontal, 20)
+                // Wider than the card's own 24pt corner radius — at 20pt
+                // the margin was tighter than the curve itself, so each
+                // rounded corner read as cramped against the screen's
+                // square edge instead of floating clear of it.
+                .padding(.horizontal, 28)
                 .padding(.bottom, 30)
             }
         }
@@ -802,7 +806,11 @@ private struct ProtectionSetupNeededCard: View {
                 .background(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
-                .padding(.horizontal, 20)
+                // Wider than the card's own 24pt corner radius — at 20pt
+                // the margin was tighter than the curve itself, so each
+                // rounded corner read as cramped against the screen's
+                // square edge instead of floating clear of it.
+                .padding(.horizontal, 28)
                 Spacer()
             }
         }
@@ -866,7 +874,11 @@ private struct TrialExhaustedPopupCard: View {
                 .background(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
-                .padding(.horizontal, 20)
+                // Wider than the card's own 24pt corner radius — at 20pt
+                // the margin was tighter than the curve itself, so each
+                // rounded corner read as cramped against the screen's
+                // square edge instead of floating clear of it.
+                .padding(.horizontal, 28)
                 .padding(.bottom, 30)
             }
         }
@@ -1077,7 +1089,11 @@ private struct GrantExtraTimeSheet: View {
                 .background(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
-                .padding(.horizontal, 20)
+                // Wider than the card's own 24pt corner radius — at 20pt
+                // the margin was tighter than the curve itself, so each
+                // rounded corner read as cramped against the screen's
+                // square edge instead of floating clear of it.
+                .padding(.horizontal, 28)
                 Spacer()
             }
         }
@@ -1221,7 +1237,11 @@ private struct UnlockConfirmCard: View {
                 .background(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
-                .padding(.horizontal, 20)
+                // Wider than the card's own 24pt corner radius — at 20pt
+                // the margin was tighter than the curve itself, so each
+                // rounded corner read as cramped against the screen's
+                // square edge instead of floating clear of it.
+                .padding(.horizontal, 28)
                 Spacer()
             }
         }
@@ -1291,7 +1311,11 @@ private struct ScreenTimeOffConfirmCard: View {
                 .background(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
-                .padding(.horizontal, 20)
+                // Wider than the card's own 24pt corner radius — at 20pt
+                // the margin was tighter than the curve itself, so each
+                // rounded corner read as cramped against the screen's
+                // square edge instead of floating clear of it.
+                .padding(.horizontal, 28)
                 Spacer()
             }
         }

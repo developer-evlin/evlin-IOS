@@ -106,7 +106,13 @@ struct TaskReviewDeckView: View {
 
                         actionButtons(for: task)
                     }
-                    .padding(20)
+                    // Horizontal margin wider than the card's own 24pt
+                    // corner radius — at the old uniform 20pt, the margin
+                    // was *tighter* than the curve, so each rounded corner
+                    // read as cramped right up against the screen's square
+                    // edge instead of floating clear of it.
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 20)
                 } else {
                     doneState
                 }
