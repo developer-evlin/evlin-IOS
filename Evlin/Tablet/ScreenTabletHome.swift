@@ -72,12 +72,6 @@ struct ScreenTabletHome: View {
                         }
                     }
 
-                    Text(doneCount == tasks.count ? "All done, \(TabletData.child.name)! Your play time is unlocked! 🎉" : "Finish your tasks to unlock your play time, \(TabletData.child.name)!")
-                        .font(Typography.font(15, weight: .semibold))
-                        .foregroundStyle(KidTheme.inkSoft)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 20)
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 4)

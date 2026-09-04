@@ -1,18 +1,18 @@
 import SwiftUI
 
 // The kid-side "Ring" tab (formerly "Skill Map") — a ring of task tokens
-// spaced evenly around a dial, with the dial's own outline filling in as
-// tasks complete (progressFill). Used to be a literal clock face (each
-// token sitting at the hour position matching its deadline), but real due
-// times cluster within the same few evening hours far too tightly for that
-// to read cleanly — two tasks even at the same due time would sit right on
-// top of each other — and completion is already communicated by the fill
-// arc and each token's own checkmark, not by where around the dial a task
-// happens to sit. Evenly spacing them instead keeps every token legible
-// regardless of how the day's due times happen to land. On first
-// appearance every token starts collapsed at the center and springs out to
-// its resting spot, staggered in list order, so the dial visibly
-// "assembles itself" rather than just being there.
+// spaced evenly around a dial (in due-time order, not literal clock-hour
+// position — see orderedTasks below), with the dial's own outline filling
+// in as tasks complete (progressFill). Used to be a literal clock face
+// (each token sitting at the hour position matching its deadline), but
+// real due times cluster within the same few evening hours far too
+// tightly for that to read cleanly — two tasks even at the same due time
+// would sit right on top of each other. Evenly spacing them instead keeps
+// every token legible regardless of how the day's due times happen to
+// land, while still ordering them chronologically. On first appearance
+// every token starts collapsed at the center and springs out to its
+// resting spot, staggered in order, so the dial visibly "assembles
+// itself" rather than just being there.
 struct ScreenRing: View {
     var tasks: [KidTask]
     var onSelectTask: (KidTask) -> Void
@@ -22,17 +22,27 @@ struct ScreenRing: View {
     private var doneCount: Int { tasks.filter(\.done).count }
     private var allDone: Bool { !tasks.isEmpty && doneCount == tasks.count }
 
-    // Completed tasks first (each group keeping its own original relative
-    // order — Array.sorted is stable) — so evenlySpacedAngles below always
-    // gives them the first N slots starting at 12 o'clock. That way the
-    // progress fill's arc always ends exactly at the boundary between the
-    // completed cluster and what's left, instead of a proportional sweep
-    // that doesn't actually land on any particular token. A task's token
-    // slides to its new slot when it flips done (same animation that
-    // already reacts to task.done below), which reads as it "joining" the
-    // completed side rather than just changing color in place.
+    // Chronological by due time — still not the literal clock-hour
+    // position the old layout used (that's what caused same-time tasks to
+    // overlap), just the *order* tokens sit in going around the evenly-
+    // spaced ring, so the shape of the day still reads left-to-right/
+    // morning-to-night instead of an arbitrary list order. Tasks with no
+    // due time (KidTask.due == nil is a real, supported case — not every
+    // task has a deadline) sort after every timed one, in their own
+    // original relative order.
+    private func minutesSinceMidnight(_ due: String) -> Int? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        guard let time = formatter.date(from: due) else { return nil }
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: time)
+        return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+    }
+
     private var orderedTasks: [KidTask] {
-        tasks.sorted { $0.done && !$1.done }
+        let timed = tasks.filter { $0.due != nil }
+            .sorted { (minutesSinceMidnight($0.due!) ?? 0) < (minutesSinceMidnight($1.due!) ?? 0) }
+        let untimed = tasks.filter { $0.due == nil }
+        return timed + untimed
     }
 
     // One slot per task, evenly spaced around the full 360° starting at 12
@@ -185,9 +195,7 @@ struct ScreenRing: View {
             value: appeared
         )
         // Redone/completed after the initial assembly still gets its own
-        // little pop rather than waiting on the (already-fired) stagger —
-        // also what animates a token sliding into its new slot when
-        // orderedTasks regroups it into the completed cluster.
+        // little pop rather than waiting on the (already-fired) stagger.
         .animation(.spring(response: 0.4, dampingFraction: 0.7), value: task.done)
         .animation(.spring(response: 0.4, dampingFraction: 0.7), value: deg)
     }

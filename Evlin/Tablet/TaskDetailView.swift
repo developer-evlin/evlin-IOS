@@ -1,4 +1,7 @@
 import SwiftUI
+import UIKit
+
+private let taskDetailBottomAnchorID = "task-detail-bottom-anchor"
 
 struct TaskDetailView: View {
     let task: KidTask
@@ -40,8 +43,9 @@ struct TaskDetailView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
                     if bypassSent {
                         bypassSentCard
                     } else if !submitted {
@@ -307,8 +311,21 @@ struct TaskDetailView: View {
                         .buttonStyle(.plain)
                         .padding(.top, 20)
                     }
+
+                    // Nothing sits below "Add a note" but the (short) rest
+                    // of the form, so the keyboard alone can cover it —
+                    // scrolling to this anchor on keyboard-open brings the
+                    // note field and "All done!" back into view instead of
+                    // leaving them hidden behind it.
+                    Color.clear.frame(height: 1).id(taskDetailBottomAnchorID)
                 }
                 .padding(20)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(taskDetailBottomAnchorID, anchor: .bottom)
+                    }
+                }
             }
             .background(KidTheme.background)
             .dismissKeyboardOnTap()
