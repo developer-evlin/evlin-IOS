@@ -23,6 +23,24 @@ struct KidTask: Identifiable {
     // TaskDetailView's local capture state is thrown away on dismiss.
     var submittedPhotoCount: Int = 0
     var submissionNote: String? = nil
+    // Submitting sets done + pendingApproval together — `done` alone used
+    // to mean "fully finished," but a parent still needs to look at it, the
+    // same review beat the parent-side TaskStore tracks with
+    // ChildTask.state == .review. `approved` is what a parent tapping
+    // Approve (ScreenProfile/TaskReviewDeck) would flip; there's no live
+    // cross-device sync in this prototype (see bypassRequested above), so
+    // it's set by hand on demo tasks rather than actually wired to the
+    // parent side's review action.
+    var pendingApproval: Bool = false
+    var approved: Bool = false
+    // Mirrors the parent-side TaskReviewDeckView compose step's
+    // redoNote/redoHasVoiceNote — a parent asking for a redo instead of
+    // approving puts the task back in "to do" territory (not done, not
+    // struck through) rather than leaving it looking finished, with a
+    // small banner explaining why so the kid isn't just guessing.
+    var redoRequested: Bool = false
+    var redoNote: String? = nil
+    var redoHasVoiceNote: Bool = false
 }
 
 extension KidTask {
@@ -60,17 +78,26 @@ enum TabletData {
     static let child = KidChild(id: "liam", name: "Liam", usedMin: 94, limitMin: 120)
 
     static var tasks: [KidTask] = [
-        KidTask(id: "t1", title: "Make your bed", iconTaskId: "t1", due: "8:00 AM", done: true, desc: "Pull up your covers, fluff your pillow, and put any clothes in the basket."),
-        KidTask(id: "t2", title: "Do your maths", iconTaskId: "t2", due: "6:00 PM", done: true, desc: "Complete questions 1 through 8 on page 24 of your maths book."),
+        KidTask(id: "t1", title: "Make your bed", iconTaskId: "t1", due: "8:00 AM", done: true, desc: "Pull up your covers, fluff your pillow, and put any clothes in the basket.", pendingApproval: false, approved: true),
+        KidTask(id: "t2", title: "Do your maths", iconTaskId: "t2", due: "6:00 PM", done: true, desc: "Complete questions 1 through 8 on page 24 of your maths book.", pendingApproval: false, approved: true),
         KidTask(id: "t3", title: "Feed Biscuit", iconTaskId: "t3", due: "6:30 PM", done: false, desc: "Give Biscuit one scoop of dry food and fresh water."),
         KidTask(id: "t4", title: "Read your book", iconTaskId: "t4", due: "7:30 PM", done: false, desc: "Read quietly for at least 20 minutes from your current book."),
         KidTask(id: "t5", title: "Brush your teeth", iconTaskId: "t5", due: "8:30 PM", done: false, desc: "Brush for two full minutes, top and bottom."),
+        // Submitted, waiting on a parent to check it — done from the kid's
+        // own side, but not yet approved.
+        KidTask(id: "t6", title: "Tidy your room", iconTaskId: "t6", due: "5:30 PM", done: true, desc: "Put toys back in the bin and clothes in the hamper.", submittedPhotoCount: 1, pendingApproval: true, approved: false),
+        // A parent asked for a redo instead of approving — back to normal
+        // ("to do") styling, with the redo note visible on the card.
+        KidTask(id: "t7", title: "Practice piano", iconTaskId: "t7", due: "4:00 PM", done: false, desc: "15 minutes, scales then one song.", redoRequested: true, redoNote: "Good start! Can you play it once more with both hands together?", redoHasVoiceNote: false),
     ]
 
     // Six-panel comic strips, one per task — asset names are KidT{n}Panel{1-6}
-    // in Assets.xcassets, matching each task's iconTaskId.
+    // in Assets.xcassets, matching each task's iconTaskId. Only t1–t5 have
+    // actually-authored art; t6/t7 are review-state demo tasks with no
+    // comic assets behind them, so they fall through to the empty case
+    // rather than pointing "Watch Evlin show you" at images that don't exist.
     static func comicPanels(for taskId: String) -> [ComicPanel] {
-        guard tasks.contains(where: { $0.iconTaskId == taskId }) else { return [] }
+        guard ["t1", "t2", "t3", "t4", "t5"].contains(taskId) else { return [] }
         return (1...6).map { ComicPanel(imageName: "Kid\(taskId.uppercased())Panel\($0)", caption: "") }
     }
 
@@ -83,6 +110,8 @@ enum TabletData {
         case "t3": return "pawprint.fill"
         case "t4": return "book.fill"
         case "t5": return "mouth.fill"
+        case "t6": return "sparkles"
+        case "t7": return "pianokeys"
         default: return "star.fill"
         }
     }

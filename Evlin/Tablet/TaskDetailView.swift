@@ -211,6 +211,16 @@ struct TaskDetailView: View {
                             .background(KidTheme.cream)
                             .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
                             .clipShape(RoundedRectangle(cornerRadius: 20))
+                        } else if task.pendingApproval && !task.approved {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Waiting for your parent ⏳").font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                                Text("Here's what you turned in — they haven't checked it yet.")
+                                    .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
+                            }
+                            .padding(22)
+                            .background(Color(hex: "FFF3E0"))
+                            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("All done! ✅").font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
