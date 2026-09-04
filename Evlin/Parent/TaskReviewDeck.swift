@@ -511,35 +511,82 @@ private struct MockHomeworkPhoto: View {
 
 // MARK: - Full-screen photo viewer
 
-// Opened by tapping any tile in submissionPhotoGrid. Three things make
-// switching between several pages easy for a parent skimming a
-// submission: native page-swipe (TabView), a direct-jump thumbnail strip
-// so they don't have to swipe past pages one at a time, and a
-// swipe-down-to-dismiss that mirrors Photos/Messages instead of hunting
-// for a close button.
+// Opened by tapping any tile in submissionPhotoGrid. What makes switching
+// between several pages easy for a parent skimming a submission: page-
+// swipe, a direct-jump thumbnail strip so they don't have to swipe past
+// pages one at a time, swipe-down-to-dismiss (Photos/Messages-style), and
+// now swiping past the last page also exits back to the task card, so a
+// parent who's just paging through doesn't have to reach for Close at all.
+//
+// A hand-built pager (ScrollView + .paging), not TabView(.page) — same
+// reason as TaskReviewDeckView's pager above: pinch-to-zoom needs a plain
+// DragGesture for panning while zoomed, and that would otherwise fight
+// TabView(.page)'s own paging gesture the same way a nested vertical
+// ScrollView did. Disabling the pager's own scroll while any page is
+// zoomed in (.scrollDisabled(isZoomed)) is what keeps the two from
+// fighting: panning a zoomed photo can't also change pages, and once
+// zoomed back out, normal swipe-between-photos comes right back.
 private struct PhotoGalleryViewer: View {
     var count: Int
     @Binding var index: Int
     var onClose: () -> Void
 
     @State private var dragOffset: CGFloat = 0
+    @State private var scrollPosition: Int?
+    @State private var isZoomed = false
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            TabView(selection: $index) {
-                ForEach(0..<count, id: \.self) { i in
-                    MockHomeworkPhoto(pageNumber: i + 1, detailed: true)
-                        .aspectRatio(3.0 / 4.0, contentMode: .fit)
-                        .padding(.horizontal, 28)
-                        .tag(i)
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(0..<count, id: \.self) { i in
+                        ZoomablePhotoPage(pageNumber: i + 1, isZoomed: $isZoomed)
+                            .containerRelativeFrame(.horizontal)
+                            .id(i)
+                    }
+                    // Sentinel: swiping one more page past the last real
+                    // photo lands here, which immediately exits instead of
+                    // just bouncing at the end.
+                    Color.clear
+                        .containerRelativeFrame(.horizontal)
+                        .id(count)
                 }
+                .scrollTargetLayout()
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $scrollPosition)
+            .scrollDisabled(isZoomed)
+            .scrollIndicators(.hidden)
+            .onChange(of: scrollPosition) { _, newValue in
+                guard let newValue else { return }
+                if newValue == count {
+                    onClose()
+                    return
+                }
+                guard newValue != index else { return }
+                index = newValue
+                isZoomed = false
+            }
+            .onChange(of: index) { _, newValue in
+                guard scrollPosition != newValue else { return }
+                withAnimation(.easeOut(duration: 0.2)) { scrollPosition = newValue }
+            }
 
             VStack {
                 HStack {
+                    if count > 1 {
+                        Text("\(index + 1) of \(count)")
+                            .font(Typography.font(13, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(.white.opacity(0.16))
+                            .clipShape(Capsule())
+                    }
+
+                    Spacer()
+
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .font(.system(size: 15, weight: .bold))
@@ -550,17 +597,6 @@ private struct PhotoGalleryViewer: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close")
-
-                    Spacer()
-
-                    if count > 1 {
-                        Text("\(index + 1) of \(count)")
-                            .font(Typography.font(13, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(.white.opacity(0.16))
-                            .clipShape(Capsule())
-                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -568,8 +604,9 @@ private struct PhotoGalleryViewer: View {
                 Spacer()
 
                 // Direct-jump strip — faster than swiping through several
-                // pages one at a time to find a specific one.
-                if count > 1 {
+                // pages one at a time to find a specific one. Hidden while
+                // zoomed so it can't be mistaken for another zoom target.
+                if count > 1, !isZoomed {
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 10) {
@@ -601,14 +638,17 @@ private struct PhotoGalleryViewer: View {
         }
         .offset(y: dragOffset)
         // Only a mostly-vertical drag counts, so this doesn't fight the
-        // TabView's own horizontal swipe-between-photos gesture.
+        // pager's own horizontal swipe-between-photos gesture — and none
+        // of it applies while zoomed, where a drag means "pan the photo,"
+        // not "dismiss."
         .gesture(
             DragGesture(minimumDistance: 12)
                 .onChanged { value in
-                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                    guard !isZoomed, abs(value.translation.height) > abs(value.translation.width) else { return }
                     dragOffset = max(0, value.translation.height)
                 }
                 .onEnded { value in
+                    guard !isZoomed else { return }
                     if value.translation.height > 90, abs(value.translation.height) > abs(value.translation.width) {
                         onClose()
                     } else {
@@ -616,6 +656,73 @@ private struct PhotoGalleryViewer: View {
                     }
                 }
         )
+    }
+}
+
+// Pinch (or double-tap) to zoom, drag to pan while zoomed. Reports zoom
+// state up via the shared `isZoomed` binding so PhotoGalleryViewer can
+// disable its own pager while this is active — see that struct's header
+// comment for why that's what keeps zoom-panning from also flipping pages.
+// Attached with .simultaneousGesture (not .gesture) so, at 1x, this never
+// competes with the pager's own swipe recognition — the pan half is a
+// no-op there anyway (guarded on scale > 1).
+private struct ZoomablePhotoPage: View {
+    var pageNumber: Int
+    @Binding var isZoomed: Bool
+
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    private let maxScale: CGFloat = 4
+
+    private func resetZoom() {
+        scale = 1; lastScale = 1; offset = .zero; lastOffset = .zero
+        isZoomed = false
+    }
+
+    var body: some View {
+        MockHomeworkPhoto(pageNumber: pageNumber, detailed: true)
+            .aspectRatio(3.0 / 4.0, contentMode: .fit)
+            .padding(.horizontal, 28)
+            .scaleEffect(scale)
+            .offset(offset)
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        scale = min(maxScale, max(1, lastScale * value.magnification))
+                        isZoomed = scale > 1.01
+                    }
+                    .onEnded { _ in
+                        lastScale = scale
+                        if scale <= 1.01 { withAnimation(.easeOut(duration: 0.2)) { resetZoom() } }
+                    }
+                    .simultaneously(
+                        with: DragGesture()
+                            .onChanged { value in
+                                guard scale > 1 else { return }
+                                offset = CGSize(
+                                    width: lastOffset.width + value.translation.width,
+                                    height: lastOffset.height + value.translation.height
+                                )
+                            }
+                            .onEnded { _ in
+                                guard scale > 1 else { return }
+                                lastOffset = offset
+                            }
+                    )
+            )
+            .onTapGesture(count: 2) {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    if scale > 1 {
+                        resetZoom()
+                    } else {
+                        scale = 2.5; lastScale = 2.5
+                        isZoomed = true
+                    }
+                }
+            }
     }
 }
 
