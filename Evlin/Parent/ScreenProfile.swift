@@ -411,17 +411,33 @@ struct ScreenProfile: View {
                 if child.status != .downtime, child.reflection == nil {
                     Button {
                         if child.status == .unlocked {
-                            child.status = .locked; child.timeLeft = "0m"; child.timePct = 0
+                            // Doesn't touch timeLeft/timePct — a manual lock
+                            // is a pause, not the allowance being spent, so
+                            // whatever real time was left stays banked
+                            // (invisible while locked, since the display
+                            // above only reads it in the .unlocked branch)
+                            // and comes back as-is on unlock instead of
+                            // being reported as used up.
+                            child.status = .locked
                         } else if tasks.count - doneCount > 0 {
                             // Unlocking (unlike locking) needs a confirm — it's
                             // the easy-to-regret direction, especially with
                             // chores still open, so don't apply it on the
                             // first tap.
                             showUnlockConfirm = true
+                        } else if child.timePct > 0 {
+                            // Tasks are done and there's still real banked
+                            // time (e.g. a one-off manual lock, not the
+                            // daily allowance running out) — resume it
+                            // directly instead of running the "how much
+                            // extra" Grant Time flow, which frames this as
+                            // bonus time beyond an exhausted limit.
+                            child.status = .unlocked
                         } else {
-                            // Tasks are already done — the risk here isn't
-                            // "unlocking before chores," it's "how much," so
-                            // ask for an amount instead of a bare confirm.
+                            // Tasks are done and the daily allowance is
+                            // genuinely used up — the question here isn't
+                            // "unlock or not," it's "how much," so ask for
+                            // an amount instead of a bare confirm.
                             showGrantTimeSheet = true
                         }
                     } label: {
