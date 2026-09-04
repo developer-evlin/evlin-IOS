@@ -75,8 +75,12 @@ struct RootView: View {
         // modifier applied locally at their own root.
         .dismissKeyboardOnTap()
         .task {
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
-            withAnimation(.easeInOut(duration: 0.3)) { showSplash = false }
+            // Was a 1.1s hold + 0.3s fade (~1.4s total) — a real wait to
+            // sit through on every single launch, not just the first one.
+            // Still a beat long enough to register the brand, just not a
+            // stall.
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            withAnimation(.easeInOut(duration: 0.2)) { showSplash = false }
         }
     }
 }
