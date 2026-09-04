@@ -887,10 +887,10 @@ private struct GrantExtraTimeSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
                 .padding(.horizontal, 20)
-                .padding(.bottom, 30)
+                Spacer()
             }
         }
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
     // Matches UnlockConfirmCard's own (private, so not shared directly) —
@@ -1031,10 +1031,10 @@ private struct UnlockConfirmCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
                 .padding(.horizontal, 20)
-                .padding(.bottom, 30)
+                Spacer()
             }
         }
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
     private func cardButton(_ label: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -1368,6 +1368,7 @@ private struct EditDailyScreenTimeLimitSheet: View {
     var onCancel: () -> Void
 
     @State private var limit: Int
+    @State private var scrollID: Int?
 
     init(childName: String, current: Int, onSave: @escaping (Int) -> Void, onCancel: @escaping () -> Void) {
         self.childName = childName
@@ -1375,6 +1376,7 @@ private struct EditDailyScreenTimeLimitSheet: View {
         self.onSave = onSave
         self.onCancel = onCancel
         _limit = State(initialValue: current)
+        _scrollID = State(initialValue: current)
     }
 
     private let options: [Int] = Array(stride(from: 15, through: 480, by: 15))

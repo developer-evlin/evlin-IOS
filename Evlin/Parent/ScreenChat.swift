@@ -15,6 +15,10 @@ private enum ChatCardKind {
     // rather than both showing up on the same card at once.
     case blockDuration(apps: [String])
     case addTask
+    // Read-only — what's done/pending/overdue for a child today, pulled
+    // from the same TaskStore data their profile shows, not a mocked
+    // separate figure.
+    case reviewCompliance(childId: String, childName: String)
 }
 
 private struct ChatMessage: Identifiable {
@@ -421,25 +425,42 @@ private struct BlockDurationCard: View {
     }
 }
 
-// Matches Evlin-iOS's real AddTaskForm (Views/Profile/AddBottomSheet.swift)
-// field-for-field: Title, Category (pill selector over the app's actual
-// TaskCategory-equivalent set), What to do, and Due as a plain free-text
-// field — not a DatePicker. Their form doesn't parse or validate that text
-// at all, so this doesn't either; it's stored as-is, same as production.
-private enum TaskCategory: String, CaseIterable {
-    case chore = "Chore", homework = "Homework", reading = "Reading", routine = "Routine"
-}
-
+// No category picker anymore — a chat-created task doesn't need a manual
+// classification step. And no manual repeat picker either: rather than
+// stopping to ask "how often?" the way the Settings-side AddTaskSheet's
+// RepeatPicker does, this reads the parent's own words for frequency cues
+// (see inferredRepeats below) and shows what it inferred instead of asking
+// — a live, visible "reasoning" readout rather than a form field to fill
+// in, matching the "AI" framing of doing this from chat in the first
+// place.
 private struct AddTaskCard: View {
-    var onCreate: (String, TaskCategory, String, String) -> Void
+    var onCreate: (_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) -> Void
 
     @State private var title = ""
-    @State private var category: TaskCategory = .chore
     @State private var whatToDo = ""
     @State private var due = ""
     @State private var submitted = false
 
     private var canCreate: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty && !submitted }
+
+    // Simple keyword scan over what's typed so far — stands in for real
+    // language understanding the same way this whole chat's "AI" is
+    // mocked elsewhere (see respondAfterDelay). Checked in order: an
+    // explicit weekday/weekend cue wins over a bare "every day", which
+    // wins over the one-time default.
+    private var inferredRepeats: (label: String, codes: String) {
+        let text = "\(title) \(whatToDo) \(due)".lowercased()
+        if text.contains("weekend") {
+            return ("Repeats weekends", "sat,sun")
+        }
+        if text.contains("school night") || text.contains("school day") || text.contains("weekday") {
+            return ("Repeats on weekdays", "mon,tue,wed,thu,fri")
+        }
+        if text.contains("every day") || text.contains("everyday") || text.contains("each day") || text.contains("daily") || text.contains("every night") {
+            return ("Repeats daily", "sun,mon,tue,wed,thu,fri,sat")
+        }
+        return ("One-time task", "none")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -453,18 +474,6 @@ private struct AddTaskCard: View {
                     .font(Typography.font(13.5, weight: .regular))
             }
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text("CATEGORY")
-                    .font(Typography.font(10.5, weight: .bold))
-                    .tracking(0.5)
-                    .foregroundStyle(EColor.onSurfaceVariant)
-                FlowChips {
-                    ForEach(TaskCategory.allCases, id: \.self) { c in
-                        DotChip(label: c.rawValue, color: nil, selected: category == c) { category = c }
-                    }
-                }
-            }
-
             cardField(label: "What to do") {
                 TextField("Instructions…", text: $whatToDo, axis: .vertical)
                     .font(Typography.font(13.5, weight: .regular))
@@ -472,13 +481,24 @@ private struct AddTaskCard: View {
             }
 
             cardField(label: "Due (optional)") {
-                TextField("e.g. Today, 6:00 PM", text: $due)
+                TextField("e.g. Today, 6:00 PM, or every school night", text: $due)
                     .font(Typography.font(13.5, weight: .regular))
             }
 
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles").font(.system(size: 10, weight: .semibold))
+                Text(inferredRepeats.label)
+            }
+            .font(Typography.font(11.5, weight: .semibold))
+            .foregroundStyle(EColor.primary)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(EColor.primaryContainer)
+            .clipShape(Capsule())
+            .animation(.easeOut(duration: 0.15), value: inferredRepeats.label)
+
             Button {
                 submitted = true
-                onCreate(title, category, whatToDo, due)
+                onCreate(title, whatToDo, due, inferredRepeats.codes)
             } label: {
                 Text("Create task")
                     .font(Typography.font(13.5, weight: .bold))
@@ -514,6 +534,86 @@ private struct AddTaskCard: View {
     }
 }
 
+// AI "reads" the child's real task list and reports what's done vs. still
+// outstanding — replaces the old one-tap "lock this app" suggestion with a
+// status readout, matching the parent's actual ask (what did they finish,
+// not what should I block).
+private struct ReviewComplianceCard: View {
+    let childId: String
+    let childName: String
+
+    private var tasks: [ChildTask] { TaskStore.tasks(for: childId) }
+    private var done: [ChildTask] { tasks.filter { $0.state == .done } }
+    private var overdue: [ChildTask] { tasks.filter { $0.state == .overdue } }
+    private var outstanding: [ChildTask] { tasks.filter { $0.state == .pending || $0.state == .review || $0.state == .overdue } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.seal.fill").font(.system(size: 15)).foregroundStyle(EColor.primary)
+                Text("\(childName)'s progress").font(Typography.font(15, weight: .bold)).foregroundStyle(EColor.onSurface)
+            }
+
+            HStack(spacing: 8) {
+                statPill(value: "\(done.count)", label: "Done", tint: Brand.greenDeep)
+                statPill(value: "\(outstanding.count - overdue.count)", label: "Pending", tint: EColor.onSurfaceVariant)
+                statPill(value: "\(overdue.count)", label: "Overdue", tint: EColor.danger)
+            }
+
+            if overdue.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles").font(.system(size: 11, weight: .semibold))
+                    Text(tasks.isEmpty ? "No tasks assigned yet." : "Nothing overdue — on track today.")
+                }
+                .font(Typography.font(12.5, weight: .semibold))
+                .foregroundStyle(Brand.greenDeep)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("NEEDS ATTENTION")
+                        .font(Typography.font(10.5, weight: .bold))
+                        .tracking(0.5)
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                    ForEach(overdue) { task in
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(EColor.danger)
+                            Text(task.title)
+                                .font(Typography.font(13, weight: .medium))
+                                .foregroundStyle(EColor.onSurface)
+                            Spacer()
+                            if let due = task.dueLabel {
+                                Text(due)
+                                    .font(Typography.font(11, weight: .regular))
+                                    .foregroundStyle(EColor.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+                .background(EColor.danger.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: bubbleMaxWidth + 60, alignment: .leading)
+        .background(EColor.surfaceContainerLowest)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(EColor.outlineVariant))
+    }
+
+    private func statPill(value: String, label: String, tint: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(Typography.font(17, weight: .heavy)).foregroundStyle(tint)
+            Text(label.uppercased()).font(Typography.font(9.5, weight: .bold)).tracking(0.4).foregroundStyle(EColor.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(EColor.surfaceContainerHigh)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
 private struct Capability: Identifiable {
     let id = UUID()
     var icon: String
@@ -545,7 +645,7 @@ private struct ChatSuggestion: Identifiable {
 }
 
 private let welcomeSuggestions: [ChatSuggestion] = [
-    ChatSuggestion(icon: "apps", title: "Lock TikTok for 30 min", prompt: "Lock TikTok for Liam for 30 minutes"),
+    ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review Liam's progress", prompt: "How is Liam doing with his tasks today?", card: .reviewCompliance(childId: "liam", childName: "Liam")),
     ChatSuggestion(icon: "gavel", title: "Set a bedtime rule", prompt: "Lock all apps at 9pm on school nights"),
     ChatSuggestion(icon: "sf:checklist", title: "Add a task", prompt: "Add a task for Liam", card: .addTask),
     ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for Liam", card: .blockApp),
@@ -887,6 +987,7 @@ struct ScreenChat: View {
                 case .blockApp: intro = "Sure — which app should I block?"
                 case .addTask: intro = "Sure — what's the task?"
                 case .blockDuration: intro = "" // never a tile's own card — only reached as a follow-up
+                case .reviewCompliance(_, let childName): intro = "Here's where \(childName) stands today:"
                 }
                 messages.append(ChatMessage(fromUser: false, text: intro, card: card))
             }
@@ -909,11 +1010,12 @@ struct ScreenChat: View {
         respondAfterDelay(with: "Blocked \(list) for Liam \(duration).")
     }
 
-    private func handleAddTask(_ title: String, _ category: TaskCategory, _ whatToDo: String, _ due: String) {
+    private func handleAddTask(_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) {
         guard !title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         let dueTrimmed = due.trimmingCharacters(in: .whitespaces)
         let dueText = dueTrimmed.isEmpty ? "" : ", due \(dueTrimmed)"
-        respondAfterDelay(with: "Added \"\(title)\" (\(category.rawValue)) for Liam\(dueText).")
+        let repeatsText = repeats == "none" ? "" : " (\(repeatDisplayLabel(repeats).lowercased()))"
+        respondAfterDelay(with: "Added \"\(title)\" for Liam\(dueText)\(repeatsText).")
     }
 
     @ViewBuilder
@@ -925,6 +1027,8 @@ struct ScreenChat: View {
             BlockDurationCard(apps: apps) { minutes in handleBlockDuration(apps: apps, minutes: minutes) }
         case .addTask:
             AddTaskCard(onCreate: handleAddTask)
+        case .reviewCompliance(let childId, let childName):
+            ReviewComplianceCard(childId: childId, childName: childName)
         }
     }
 
