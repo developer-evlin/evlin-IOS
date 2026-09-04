@@ -115,48 +115,6 @@ private struct TypingIndicator: View {
 
 // MARK: - Inline chat cards
 
-// Small stand-in catalog since there's no real installed-app inventory to
-// query — bundle IDs are shown because that's specifically what was asked
-// for, matching how Evlin-iOS's own disambiguation cards (AppControlCard's
-// app_store_disambiguation) label each candidate.
-private struct MockApp: Identifiable {
-    let id = UUID()
-    var name: String
-    var bundleID: String
-    var icon: String
-    var color: Color
-}
-
-private let mockAppCatalog: [MockApp] = [
-    MockApp(name: "TikTok", bundleID: "com.zhiliaoapp.musically", icon: "music.note", color: .black),
-    MockApp(name: "Instagram", bundleID: "com.burbn.instagram", icon: "camera.fill", color: Color(hex: "E1306C")),
-    MockApp(name: "YouTube", bundleID: "com.google.ios.youtube", icon: "play.rectangle.fill", color: .red),
-    MockApp(name: "Roblox", bundleID: "com.roblox.robloxmobile", icon: "gamecontroller.fill", color: Color(hex: "00A2FF")),
-    MockApp(name: "Snapchat", bundleID: "com.toyopagroup.picaboo", icon: "camera.fill", color: Color(hex: "FFFC00")),
-    MockApp(name: "Discord", bundleID: "com.hammerandchisel.discord", icon: "bubble.left.and.bubble.right.fill", color: Color(hex: "5865F2")),
-    MockApp(name: "Messages", bundleID: "com.apple.MobileSMS", icon: "message.fill", color: .green),
-    MockApp(name: "Safari", bundleID: "com.apple.mobilesafari", icon: "safari.fill", color: .blue),
-]
-
-// Mirrors LockListManagerView's real Apps/Categories split (Views/Settings/
-// LockListManagerView.swift) — blocking a whole category, not just named
-// apps, is a real option there.
-private struct MockCategory: Identifiable {
-    let id = UUID()
-    var name: String
-    var icon: String
-    var color: Color
-}
-
-private let mockCategoryCatalog: [MockCategory] = [
-    MockCategory(name: "Social Media", icon: "person.2.fill", color: Color(hex: "E1306C")),
-    MockCategory(name: "Games", icon: "gamecontroller.fill", color: Color(hex: "00A2FF")),
-    MockCategory(name: "Entertainment", icon: "play.rectangle.fill", color: .red),
-    MockCategory(name: "Messaging", icon: "message.fill", color: .green),
-]
-
-private enum BlockTargetTab: String, CaseIterable { case apps = "Apps", categories = "Categories" }
-
 // Row shape (icon, name, subtitle, trailing checkbox) is closest to
 // Evlin-iOS's U1Card (unlock_picker), adapted for picking targets to block
 // instead of unlock. The Apps/Categories tab split, search field, and
@@ -174,32 +132,6 @@ private struct BlockAppCard: View {
     @State private var selectedApps: Set<UUID> = []
     @State private var selectedCategories: Set<UUID> = []
     @State private var submitted = false
-    // Only the top few ever show, full stop — the full 8-app/4-category
-    // catalog made this card tall enough to need scrolling inside a chat
-    // bubble before a parent could even see the pick button. Search (typing
-    // a name) is the only way to reach anything past the top 3, rather than
-    // also offering a "show all" expand — one clear path instead of two.
-    private let topCount = 3
-
-    private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
-
-    private var filteredApps: [MockApp] {
-        guard isSearching else { return mockAppCatalog }
-        return mockAppCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
-    }
-
-    private var filteredCategories: [MockCategory] {
-        guard isSearching else { return mockCategoryCatalog }
-        return mockCategoryCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
-    }
-
-    private var visibleApps: [MockApp] {
-        isSearching ? filteredApps : Array(filteredApps.prefix(topCount))
-    }
-
-    private var visibleCategories: [MockCategory] {
-        isSearching ? filteredCategories : Array(filteredCategories.prefix(topCount))
-    }
 
     private var totalSelected: Int { selectedApps.count + selectedCategories.count }
 
@@ -210,55 +142,8 @@ private struct BlockAppCard: View {
                 Text("Block an app").font(Typography.font(15, weight: .bold)).foregroundStyle(EColor.onSurface)
             }
 
-            HStack(spacing: 6) {
-                ForEach(BlockTargetTab.allCases, id: \.self) { t in
-                    Button { tab = t } label: {
-                        Text(t.rawValue)
-                            .font(Typography.font(12.5, weight: .semibold))
-                            .foregroundStyle(tab == t ? .white : EColor.onSurface)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 32)
-                            .background(tab == t ? EColor.danger : EColor.surfaceContainerHigh)
-                            .clipShape(RoundedRectangle(cornerRadius: 9))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(EColor.onSurfaceVariant)
-                TextField(tab == .apps ? "Search apps" : "Search categories", text: $query)
-                    .font(Typography.font(13, weight: .regular))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(EColor.surfaceContainerHigh)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-
-            if tab == .apps {
-                VStack(spacing: 6) {
-                    ForEach(visibleApps) { app in
-                        targetRow(
-                            icon: app.icon, color: app.color, title: app.name, subtitle: app.bundleID,
-                            selected: selectedApps.contains(app.id)
-                        ) { toggleApp(app) }
-                    }
-                    if !isSearching, filteredApps.count > topCount {
-                        searchHint(noun: "app")
-                    }
-                }
-            } else {
-                VStack(spacing: 6) {
-                    ForEach(visibleCategories) { cat in
-                        targetRow(
-                            icon: cat.icon, color: cat.color, title: cat.name, subtitle: nil,
-                            selected: selectedCategories.contains(cat.id)
-                        ) { toggleCategory(cat) }
-                    }
-                    if !isSearching, filteredCategories.count > topCount {
-                        searchHint(noun: "category")
-                    }
-                }
-            }
+            BlockTargetPicker(tab: $tab, query: $query, selectedApps: $selectedApps, selectedCategories: $selectedCategories)
+                .disabled(submitted)
 
             Button {
                 let appNames = mockAppCatalog.filter { selectedApps.contains($0.id) }.map(\.name)
@@ -282,64 +167,6 @@ private struct BlockAppCard: View {
         .background(EColor.surfaceContainerLowest)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(EColor.outlineVariant))
-    }
-
-    private func toggleApp(_ app: MockApp) {
-        guard !submitted else { return }
-        withAnimation(.easeOut(duration: 0.12)) {
-            if selectedApps.contains(app.id) { selectedApps.remove(app.id) } else { selectedApps.insert(app.id) }
-        }
-    }
-
-    private func toggleCategory(_ cat: MockCategory) {
-        guard !submitted else { return }
-        withAnimation(.easeOut(duration: 0.12)) {
-            if selectedCategories.contains(cat.id) { selectedCategories.remove(cat.id) } else { selectedCategories.insert(cat.id) }
-        }
-    }
-
-    // Bigger than the old row (44pt icon vs 34, more padding, a filled
-    // circle instead of a small square) plus a colored border on top of the
-    // tint fill when selected — a parent picking an app to block should be
-    // able to hit the row without aiming, and see at a glance what's
-    // already picked without reading each checkbox individually.
-    private func targetRow(icon: String, color: Color, title: String, subtitle: String?, selected: Bool, onTap: @escaping () -> Void) -> some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(color)
-                    .frame(width: 44, height: 44)
-                    .overlay(Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.white))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                    if let subtitle {
-                        Text(subtitle).font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                    }
-                }
-                Spacer(minLength: 8)
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 23))
-                    .foregroundStyle(selected ? EColor.danger : EColor.outlineVariant)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 12)
-            .background(selected ? EColor.danger.opacity(0.08) : EColor.surfaceContainerLowest)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? EColor.danger.opacity(0.5) : EColor.outlineVariant, lineWidth: selected ? 1.5 : 1))
-        }
-        .buttonStyle(.plain)
-    }
-
-    // Not a button — search above is the only way past the top 3, so this
-    // just tells a parent that path exists instead of offering a second one.
-    private func searchHint(noun: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
-            Text("Don't see it? Search for the \(noun) above.")
-                .font(Typography.font(12.5, weight: .medium))
-        }
-        .foregroundStyle(EColor.onSurfaceVariant)
-        .frame(maxWidth: .infinity)
-        .frame(height: 34)
     }
 }
 

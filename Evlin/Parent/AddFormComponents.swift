@@ -375,3 +375,158 @@ struct MoreOptions<Content: View>: View {
         }
     }
 }
+
+// MARK: - Block target picker
+
+enum BlockTargetTab: String, CaseIterable { case apps = "Apps", categories = "Categories" }
+
+// Apps/Categories tab switcher + search + rows, picking from the shared
+// mockAppCatalog/mockCategoryCatalog (AppCatalogData.swift). Used both by
+// chat's one-off "Block an app" card and ScreenProfile's standing "Blocked
+// Apps" rule, so a parent picks from the identical list either way. Only
+// the top 3 of whichever tab is active ever show without a query — search
+// is the only way to reach the rest, not a "show all" expand, so there's
+// one clear path once the shortlist doesn't have what a parent wants.
+struct BlockTargetPicker: View {
+    @Binding var tab: BlockTargetTab
+    @Binding var query: String
+    @Binding var selectedApps: Set<UUID>
+    @Binding var selectedCategories: Set<UUID>
+    var accent: Color = EColor.danger
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    private let topCount = 3
+
+    private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    private var filteredApps: [MockApp] {
+        guard isSearching else { return mockAppCatalog }
+        return mockAppCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var filteredCategories: [MockCategory] {
+        guard isSearching else { return mockCategoryCatalog }
+        return mockCategoryCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var visibleApps: [MockApp] {
+        isSearching ? filteredApps : Array(filteredApps.prefix(topCount))
+    }
+
+    private var visibleCategories: [MockCategory] {
+        isSearching ? filteredCategories : Array(filteredCategories.prefix(topCount))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                ForEach(BlockTargetTab.allCases, id: \.self) { t in
+                    Button { tab = t } label: {
+                        Text(t.rawValue)
+                            .font(Typography.font(12.5, weight: .semibold))
+                            .foregroundStyle(tab == t ? .white : EColor.onSurface)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 32)
+                            .background(tab == t ? accent : EColor.surfaceContainerHigh)
+                            .clipShape(RoundedRectangle(cornerRadius: 9))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(EColor.onSurfaceVariant)
+                TextField(tab == .apps ? "Search apps" : "Search categories", text: $query)
+                    .font(Typography.font(13, weight: .regular))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(EColor.surfaceContainerHigh)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            if tab == .apps {
+                VStack(spacing: 6) {
+                    ForEach(visibleApps) { app in
+                        targetRow(
+                            icon: app.icon, color: app.color, title: app.name, subtitle: app.bundleID,
+                            selected: selectedApps.contains(app.id)
+                        ) { toggleApp(app) }
+                    }
+                    if !isSearching, filteredApps.count > topCount {
+                        searchHint(noun: "app")
+                    }
+                }
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(visibleCategories) { cat in
+                        targetRow(
+                            icon: cat.icon, color: cat.color, title: cat.name, subtitle: nil,
+                            selected: selectedCategories.contains(cat.id)
+                        ) { toggleCategory(cat) }
+                    }
+                    if !isSearching, filteredCategories.count > topCount {
+                        searchHint(noun: "category")
+                    }
+                }
+            }
+        }
+    }
+
+    private func toggleApp(_ app: MockApp) {
+        guard isEnabled else { return }
+        withAnimation(.easeOut(duration: 0.12)) {
+            if selectedApps.contains(app.id) { selectedApps.remove(app.id) } else { selectedApps.insert(app.id) }
+        }
+    }
+
+    private func toggleCategory(_ cat: MockCategory) {
+        guard isEnabled else { return }
+        withAnimation(.easeOut(duration: 0.12)) {
+            if selectedCategories.contains(cat.id) { selectedCategories.remove(cat.id) } else { selectedCategories.insert(cat.id) }
+        }
+    }
+
+    // Bigger than the old row (44pt icon vs 34, more padding, a filled
+    // circle instead of a small square) plus a colored border on top of the
+    // tint fill when selected — a parent picking an app to block should be
+    // able to hit the row without aiming, and see at a glance what's
+    // already picked without reading each checkbox individually.
+    private func targetRow(icon: String, color: Color, title: String, subtitle: String?, selected: Bool, onTap: @escaping () -> Void) -> some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(color)
+                    .frame(width: 44, height: 44)
+                    .overlay(Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.white))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
+                    if let subtitle {
+                        Text(subtitle).font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 23))
+                    .foregroundStyle(selected ? accent : EColor.outlineVariant)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            .background(selected ? accent.opacity(0.08) : EColor.surfaceContainerLowest)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? accent.opacity(0.5) : EColor.outlineVariant, lineWidth: selected ? 1.5 : 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // Not a button — search above is the only way past the top 3, so this
+    // just tells a parent that path exists instead of offering a second one.
+    private func searchHint(noun: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
+            Text("Don't see it? Search for the \(noun) above.")
+                .font(Typography.font(12.5, weight: .medium))
+        }
+        .foregroundStyle(EColor.onSurfaceVariant)
+        .frame(maxWidth: .infinity)
+        .frame(height: 34)
+    }
+}

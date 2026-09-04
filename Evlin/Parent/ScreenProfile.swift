@@ -1478,6 +1478,7 @@ private enum RuleTypeMeta {
         case .downtime: return "Downtime"
         case .custom: return "Custom rule"
         case .screenTimeLimit: return "Screen Time Limit"
+        case .blockedApps: return "Blocked Apps"
         }
     }
     static func icon(_ kind: RuleKind) -> String {
@@ -1485,6 +1486,7 @@ private enum RuleTypeMeta {
         case .downtime: return "dark_mode"
         case .custom: return "shield"
         case .screenTimeLimit: return "sf:hourglass"
+        case .blockedApps: return "sf:nosign"
         }
     }
     static func blurb(_ kind: RuleKind) -> String {
@@ -1492,6 +1494,7 @@ private enum RuleTypeMeta {
         case .downtime: return "A daily break from the screen — only phone calls and apps you allow will work."
         case .custom: return ""
         case .screenTimeLimit: return "The daily screen time allowance — a core protection you can pause but not edit or remove here."
+        case .blockedApps: return "These apps and categories stay blocked while this rule is on."
         }
     }
 }
@@ -1591,6 +1594,22 @@ private struct EditRuleSheet: View {
                         .padding(14)
                         .background(FormGreen.fieldBg)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+            case .blockedApps:
+                FormField(label: "Rule name") {
+                    FormTextField(placeholder: "e.g. Blocked Apps", text: $rule.title)
+                }
+                FormField(label: "Apps & categories") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField("e.g. TikTok, Instagram, Games", text: $rule.detail, axis: .vertical)
+                            .font(Typography.font(15, weight: .regular))
+                            .lineLimit(2...4)
+                            .padding(14)
+                            .background(FormGreen.fieldBg)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                        Text("Comma-separated — matches how it's shown on the rule row.")
+                            .font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                    }
                 }
             case .screenTimeLimit:
                 // Unreachable in practice — rulesSection never routes a
@@ -1749,14 +1768,29 @@ private struct AddRuleSheet: View {
     @State private var detail = ""
     @State private var downtimeFrom = Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date()) ?? Date()
     @State private var downtimeTo = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
+    // Blocked Apps — same BlockTargetPicker chat's "Block an app" card
+    // uses, so a parent picks from the identical catalog either way.
+    @State private var blockTab: BlockTargetTab = .apps
+    @State private var blockQuery = ""
+    @State private var selectedApps: Set<UUID> = []
+    @State private var selectedCategories: Set<UUID> = []
 
     private var effectiveTitle: String {
         let trimmed = title.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? RuleTypeMeta.label(kind) : trimmed
     }
 
+    private var blockedTargetNames: [String] {
+        mockAppCatalog.filter { selectedApps.contains($0.id) }.map(\.name)
+            + mockCategoryCatalog.filter { selectedCategories.contains($0.id) }.map(\.name)
+    }
+
     private var canSave: Bool {
-        kind == .custom ? !detail.trimmingCharacters(in: .whitespaces).isEmpty : true
+        switch kind {
+        case .custom: return !detail.trimmingCharacters(in: .whitespaces).isEmpty
+        case .blockedApps: return !selectedApps.isEmpty || !selectedCategories.isEmpty
+        case .downtime, .screenTimeLimit: return true
+        }
     }
 
     var body: some View {
@@ -1770,16 +1804,22 @@ private struct AddRuleSheet: View {
                 ))
             case .custom:
                 onCreate(ChildRule(id: UUID().uuidString, kind: .custom, icon: RuleTypeMeta.icon(.custom), title: effectiveTitle, detail: detail, on: true))
+            case .blockedApps:
+                onCreate(ChildRule(
+                    id: UUID().uuidString, kind: .blockedApps, icon: RuleTypeMeta.icon(.blockedApps), title: effectiveTitle,
+                    detail: blockedTargetNames.joined(separator: ", "), on: true
+                ))
             case .screenTimeLimit:
-                // Unreachable — the type picker below only offers Downtime
-                // and Custom; Screen Time Limit is a built-in, not something
-                // a parent can create another of.
+                // Unreachable — the type picker below only offers Downtime,
+                // Custom, and Blocked Apps; Screen Time Limit is a
+                // built-in, not something a parent can create another of.
                 break
             }
         }, canSave: canSave, saveLabel: "Save") {
             FormField(label: "Rule type") {
                 HStack(spacing: 8) {
                     TypeChip(glyph: .icon(RuleTypeMeta.icon(.downtime)), label: "Downtime", selected: kind == .downtime) { kind = .downtime }
+                    TypeChip(glyph: .icon(RuleTypeMeta.icon(.blockedApps)), label: "Blocked Apps", selected: kind == .blockedApps) { kind = .blockedApps }
                     TypeChip(glyph: .icon(RuleTypeMeta.icon(.custom)), label: "Custom", selected: kind == .custom) { kind = .custom }
                 }
             }
@@ -1793,6 +1833,15 @@ private struct AddRuleSheet: View {
                         }
                         Text(RuleTypeMeta.blurb(.downtime)).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
                     }
+                }
+                FormField(label: "Name (optional)") {
+                    FormTextField(placeholder: RuleTypeMeta.label(kind), text: $title)
+                }
+            }
+
+            if kind == .blockedApps {
+                FormField(label: "Apps & categories") {
+                    BlockTargetPicker(tab: $blockTab, query: $blockQuery, selectedApps: $selectedApps, selectedCategories: $selectedCategories, accent: EColor.danger)
                 }
                 FormField(label: "Name (optional)") {
                     FormTextField(placeholder: RuleTypeMeta.label(kind), text: $title)
