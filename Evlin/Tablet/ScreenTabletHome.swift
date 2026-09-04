@@ -87,8 +87,12 @@ struct ScreenTabletHome: View {
             ScreenTabletSettings(onSwitchMode: onSwitchMode)
         }
         .fullScreenCover(item: $selectedTask) { task in
-            TaskDetailView(task: task, onComplete: {
-                if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i].done = true }
+            TaskDetailView(task: task, onComplete: { photoCount, note in
+                if let i = tasks.firstIndex(where: { $0.id == task.id }) {
+                    tasks[i].done = true
+                    tasks[i].submittedPhotoCount = photoCount
+                    tasks[i].submissionNote = note
+                }
                 selectedTask = nil
             }, onRequestBypass: { reason, hasVoice in
                 if let i = tasks.firstIndex(where: { $0.id == task.id }) {

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct TaskDetailView: View {
     let task: KidTask
-    var onComplete: () -> Void
+    var onComplete: (_ photoCount: Int, _ note: String?) -> Void
     var onRequestBypass: (String, Bool) -> Void = { _, _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var showComic = false
@@ -11,11 +11,32 @@ struct TaskDetailView: View {
     // entry is a stable id so a single photo can be retaken/removed without
     // disturbing the others.
     @State private var photos: [UUID] = []
-    @State private var submitted = false
+    @State private var note = ""
+    @State private var submitted: Bool
+    // Distinguishes "just tapped All done! this session" (shows the
+    // "waiting for approval" beat) from "reopened an already-done task"
+    // (shows a plain recap instead) — both share the same photo grid/note
+    // below, only the header card differs.
+    @State private var justSubmitted = false
     @State private var showBypassSheet = false
     @State private var bypassSent = false
+    @State private var viewerIndex: Int?
 
     private var panels: [ComicPanel] { TabletData.comicPanels(for: task.iconTaskId) }
+
+    // Seeds submitted/photos/note from the task itself — without this, a
+    // kid reopening an already-done task would land back on the "take a
+    // photo" capture flow instead of seeing what they actually turned in,
+    // since photos/note otherwise start empty every time this view is
+    // freshly created.
+    init(task: KidTask, onComplete: @escaping (_ photoCount: Int, _ note: String?) -> Void, onRequestBypass: @escaping (String, Bool) -> Void = { _, _ in }) {
+        self.task = task
+        self.onComplete = onComplete
+        self.onRequestBypass = onRequestBypass
+        _submitted = State(initialValue: task.done)
+        _photos = State(initialValue: (0..<task.submittedPhotoCount).map { _ in UUID() })
+        _note = State(initialValue: task.submissionNote ?? "")
+    }
 
     var body: some View {
         NavigationStack {
@@ -115,12 +136,25 @@ struct TaskDetailView: View {
                             }
                         }
 
+                        Text("Add a note (optional)")
+                            .font(Typography.display(15.5, weight: .bold))
+                            .foregroundStyle(KidTheme.ink)
+                            .padding(.top, 22).padding(.bottom, 8)
+
+                        TextField("Tell your parent anything about it…", text: $note, axis: .vertical)
+                            .font(Typography.font(15, weight: .regular))
+                            .lineLimit(2...4)
+                            .padding(14)
+                            .background(KidTheme.cream)
+                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, lineWidth: 1.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+
                         // Elevated "kid" pill per the style guide: mascot green face,
                         // a solid green-deep base for the 3D lift — a duplicate
                         // offset rectangle behind the face, not a `.shadow()`
                         // (which would also shadow the label text itself,
                         // ghosting a second copy of it below).
-                        Button { if !photos.isEmpty { submitted = true } } label: {
+                        Button { if !photos.isEmpty { submitted = true; justSubmitted = true } } label: {
                             Text("All done!")
                                 .font(Typography.display(20, weight: .heavy))
                                 .foregroundStyle(!photos.isEmpty ? .white : Color(hex: "B5C8BC"))
@@ -159,26 +193,69 @@ struct TaskDetailView: View {
                         .buttonStyle(.plain)
                         .padding(.top, 4)
                     } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Evidence submitted 🎉").font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                            Text("Waiting for a parent to approve. You'll get a little ping when they do.")
-                                .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
-                            HStack(spacing: 10) {
-                                ProgressView().tint(KidTheme.greenDeep)
-                                Text("Sent just now").font(Typography.font(13.5, weight: .bold)).foregroundStyle(KidTheme.greenDeep)
+                        if justSubmitted {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Evidence submitted 🎉").font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                                Text("Waiting for a parent to approve. You'll get a little ping when they do.")
+                                    .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
+                                HStack(spacing: 10) {
+                                    ProgressView().tint(KidTheme.greenDeep)
+                                    Text("Sent just now").font(Typography.font(13.5, weight: .bold)).foregroundStyle(KidTheme.greenDeep)
+                                }
+                                .padding(12)
+                                .background(.white.opacity(0.7))
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                                .padding(.top, 12)
                             }
-                            .padding(12)
-                            .background(.white.opacity(0.7))
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .padding(.top, 12)
+                            .padding(22)
+                            .background(KidTheme.cream)
+                            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("All done! ✅").font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                                Text("Here's what you turned in for this one.")
+                                    .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
+                            }
+                            .padding(22)
+                            .background(KidTheme.cream)
+                            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
                         }
-                        .padding(22)
-                        .background(KidTheme.cream)
-                        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                        if !photos.isEmpty {
+                            Text("Your photo\(photos.count == 1 ? "" : "s")")
+                                .font(Typography.display(16, weight: .bold))
+                                .foregroundStyle(KidTheme.ink)
+                                .padding(.top, 20).padding(.bottom, 10)
+
+                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                                ForEach(Array(photos.enumerated()), id: \.element) { index, _ in
+                                    Button { viewerIndex = index } label: {
+                                        MockHomeworkPhoto(pageNumber: index + 1)
+                                            .aspectRatio(3.0/4.0, contentMode: .fit)
+                                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, lineWidth: 1.5))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+
+                        if !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Your note")
+                                    .font(Typography.display(16, weight: .bold))
+                                    .foregroundStyle(KidTheme.ink)
+                                Text(note)
+                                    .font(Typography.font(14.5, weight: .regular))
+                                    .foregroundStyle(KidTheme.inkSoft)
+                            }
+                            .padding(.top, 20)
+                        }
 
                         Button {
-                            onComplete()
+                            if justSubmitted { onComplete(photos.count, note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note) }
                             dismiss()
                         } label: {
                             Text("Back to today")
@@ -190,12 +267,13 @@ struct TaskDetailView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 18))
                         }
                         .buttonStyle(.plain)
-                        .padding(.top, 16)
+                        .padding(.top, 20)
                     }
                 }
                 .padding(20)
             }
             .background(KidTheme.background)
+            .dismissKeyboardOnTap()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
@@ -205,6 +283,12 @@ struct TaskDetailView: View {
         }
         .fullScreenCover(isPresented: $showComic) {
             ComicViewerView(title: task.title, panels: panels)
+        }
+        .fullScreenCover(item: Binding(
+            get: { viewerIndex.map { IdentifiedInt(value: $0) } },
+            set: { viewerIndex = $0?.value }
+        )) { wrapped in
+            KidPhotoViewer(count: photos.count, index: wrapped.value) { viewerIndex = nil }
         }
         .sheet(isPresented: $showBypassSheet) {
             BypassRequestSheet(
@@ -255,6 +339,49 @@ struct TaskDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18))
             }
             .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct IdentifiedInt: Identifiable { var value: Int; var id: Int { value } }
+
+// Full-screen swipe-through viewer for a kid's own already-submitted
+// photos — plain TabView(.page) is fine here (no nested scroll/drag inside
+// each page to fight with, unlike the parent side's zoomable gallery), so
+// there's no need for that view's hand-built pager.
+private struct KidPhotoViewer: View {
+    var count: Int
+    @State var index: Int
+    var onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            TabView(selection: $index) {
+                ForEach(0..<count, id: \.self) { i in
+                    MockHomeworkPhoto(pageNumber: i + 1, detailed: true)
+                        .padding(28)
+                        .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: count > 1 ? .always : .never))
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(.white.opacity(0.2)))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(16)
+                }
+                Spacer()
+            }
         }
     }
 }

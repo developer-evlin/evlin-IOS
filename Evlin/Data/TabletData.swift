@@ -17,6 +17,12 @@ struct KidTask: Identifiable {
     var bypassRequested: Bool = false
     var bypassNote: String? = nil
     var bypassHasVoiceNote: Bool = false
+    // What actually got submitted for a normal (non-bypass) completion —
+    // lets a kid reopen an already-done task and see their own photos and
+    // note again, instead of that evidence vanishing the moment
+    // TaskDetailView's local capture state is thrown away on dismiss.
+    var submittedPhotoCount: Int = 0
+    var submissionNote: String? = nil
 }
 
 extension KidTask {
