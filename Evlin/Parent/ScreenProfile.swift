@@ -77,6 +77,14 @@ struct ScreenProfile: View {
     private var doneCount: Int { tasks.filter { $0.state == .done }.count }
     private var activeRulesCount: Int { rules.filter(\.on).count }
 
+    // Drives headerCard's "Unlimited screen time today" state — the daily
+    // cap only stops applying once this built-in rule is switched off (see
+    // ScreenTimeOffConfirmCard), not just because the child happens to be
+    // unlocked.
+    private var screenTimeLimitOff: Bool {
+        !(rules.first(where: { $0.kind == .screenTimeLimit })?.on ?? true)
+    }
+
     // Same partitioned time bar as the family dashboard grid (ScreenHome's
     // ProfileBubble) — 30-minute blocks laid out in a row, so "time left"
     // reads identically whether you're looking at the family grid or a
@@ -379,6 +387,15 @@ struct ScreenProfile: View {
                             Label("Under Reflection", systemImage: "figure.mind.and.body")
                                 .font(Typography.font(10, weight: .bold))
                                 .foregroundStyle(Color(hex: "4A3215"))
+                        } else if child.status == .unlocked && screenTimeLimitOff {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Label("Unlimited screen time today", systemImage: "infinity")
+                                    .font(Typography.font(12, weight: .bold))
+                                    .foregroundStyle(EColor.secondary)
+                                Text("Screen Time Limit reapplies tomorrow")
+                                    .font(Typography.font(10.5, weight: .medium))
+                                    .foregroundStyle(EColor.onSurfaceVariant)
+                            }
                         } else if child.status == .unlocked {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text("\(child.timeLeft) left today").font(Typography.font(11, weight: .semibold)).foregroundStyle(Color(hex: "25924A"))
@@ -1126,7 +1143,7 @@ private struct ScreenTimeOffConfirmCard: View {
 
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(EColor.danger)
-                        Text("\(childName) will have unlimited screen time until you turn this back on — the daily allowance won't apply at all.")
+                        Text("\(childName) will have unlimited screen time for the rest of today — the daily allowance won't apply at all. The Screen Time Limit rule turns back on by itself tomorrow.")
                             .font(Typography.font(14, weight: .regular))
                             .foregroundStyle(EColor.onSurface)
                             .fixedSize(horizontal: false, vertical: true)
