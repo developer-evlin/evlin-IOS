@@ -111,6 +111,8 @@ struct ScreenProfile: View {
                 }
 
                 rulesSection
+
+                devicesSection
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -695,6 +697,61 @@ struct ScreenProfile: View {
         }
     }
 
+    // Lives on the kid's own profile, not in Settings > Children & Devices
+    // any more — device management reads as part of "everything about this
+    // kid," the same place their tasks and rules already are, rather than a
+    // separate settings-level list a parent has to remember to check.
+    private var devicesSection: some View {
+        Card(padded: false) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Registered Devices").font(Typography.font(16, weight: .heavy)).foregroundStyle(EColor.onSurface)
+                    Spacer()
+                    Text("\(child.devices.count)").font(Typography.font(10, weight: .bold)).foregroundStyle(EColor.onSurfaceVariant)
+                        .padding(.horizontal, 8).padding(.vertical, 3).background(EColor.surfaceContainerHigh).clipShape(Capsule())
+                }
+                .padding(16)
+
+                if child.devices.isEmpty {
+                    Divider().padding(.leading, 16)
+                    Text("No devices paired yet.")
+                        .font(Typography.font(13, weight: .regular))
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                        .padding(16)
+                }
+
+                ForEach(child.devices) { device in
+                    Divider().padding(.leading, 16)
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(EColor.primaryContainer)
+                            .frame(width: 44, height: 44)
+                            .overlay(Image(systemName: "iphone").font(.system(size: 19, weight: .semibold)).foregroundStyle(EColor.primary))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(device.name).font(Typography.font(14.5, weight: .bold)).foregroundStyle(EColor.onSurface)
+                            Text("\(device.model) · \(device.osVersion)").font(Typography.font(12, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                            Text("Paired \(device.pairedOn)").font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                        }
+                        Spacer(minLength: 8)
+                        Text(device.lastActive)
+                            .font(Typography.font(11, weight: .bold))
+                            .foregroundStyle(device.lastActive == "Active now" ? Color(hex: "25924A") : EColor.onSurfaceVariant)
+                        Button {
+                            FamilyStore.removeDevice(device.id, from: child.id)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 14))
+                                .foregroundStyle(EColor.danger)
+                                .frame(width: 32, height: 32)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(16)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Protection setup nudge (Leo's "PIN not set" prompt)

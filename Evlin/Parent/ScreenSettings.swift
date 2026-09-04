@@ -54,6 +54,7 @@ struct ScreenSettings: View {
     // elsewhere in this file for local-only mock state.
     @State private var familyRefreshTick = 0
     @State private var childPendingRemoval: Child?
+    @State private var editingChild: Child?
 
     // Billing — no equivalent in HomeSettingsSheet to port (the real app has
     // no StoreKit integration wired into settings yet), so this is built
@@ -242,6 +243,14 @@ struct ScreenSettings: View {
                             Label("Remove", systemImage: "trash")
                         }
                     }
+                    .swipeActions(edge: .leading) {
+                        Button {
+                            editingChild = child
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        .tint(EColor.secondary)
+                    }
                 }
             }
 
@@ -255,26 +264,6 @@ struct ScreenSettings: View {
                         systemImage: "qrcode.viewfinder",
                         accent: EColor.primary
                     )
-                }
-            }
-
-            // Moved here from each kid's own profile screen (ScreenProfile)
-            // — device management reads as a settings-level concern, same
-            // as the child list right above it, not something that belongs
-            // mixed into a kid's day-to-day task/rules dashboard.
-            Section("Registered Devices") {
-                ForEach(FamilyStore.children) { child in
-                    ForEach(child.devices) { device in
-                        deviceRow(device)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    FamilyStore.removeDevice(device.id, from: child.id)
-                                    familyRefreshTick += 1
-                                } label: {
-                                    Label("Remove", systemImage: "trash")
-                                }
-                            }
-                    }
                 }
             }
         }
@@ -295,25 +284,19 @@ struct ScreenSettings: View {
         } message: {
             Text("This removes their profile, tasks, rules, and paired devices. This can't be undone.")
         }
-    }
-
-    private func deviceRow(_ device: RegisteredDevice) -> some View {
-        HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(EColor.primaryContainer)
-                .frame(width: 44, height: 44)
-                .overlay(Image(systemName: "iphone").font(.system(size: 19, weight: .semibold)).foregroundStyle(EColor.primary))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(device.name).font(Typography.font(14.5, weight: .bold)).foregroundStyle(EColor.onSurface)
-                Text("\(device.model) · \(device.osVersion)").font(Typography.font(12, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
-                Text("Paired \(device.pairedOn)").font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-            }
-            Spacer(minLength: 8)
-            Text(device.lastActive)
-                .font(Typography.font(11, weight: .bold))
-                .foregroundStyle(device.lastActive == "Active now" ? Color(hex: "25924A") : EColor.onSurfaceVariant)
+        .sheet(item: $editingChild) { child in
+            EditChildProfileSheet(
+                child: child,
+                onSave: { name, age, avatar in
+                    child.name = name
+                    child.age = age
+                    child.avatar = avatar
+                    familyRefreshTick += 1
+                    editingChild = nil
+                },
+                onCancel: { editingChild = nil }
+            )
         }
-        .padding(.vertical, 4)
     }
 
     // MARK: - Billing (net-new — see the state block above for why this
@@ -890,10 +873,18 @@ struct ScreenSettings: View {
 
     private func settingsChildRow(_ child: Child) -> some View {
         HStack(spacing: 12) {
-            InitialsAvatar(name: child.name, size: 34)
+            if let avatar = child.avatar {
+                Image(uiImage: avatar)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 34, height: 34)
+                    .clipShape(Circle())
+            } else {
+                InitialsAvatar(name: child.name, size: 34)
+            }
             VStack(alignment: .leading, spacing: 3) {
                 Text(child.name).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                Text("Age \(child.age) · 1 device").font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant).lineLimit(2)
+                Text("Age \(child.age) · \(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")").font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant).lineLimit(2)
             }
             Spacer(minLength: 10)
             Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(EColor.outline)
@@ -958,6 +949,66 @@ enum SettingsPresentation {
 // delay, same convention as OnboardingV2ParentSteps' ParentPairScanStep,
 // whose faux-QR/camera-preview and code-field components this reuses so the
 // two pairing screens in the app look and behave the same way).
+
+// Edit an existing child's name, age, and picture — Add Child (below) only
+// ever creates a new profile, there was previously no way to fix a typo'd
+// name or set a photo after the fact.
+private struct EditChildProfileSheet: View {
+    @ObservedObject var child: Child
+    var onSave: (_ name: String, _ age: Int, _ avatar: UIImage?) -> Void
+    var onCancel: () -> Void
+
+    @State private var name: String
+    @State private var age: Int
+    @State private var avatar: UIImage?
+
+    init(child: Child, onSave: @escaping (_ name: String, _ age: Int, _ avatar: UIImage?) -> Void, onCancel: @escaping () -> Void) {
+        self.child = child
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _name = State(initialValue: child.name)
+        _age = State(initialValue: child.age)
+        _avatar = State(initialValue: child.avatar)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Spacer()
+                        // Same picker onboarding uses for the parent/child
+                        // avatar step, so picking a photo here looks and
+                        // behaves identically to picking one there.
+                        OnboardingV2PhotoAvatarPicker(name: name, pickedImage: $avatar, size: 84)
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                }
+                .listRowBackground(Color.clear)
+
+                Section("Name") {
+                    TextField("Child's name", text: $name)
+                        .font(Typography.font(15, weight: .regular))
+                }
+                Section("Age") {
+                    Stepper("Age: \(age)", value: $age, in: 1...18)
+                        .font(Typography.font(15, weight: .regular))
+                }
+            }
+            .navigationTitle("Edit Profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .dismissKeyboardOnTap()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { onSave(name.trimmingCharacters(in: .whitespaces), age, avatar) }
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+}
 
 private struct SettingsAddChildSheet: View {
     var onAdd: (String, Int) -> Void

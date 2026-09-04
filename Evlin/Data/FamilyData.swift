@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum ChildStatus: String {
     case unlocked, locked, lockedTasks = "locked-tasks", downtime
@@ -66,8 +67,12 @@ final class Child: Identifiable, ObservableObject {
     // Screen Time/Family Sharing detection exists in this prototype, so
     // this is set by hand on one mock child rather than computed.
     @Published var needsProtectionSetup: Bool
+    // Editable from Settings > Children & Devices (EditChildProfileSheet) —
+    // nil falls back to a colored initials circle wherever a child's
+    // avatar is shown.
+    @Published var avatar: UIImage?
 
-    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, status: ChildStatus, timeLeft: String, timePct: Int, usageTodayMin: Int, tasksDone: Int = 0, tasksTotal: Int = 5, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false) {
+    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, status: ChildStatus, timeLeft: String, timePct: Int, usageTodayMin: Int, tasksDone: Int = 0, tasksTotal: Int = 5, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false, avatar: UIImage? = nil) {
         self.id = id; self.name = name; self.age = age; self.dailyLimitMin = dailyLimitMin
         self.color = color; self.status = status; self.timeLeft = timeLeft; self.timePct = timePct
         self.usageTodayMin = usageTodayMin; self.tasksDone = tasksDone; self.tasksTotal = tasksTotal
@@ -75,6 +80,7 @@ final class Child: Identifiable, ObservableObject {
         self.parentApprovalStatus = parentApprovalStatus
         self.trialExhausted = trialExhausted
         self.needsProtectionSetup = needsProtectionSetup
+        self.avatar = avatar
         // Every kid has at least one paired device in real usage — synthesize
         // a plausible default (their own device, on the app's current min
         // supported iOS) rather than leaving this empty when a specific
