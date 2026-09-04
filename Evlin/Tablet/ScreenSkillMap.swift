@@ -1,15 +1,18 @@
 import SwiftUI
 
-// The kid-side "Ring" tab (formerly "Skill Map") — a literal clock face: each
-// task's icon sits on the dial at the hour position matching its deadline
-// (same idea as numbers on a real clock, just task icons instead of digits),
-// so a glance at the shape of the day shows not just how many tasks are left
-// but roughly when they land. Tasks without a deadline don't get a spot on
-// the dial (there's no honest place to put them) — they collect in a small
-// "Anytime" row below it instead. On first appearance every token starts
-// collapsed at the center and springs out to its clock position, staggered
-// by due time, so the dial visibly "assembles itself" rather than just
-// being there.
+// The kid-side "Ring" tab (formerly "Skill Map") — a ring of task tokens
+// spaced evenly around a dial, with the dial's own outline filling in as
+// tasks complete (progressFill). Used to be a literal clock face (each
+// token sitting at the hour position matching its deadline), but real due
+// times cluster within the same few evening hours far too tightly for that
+// to read cleanly — two tasks even at the same due time would sit right on
+// top of each other — and completion is already communicated by the fill
+// arc and each token's own checkmark, not by where around the dial a task
+// happens to sit. Evenly spacing them instead keeps every token legible
+// regardless of how the day's due times happen to land. On first
+// appearance every token starts collapsed at the center and springs out to
+// its resting spot, staggered in list order, so the dial visibly
+// "assembles itself" rather than just being there.
 struct ScreenRing: View {
     var tasks: [KidTask]
 
@@ -18,30 +21,15 @@ struct ScreenRing: View {
     private var doneCount: Int { tasks.filter(\.done).count }
     private var allDone: Bool { !tasks.isEmpty && doneCount == tasks.count }
 
-    // Timed tasks sorted by clock position so the stagger-in animation
-    // sweeps around the dial in order rather than in list order.
-    private var timedTasks: [KidTask] {
-        tasks.filter { $0.due != nil }.sorted { (angle(for: $0.due) ?? 0) < (angle(for: $1.due) ?? 0) }
-    }
-    private var anytimeTasks: [KidTask] { tasks.filter { $0.due == nil } }
-
-    // A real school day's tasks tend to cluster within the same few evening
-    // hours, and a 30°-per-hour dial doesn't leave much room for that — two
-    // tasks even half an hour apart land only 15° apart, well under the
-    // ~28-30° two 50pt tokens need at this radius to not physically overlap.
-    // This sweeps the (already angle-sorted) timed tasks forward, nudging
-    // each one just far enough past the last to clear it — the clock face
-    // and hand underneath are untouched, only where tokens actually sit
-    // changes, and only when they'd otherwise collide.
-    private var timedTaskAngles: [(task: KidTask, angle: Double)] {
-        let minSeparation: Double = 30
-        var placed: [(task: KidTask, angle: Double)] = []
-        for task in timedTasks {
-            let natural = angle(for: task.due) ?? 0
-            let deg = placed.last.map { max(natural, $0.angle + minSeparation) } ?? natural
-            placed.append((task, deg))
+    // One slot per task, evenly spaced around the full 360° starting at 12
+    // o'clock — no longer tied to due time at all, so this never needs to
+    // resolve collisions the way the old clock-position layout did.
+    private var evenlySpacedAngles: [(task: KidTask, angle: Double)] {
+        guard !tasks.isEmpty else { return [] }
+        let step = 360.0 / Double(tasks.count)
+        return tasks.enumerated().map { index, task in
+            (task, Double(index) * step - 90)
         }
-        return placed
     }
 
     // DeviceActivityMonitor only reports usage once a day, so this screen
@@ -73,10 +61,6 @@ struct ScreenRing: View {
 
                 Spacer(minLength: 0)
                 clockView
-                if !anytimeTasks.isEmpty {
-                    anytimeRow
-                        .padding(.top, 18)
-                }
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -98,41 +82,17 @@ struct ScreenRing: View {
         }
     }
 
-    // MARK: - Clock geometry
+    // MARK: - Ring geometry
 
     private let diameter: CGFloat = 240
     private let tokenSize: CGFloat = 50
-
-    // Maps a "h:mm a" due string onto a 12-hour dial, degrees clockwise from
-    // 12 o'clock (top = -90° in standard math convention, so 0° there reads
-    // as 3 o'clock — the -90 offset below corrects for that).
-    private func angle(for due: String?) -> Double? {
-        guard let due else { return nil }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        guard let time = formatter.date(from: due) else { return nil }
-        let comps = Calendar.current.dateComponents([.hour, .minute], from: time)
-        let hour = Double(comps.hour ?? 0).truncatingRemainder(dividingBy: 12)
-        let minute = Double(comps.minute ?? 0)
-        let hourPosition = hour + minute / 60
-        return hourPosition / 12 * 360 - 90
-    }
-
-    private var currentAngle: Double {
-        let comps = Calendar.current.dateComponents([.hour, .minute], from: Date())
-        let hour = Double(comps.hour ?? 0).truncatingRemainder(dividingBy: 12)
-        let minute = Double(comps.minute ?? 0)
-        return (hour + minute / 60) / 12 * 360 - 90
-    }
 
     private var clockView: some View {
         let outer = diameter + tokenSize + 20
         return ZStack {
             dialFace
             progressFill
-            hourTicks
-            currentTimeHand
-            ForEach(Array(timedTaskAngles.enumerated()), id: \.element.task.id) { i, entry in
+            ForEach(Array(evenlySpacedAngles.enumerated()), id: \.element.task.id) { i, entry in
                 taskToken(entry.task, angle: entry.angle, index: i)
             }
             centerContent
@@ -167,32 +127,6 @@ struct ScreenRing: View {
             .rotationEffect(.degrees(-90))
             .animation(.spring(response: 0.6, dampingFraction: 0.8), value: progress)
             .animation(.easeOut(duration: 0.6).delay(0.3), value: appeared)
-    }
-
-    // 12 small tick marks, like an analog clock's hour markers, so the
-    // "this is a clock" read is legible even before any tasks are placed.
-    private var hourTicks: some View {
-        ForEach(0..<12, id: \.self) { hour in
-            Capsule()
-                .fill(KidTheme.inkSoft.opacity(0.35))
-                .frame(width: 3, height: 10)
-                .offset(y: -diameter / 2 + 5)
-                .rotationEffect(.degrees(Double(hour) / 12 * 360))
-        }
-    }
-
-    // Slowly-updating "where we are right now" hand — TimelineView, not a
-    // manual Timer, so it costs nothing while this tab isn't visible.
-    private var currentTimeHand: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { _ in
-            let radians = currentAngle * .pi / 180
-            Capsule()
-                .fill(Color(hex: "DB9A00"))
-                .frame(width: 3, height: diameter / 2 - 16)
-                .offset(y: -(diameter / 4 - 8))
-                .rotationEffect(.radians(radians + .pi / 2))
-                .opacity(appeared ? 0.8 : 0)
-        }
     }
 
     private func taskToken(_ task: KidTask, angle deg: Double, index: Int) -> some View {
@@ -233,35 +167,6 @@ struct ScreenRing: View {
                 Text(doneCount == 0 ? "Let's start!" : "tasks done")
                     .font(Typography.font(12, weight: .semibold))
                     .foregroundStyle(KidTheme.inkSoft)
-            }
-        }
-    }
-
-    // MARK: - Anytime cluster
-
-    // No deadline means no honest clock position — these get their own row
-    // instead of being forced onto the dial somewhere misleading.
-    private var anytimeRow: some View {
-        VStack(spacing: 8) {
-            Text("ANYTIME TODAY")
-                .font(Typography.font(10.5, weight: .bold)).tracking(1)
-                .foregroundStyle(KidTheme.inkSoft)
-            HStack(spacing: 12) {
-                ForEach(anytimeTasks) { task in
-                    ZStack {
-                        Circle()
-                            .fill(task.done ? KidTheme.green : .white)
-                            .overlay(Circle().strokeBorder(task.done ? KidTheme.green : KidTheme.line, lineWidth: 2))
-                            .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
-                        Image(systemName: task.done ? "checkmark" : TabletData.sfIcon(for: task.iconTaskId))
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(task.done ? .white : KidTheme.greenDeep)
-                    }
-                    .frame(width: 40, height: 40)
-                    .scaleEffect(appeared ? 1 : 0.2)
-                    .opacity(appeared ? 1 : 0)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.4), value: appeared)
-                }
             }
         }
     }
