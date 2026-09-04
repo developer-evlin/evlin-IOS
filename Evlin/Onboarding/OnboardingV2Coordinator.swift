@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import FamilyControls
 
 // Local-only v2 onboarding coordinator. Modeled on the real app's
 // OnboardingCoordinator's v2 switch statement (Views/Onboarding/OnboardingCoordinator.swift),
@@ -68,6 +69,12 @@ struct OnboardingV2Coordinator: View {
     @State private var childAvatar: UIImage?
     /// The code this device generated in ChildShowCodeStep.
     @State private var myPairingCode = ""
+    /// Lifted out of ChildLockableHubStep so a kid backing up to an earlier
+    /// step and returning to it doesn't lose what they already picked —
+    /// SwiftUI recreates that step's own @State from scratch each time the
+    /// switch below re-selects its case, since other cases render in
+    /// between.
+    @State private var lockableAppSelection = FamilyActivitySelection()
 
     var body: some View {
         Group {
@@ -165,6 +172,7 @@ struct OnboardingV2Coordinator: View {
 
             case .childLockableHub:
                 ChildLockableHubStep(
+                    selection: $lockableAppSelection,
                     onContinue: { step = .childFamilySharingAsk },
                     onBack: { step = .childNotifications }
                 )
