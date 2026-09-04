@@ -400,12 +400,24 @@ struct ChildLockableHubStep: View {
     var onBack: (() -> Void)? = nil
 
     @State private var showPicker = false
+    // FamilyActivityPicker only ever reports a selection back with real,
+    // granted Screen Time authorization — on the Simulator that's a
+    // platform limitation with no in-app workaround (Screen Time's backing
+    // daemons don't run there), so `selection` can stay empty even after a
+    // kid genuinely opens the picker and taps apps in it. Gating Continue
+    // on having opened the picker at least once, not strictly on a nonzero
+    // selection, means the real picker is always what's shown — never a
+    // substitute — while still not permanently dead-ending here in an
+    // environment that can't report back what was picked.
+    @State private var pickerOpenedOnce = false
 
     private var totalSelected: Int {
         selection.applicationTokens.count
         + selection.categoryTokens.count
         + selection.webDomainTokens.count
     }
+
+    private var canContinue: Bool { totalSelected > 0 || pickerOpenedOnce }
 
     var body: some View {
         OnboardingV2ScreenContainer(
@@ -452,7 +464,7 @@ struct ChildLockableHubStep: View {
                                     .font(Evlin.Typography.font(14, weight: .semibold))
                                     .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
                                 Spacer()
-                                Button("Change") { showPicker = true }
+                                Button("Change") { showPicker = true; pickerOpenedOnce = true }
                                     .font(OnboardingV2Theme.Typography.bodyXS)
                                     .foregroundStyle(kidGreen)
                             }
@@ -462,6 +474,7 @@ struct ChildLockableHubStep: View {
                     if totalSelected == 0 {
                         OnboardingV2PrimaryButton("Choose Apps & Categories", role: .child) {
                             showPicker = true
+                            pickerOpenedOnce = true
                         }
                     }
                 }
@@ -469,7 +482,7 @@ struct ChildLockableHubStep: View {
             },
             footer: {
                 OnboardingV2PrimaryButton("Continue", role: .child, action: onContinue)
-                    .disabled(totalSelected == 0)
+                    .disabled(!canContinue)
             }
         )
         .familyActivityPicker(
