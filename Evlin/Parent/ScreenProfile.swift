@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ScreenProfile: View {
     var childId: String
@@ -52,6 +53,7 @@ struct ScreenProfile: View {
     // child.trialExhausted directly, so dismissing it ("Not now") doesn't
     // immediately reappear from some other body re-evaluation.
     @State private var showTrialPopup = false
+    @State private var showProtectionSetupPopup = false
 
     enum AddMode: String, Identifiable { case menu, task, rule
         var id: String { rawValue }
@@ -235,8 +237,21 @@ struct ScreenProfile: View {
                 )
             }
         }
+        .overlay {
+            if showProtectionSetupPopup {
+                ProtectionSetupNeededCard(
+                    childName: child.name,
+                    onOpenSettings: {
+                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                        UIApplication.shared.open(url)
+                    },
+                    onDismiss: { showProtectionSetupPopup = false }
+                )
+            }
+        }
         .task {
             if child.trialExhausted { showTrialPopup = true }
+            if child.needsProtectionSetup { showProtectionSetupPopup = true }
         }
         .animation(.easeOut(duration: 0.2), value: showUnlockConfirm)
         .animation(.easeOut(duration: 0.2), value: showGrantTimeSheet)
@@ -244,6 +259,7 @@ struct ScreenProfile: View {
         .animation(.easeOut(duration: 0.2), value: showApprovalVerify)
         .animation(.easeOut(duration: 0.25), value: tutorialActive)
         .animation(.easeOut(duration: 0.2), value: showTrialPopup)
+        .animation(.easeOut(duration: 0.2), value: showProtectionSetupPopup)
         .animation(.easeOut(duration: 0.2), value: child.parentApprovalStatus)
         .navigationTitle("\(child.name)'s Space")
         .navigationBarTitleDisplayMode(.inline)
@@ -679,6 +695,62 @@ struct ScreenProfile: View {
         }
     }
 
+}
+
+// MARK: - Protection setup nudge (Leo's "PIN not set" prompt)
+
+// Mirrors the tamper-proofing step from onboarding (ParentSetPasscodeV2Step)
+// — without a device Screen Time passcode or Family Sharing, the kid can
+// just turn Evlin off or delete it, so a profile missing that setup gets
+// nudged here too, not just once during setup.
+private struct ProtectionSetupNeededCard: View {
+    var childName: String
+    var onOpenSettings: () -> Void
+    var onDismiss: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.32)
+                .ignoresSafeArea()
+                .onTapGesture { onDismiss() }
+
+            VStack(spacing: 0) {
+                Spacer()
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "lock.trianglebadge.exclamationmark.fill")
+                            .font(.system(size: 17))
+                            .foregroundStyle(EColor.danger)
+                        Text("Protect Evlin from being removed")
+                            .font(Typography.font(18, weight: .heavy))
+                            .foregroundStyle(EColor.onSurface)
+                    }
+
+                    Text("\(childName) could turn off or delete Evlin at any time. Set a Screen Time passcode on \(childName)'s device, or enroll in Family Sharing, to stop that.")
+                        .font(Typography.font(14, weight: .regular))
+                        .foregroundStyle(EColor.onSurface)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(spacing: 10) {
+                        PrimaryButton(title: "Open Screen Time settings", systemIcon: "hourglass", action: onOpenSettings)
+                        Button("Remind me later", action: onDismiss)
+                            .font(Typography.font(14, weight: .semibold))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(20)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
+                .padding(.horizontal, 20)
+                Spacer()
+            }
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+    }
 }
 
 // MARK: - Trial-exhausted popup (Mia's "Evlin Plan" prompt)

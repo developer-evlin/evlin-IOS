@@ -60,14 +60,21 @@ final class Child: Identifiable, ObservableObject {
     // tracking exists in this prototype, so this is set by hand on one mock
     // child rather than computed.
     @Published var trialExhausted: Bool
+    // Demo-only flag for previewing the "lock this down" nudge that would
+    // show on a profile where the parent never finished the tamper-proofing
+    // step from onboarding (ParentSetPasscodeV2Step) — no real device-level
+    // Screen Time/Family Sharing detection exists in this prototype, so
+    // this is set by hand on one mock child rather than computed.
+    @Published var needsProtectionSetup: Bool
 
-    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, status: ChildStatus, timeLeft: String, timePct: Int, usageTodayMin: Int, tasksDone: Int = 0, tasksTotal: Int = 5, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false) {
+    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, status: ChildStatus, timeLeft: String, timePct: Int, usageTodayMin: Int, tasksDone: Int = 0, tasksTotal: Int = 5, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false) {
         self.id = id; self.name = name; self.age = age; self.dailyLimitMin = dailyLimitMin
         self.color = color; self.status = status; self.timeLeft = timeLeft; self.timePct = timePct
         self.usageTodayMin = usageTodayMin; self.tasksDone = tasksDone; self.tasksTotal = tasksTotal
         self.subtitle = subtitle; self.reflection = reflection; self.downtimeUntil = downtimeUntil
         self.parentApprovalStatus = parentApprovalStatus
         self.trialExhausted = trialExhausted
+        self.needsProtectionSetup = needsProtectionSetup
         // Every kid has at least one paired device in real usage — synthesize
         // a plausible default (their own device, on the app's current min
         // supported iOS) rather than leaving this empty when a specific
@@ -111,6 +118,10 @@ enum FamilyStore {
         // instantly, then Unlock (tasks already done) opens the Grant Time
         // sheet rather than the plain "unlock anyway" confirm.
         Child(id: "ben", name: "Ben", age: 10, dailyLimitMin: 90, color: Color(hex: "D97706"), status: .unlocked, timeLeft: "1h 10m", timePct: 78, usageTodayMin: 20, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · 1h 10m left today"),
+        // Never finished the tamper-proofing step from onboarding — for
+        // previewing the "set a Screen Time PIN or enroll in Family
+        // Sharing" nudge (see ScreenProfile's ProtectionSetupNeededCard).
+        Child(id: "leo", name: "Leo", age: 11, dailyLimitMin: 90, color: Color(hex: "059669"), status: .unlocked, timeLeft: "1h 30m", timePct: 90, usageTodayMin: 9, tasksDone: 2, tasksTotal: 4, subtitle: "Screen Time PIN not set up yet", needsProtectionSetup: true),
     ]
 
     static func child(_ id: String) -> Child { children.first { $0.id == id } ?? children[0] }

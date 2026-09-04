@@ -912,7 +912,7 @@ private struct PasscodeConfirmCard: View {
                 Text("Did you set the Screen Time passcode?")
                     .font(Evlin.Typography.font(17, weight: .heavy))
                     .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
-                Text("This is the passcode under Settings → Screen Time → Lock Screen Time Settings — not an Evlin passcode. \(kidName) can undo everything Evlin does until it's actually set on the device.")
+                Text("Without it set on the device, \(kidName) could bypass everything Evlin does.")
                     .font(Evlin.Typography.font(13.5, weight: .regular))
                     .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
                     .fixedSize(horizontal: false, vertical: true)

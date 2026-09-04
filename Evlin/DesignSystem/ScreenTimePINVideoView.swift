@@ -50,14 +50,34 @@ private struct LoopingVideoView: UIViewRepresentable {
 // a frame of the source) and relies on videoGravity = .resizeAspectFill
 // above to do the cropping.
 struct ScreenTimePINVideoView: View {
+    // Forces LoopingVideoView to fully tear down and recreate its
+    // AVQueuePlayer from scratch — a kid (this step is also shown on the
+    // KID onboarding chain) who finds the video frozen has no other way to
+    // recover it, since AVPlayerLooper has no built-in stall detection or
+    // public "just restart" call.
+    @State private var reloadID = UUID()
+
     var body: some View {
-        LoopingVideoView(resourceName: "screentimePIN")
-            .aspectRatio(391.0 / 449.0, contentMode: .fit)
-            .frame(maxWidth: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(OnboardingV2Theme.Palette.outlineVariant, lineWidth: 1)
-            )
+        ZStack(alignment: .bottomTrailing) {
+            LoopingVideoView(resourceName: "screentimePIN")
+                .id(reloadID)
+                .aspectRatio(391.0 / 449.0, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(OnboardingV2Theme.Palette.outlineVariant, lineWidth: 1)
+                )
+
+            Button { reloadID = UUID() } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.black.opacity(0.45)))
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+        }
     }
 }
