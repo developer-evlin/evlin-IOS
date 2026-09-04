@@ -56,6 +56,15 @@ enum TaskStore {
         if childId == "alex" {
             return []
         }
+        if childId == "ben" {
+            return [
+                ChildTask(id: 1, title: "Make Bed", state: .done, category: "Chore", description: "Straighten the sheets and pillows.", note: "Done first thing.", submittedAt: "7:30 AM", dueLabel: "Today, 8:00 AM", repeats: "sun,mon,tue,wed,thu,fri,sat"),
+                ChildTask(id: 2, title: "Spelling Practice", state: .done, category: "Homework", description: "Write each word 3 times, list on the fridge.", note: "All 10 words done.", submittedAt: "4:05 PM", dueLabel: "Today, 5:00 PM", photoCount: 1, repeats: "mon,tue,wed,thu,fri"),
+                ChildTask(id: 3, title: "Feed the Cat", state: .done, category: "Chore", description: "Fill the food and water bowls.", note: "Fed and watered.", submittedAt: "6:15 PM", dueLabel: "Today, 6:30 PM", repeats: "sun,mon,tue,wed,thu,fri,sat"),
+                ChildTask(id: 4, title: "Read for 20 minutes", state: .done, category: "Reading", description: "Any book, 20+ minutes.", note: "Finished a whole chapter.", submittedAt: "7:40 PM", dueLabel: "Today, 8:00 PM"),
+                ChildTask(id: 5, title: "Practice Piano", state: .done, category: "Chore", description: "15 minutes, scales then one song.", note: "Did scales and Ode to Joy.", submittedAt: "5:30 PM", dueLabel: "Today, 6:00 PM"),
+            ]
+        }
         if childId == "zoe" {
             return [
                 ChildTask(id: 1, title: "Clean Table", state: .done, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),

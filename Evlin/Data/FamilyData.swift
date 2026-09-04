@@ -104,6 +104,13 @@ enum FamilyStore {
         // Empty profile — for previewing the "free trial exhausted" upgrade
         // nudge in place of the normal tasks section.
         Child(id: "mia", name: "Mia", age: 6, dailyLimitMin: 45, color: Color(hex: "14B8A6"), status: .unlocked, timeLeft: "45m", timePct: 100, usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "Free trial ended", trialExhausted: true),
+        // Unlocked with time still left and every task done — unlike Zoe
+        // (same task state, but already locked with the allowance used up),
+        // this one starts in the "everything's fine" state so both
+        // directions of the Lock/Unlock button are easy to try: Lock locks
+        // instantly, then Unlock (tasks already done) opens the Grant Time
+        // sheet rather than the plain "unlock anyway" confirm.
+        Child(id: "ben", name: "Ben", age: 10, dailyLimitMin: 90, color: Color(hex: "D97706"), status: .unlocked, timeLeft: "1h 10m", timePct: 78, usageTodayMin: 20, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · 1h 10m left today"),
     ]
 
     static func child(_ id: String) -> Child { children.first { $0.id == id } ?? children[0] }
