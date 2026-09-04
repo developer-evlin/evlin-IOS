@@ -400,11 +400,24 @@ struct ChildLockableHubStep: View {
     var onBack: (() -> Void)? = nil
 
     @State private var showPicker = false
+    // The real FamilyActivityPicker only registers a selection with actual
+    // granted Screen Time authorization — which the Simulator can't grant
+    // at all (a platform limitation, not something fixable in-app), so it
+    // would open and then just sit there doing nothing on every tap. Mock
+    // apps stand in there instead; a real device still gets the real
+    // system picker below.
+    #if targetEnvironment(simulator)
+    @State private var mockSelectedAppIDs: Set<String> = []
+    #endif
 
     private var totalSelected: Int {
+        #if targetEnvironment(simulator)
+        mockSelectedAppIDs.count
+        #else
         selection.applicationTokens.count
         + selection.categoryTokens.count
         + selection.webDomainTokens.count
+        #endif
     }
 
     var body: some View {
@@ -472,14 +485,89 @@ struct ChildLockableHubStep: View {
                     .disabled(totalSelected == 0)
             }
         )
+        #if targetEnvironment(simulator)
+        .sheet(isPresented: $showPicker) {
+            MockLockableAppPickerSheet(selectedIDs: $mockSelectedAppIDs, onDone: { showPicker = false })
+        }
+        #else
         .familyActivityPicker(
             headerText: "Select apps your parent can manage",
             footerText: "You can change these later.",
             isPresented: $showPicker,
             selection: $selection
         )
+        #endif
     }
 }
+
+#if targetEnvironment(simulator)
+private struct MockLockableApp: Identifiable {
+    var id: String { name }
+    var name: String
+    var icon: String
+    var color: Color
+}
+
+private let mockLockableApps: [MockLockableApp] = [
+    MockLockableApp(name: "TikTok", icon: "music.note", color: .black),
+    MockLockableApp(name: "Instagram", icon: "camera.fill", color: Color(hex: "E1306C")),
+    MockLockableApp(name: "YouTube", icon: "play.rectangle.fill", color: .red),
+    MockLockableApp(name: "Roblox", icon: "gamecontroller.fill", color: Color(hex: "00A2FF")),
+    MockLockableApp(name: "Snapchat", icon: "camera.fill", color: Color(hex: "FFFC00")),
+    MockLockableApp(name: "Discord", icon: "bubble.left.and.bubble.right.fill", color: Color(hex: "5865F2")),
+    MockLockableApp(name: "Messages", icon: "message.fill", color: .green),
+    MockLockableApp(name: "Safari", icon: "safari.fill", color: .blue),
+]
+
+// Simulator-only stand-in for the real FamilyActivityPicker (see the
+// #if targetEnvironment(simulator) branch above) — a plain checklist of
+// mock apps, matching this file's "everything is a local @State flip"
+// design (see the header comment at the top of this file).
+private struct MockLockableAppPickerSheet: View {
+    @Binding var selectedIDs: Set<String>
+    var onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("You can change these later.")
+                        .font(Evlin.Typography.font(12.5, weight: .regular))
+                        .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+                }
+                Section("Apps") {
+                    ForEach(mockLockableApps) { app in
+                        Button {
+                            if selectedIDs.contains(app.id) { selectedIDs.remove(app.id) } else { selectedIDs.insert(app.id) }
+                        } label: {
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(app.color)
+                                    .frame(width: 36, height: 36)
+                                    .overlay(Image(systemName: app.icon).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white))
+                                Text(app.name)
+                                    .font(Evlin.Typography.font(15.5, weight: .semibold))
+                                    .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
+                                Spacer()
+                                Image(systemName: selectedIDs.contains(app.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 21))
+                                    .foregroundStyle(selectedIDs.contains(app.id) ? kidGreen : OnboardingV2Theme.Palette.outline)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("Select apps to manage")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done", action: onDone) }
+            }
+        }
+    }
+}
+#endif
 
 // MARK: - 12b · Family Sharing check
 
