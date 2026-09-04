@@ -143,6 +143,26 @@ struct ScreenProfile: View {
                 )
             }
         }
+        // Same floating-card-over-scrim language as UnlockConfirmCard —
+        // was a native .sheet (a full-width bottom sheet with no visible
+        // dimmed backdrop), which read as a different, heavier kind of
+        // screen than this app's other confirm moments.
+        .overlay {
+            if showGrantTimeSheet {
+                GrantExtraTimeSheet(
+                    childName: child.name,
+                    dailyLimitMin: child.dailyLimitMin,
+                    usageTodayMin: child.usageTodayMin,
+                    onGrant: { minutes in
+                        child.status = .unlocked
+                        child.timeLeft = formatMinutes(minutes)
+                        child.timePct = min(100, Int(Double(minutes) / Double(max(child.dailyLimitMin, 1)) * 100))
+                        showGrantTimeSheet = false
+                    },
+                    onCancel: { showGrantTimeSheet = false }
+                )
+            }
+        }
         // A floating card over a dimmed scrim, matching UnlockConfirmCard
         // above — was an inline banner sitting in the scroll content, which
         // undersold how time-sensitive it is (a kid is blocked, waiting on
@@ -193,6 +213,7 @@ struct ScreenProfile: View {
             if child.trialExhausted { showTrialPopup = true }
         }
         .animation(.easeOut(duration: 0.2), value: showUnlockConfirm)
+        .animation(.easeOut(duration: 0.2), value: showGrantTimeSheet)
         .animation(.easeOut(duration: 0.2), value: showApprovalVerify)
         .animation(.easeOut(duration: 0.25), value: tutorialActive)
         .animation(.easeOut(duration: 0.2), value: showTrialPopup)
@@ -396,20 +417,6 @@ struct ScreenProfile: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.top, 16)
-                    .sheet(isPresented: $showGrantTimeSheet) {
-                        GrantExtraTimeSheet(
-                            childName: child.name,
-                            dailyLimitMin: child.dailyLimitMin,
-                            usageTodayMin: child.usageTodayMin,
-                            onGrant: { minutes in
-                                child.status = .unlocked
-                                child.timeLeft = formatMinutes(minutes)
-                                child.timePct = min(100, Int(Double(minutes) / Double(max(child.dailyLimitMin, 1)) * 100))
-                                showGrantTimeSheet = false
-                            },
-                            onCancel: { showGrantTimeSheet = false }
-                        )
-                    }
                 }
             }
         }
@@ -774,12 +781,22 @@ private struct GrantExtraTimeSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+        ZStack {
+            Color.black.opacity(0.32)
+                .ignoresSafeArea()
+                .onTapGesture { onCancel() }
+
+            VStack(spacing: 0) {
+                Spacer()
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Give \(childName) more time?")
+                        .font(Typography.font(18, weight: .heavy))
+                        .foregroundStyle(EColor.onSurface)
+
                     Text("\(childName) finished all their tasks today but has used the full \(formatMinutes(dailyLimitMin)) allowance.")
                         .font(Typography.font(14, weight: .medium))
                         .foregroundStyle(EColor.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: alreadyOverTwoHours ? "exclamationmark.octagon.fill" : "clock.fill")
@@ -799,7 +816,7 @@ private struct GrantExtraTimeSheet: View {
                     .background(EColor.surfaceContainerLowest)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 12) {
                         Text("HOW MUCH EXTRA TIME?").font(Typography.font(11, weight: .bold)).foregroundStyle(EColor.onSurfaceVariant)
                         HStack(spacing: 8) {
                             ForEach(presetOptions, id: \.self) { minutes in
@@ -834,9 +851,18 @@ private struct GrantExtraTimeSheet: View {
                             .buttonStyle(.plain)
                         }
 
+                        // Its own labeled slot, not just tucked under the
+                        // chip row — a value picker reads as a bigger
+                        // decision than a preset tap, so it gets a beat of
+                        // separation instead of sitting flush against the
+                        // chips.
                         if isCustomActive {
-                            customRuler
-                                .transition(.opacity.combined(with: .move(edge: .top)))
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("SCROLL TO SET").font(Typography.font(10, weight: .bold)).tracking(0.6).foregroundStyle(EColor.onSurfaceVariant)
+                                customRuler
+                            }
+                            .padding(.top, 4)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
                     .animation(.easeOut(duration: 0.2), value: isCustomActive)
@@ -850,21 +876,37 @@ private struct GrantExtraTimeSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .animation(.easeOut(duration: 0.15), value: selected)
 
-                    PrimaryButton(title: "Give \(formatMinutes(selected)) more") { onGrant(selected) }
-
-                    Button("Cancel", action: onCancel)
-                        .font(Typography.font(14, weight: .semibold))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
+                    VStack(spacing: 10) {
+                        PrimaryButton(title: "Give \(formatMinutes(selected)) more") { onGrant(selected) }
+                        cardButton("Cancel", tint: EColor.onSurfaceVariant, action: onCancel)
+                    }
+                    .padding(.top, 4)
                 }
                 .padding(20)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 30)
             }
-            .navigationTitle("Give \(childName) more time?")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Close", action: onCancel) } }
         }
-        .presentationDetents([.medium])
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    // Matches UnlockConfirmCard's own (private, so not shared directly) —
+    // same white bordered pill for the secondary action on both cards.
+    private func cardButton(_ label: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(Typography.font(15, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(.white)
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(EColor.outlineVariant, lineWidth: 1.5))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
     }
 }
 
