@@ -682,37 +682,51 @@ private struct ZoomablePhotoPage: View {
         isZoomed = false
     }
 
+    private var magnify: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                scale = min(maxScale, max(1, lastScale * value.magnification))
+                isZoomed = scale > 1.01
+            }
+            .onEnded { _ in
+                lastScale = scale
+                if scale <= 1.01 { withAnimation(.easeOut(duration: 0.2)) { resetZoom() } }
+            }
+    }
+
+    private var pan: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                offset = CGSize(
+                    width: lastOffset.width + value.translation.width,
+                    height: lastOffset.height + value.translation.height
+                )
+            }
+            .onEnded { _ in lastOffset = offset }
+    }
+
     var body: some View {
-        MockHomeworkPhoto(pageNumber: pageNumber, detailed: true)
+        let photo = MockHomeworkPhoto(pageNumber: pageNumber, detailed: true)
             .aspectRatio(3.0 / 4.0, contentMode: .fit)
             .padding(.horizontal, 28)
             .scaleEffect(scale)
             .offset(offset)
-            .simultaneousGesture(
-                MagnifyGesture()
-                    .onChanged { value in
-                        scale = min(maxScale, max(1, lastScale * value.magnification))
-                        isZoomed = scale > 1.01
-                    }
-                    .onEnded { _ in
-                        lastScale = scale
-                        if scale <= 1.01 { withAnimation(.easeOut(duration: 0.2)) { resetZoom() } }
-                    }
-                    .simultaneously(
-                        with: DragGesture()
-                            .onChanged { value in
-                                guard scale > 1 else { return }
-                                offset = CGSize(
-                                    width: lastOffset.width + value.translation.width,
-                                    height: lastOffset.height + value.translation.height
-                                )
-                            }
-                            .onEnded { _ in
-                                guard scale > 1 else { return }
-                                lastOffset = offset
-                            }
-                    )
-            )
+
+        // The pan gesture is only attached at all while actually zoomed
+        // in — a `guard scale > 1` inside its closures wasn't enough:
+        // even a no-op DragGesture recognizer still competes for the same
+        // single-finger touch the pager wants for swipe-between-photos,
+        // which is what broke normal swiping after zoom was added. With
+        // no drag recognizer present at 1x at all, there's nothing left to
+        // compete with the pager. Magnify alone (2-finger) never conflicts
+        // with a 1-finger swipe, so it stays attached either way.
+        Group {
+            if isZoomed {
+                photo.simultaneousGesture(magnify.simultaneously(with: pan))
+            } else {
+                photo.simultaneousGesture(magnify)
+            }
+        }
             .onTapGesture(count: 2) {
                 withAnimation(.easeOut(duration: 0.25)) {
                     if scale > 1 {
