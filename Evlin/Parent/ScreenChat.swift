@@ -174,12 +174,11 @@ private struct BlockAppCard: View {
     @State private var selectedApps: Set<UUID> = []
     @State private var selectedCategories: Set<UUID> = []
     @State private var submitted = false
-    // Only the top few show by default — the full 8-app/4-category catalog
-    // made this card tall enough to need scrolling inside a chat bubble
-    // before a parent could even see the pick button. Search (which
-    // already existed) or "Show all" reach the rest.
-    @State private var showAllApps = false
-    @State private var showAllCategories = false
+    // Only the top few ever show, full stop — the full 8-app/4-category
+    // catalog made this card tall enough to need scrolling inside a chat
+    // bubble before a parent could even see the pick button. Search (typing
+    // a name) is the only way to reach anything past the top 3, rather than
+    // also offering a "show all" expand — one clear path instead of two.
     private let topCount = 3
 
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -195,11 +194,11 @@ private struct BlockAppCard: View {
     }
 
     private var visibleApps: [MockApp] {
-        (isSearching || showAllApps) ? filteredApps : Array(filteredApps.prefix(topCount))
+        isSearching ? filteredApps : Array(filteredApps.prefix(topCount))
     }
 
     private var visibleCategories: [MockCategory] {
-        (isSearching || showAllCategories) ? filteredCategories : Array(filteredCategories.prefix(topCount))
+        isSearching ? filteredCategories : Array(filteredCategories.prefix(topCount))
     }
 
     private var totalSelected: Int { selectedApps.count + selectedCategories.count }
@@ -243,10 +242,8 @@ private struct BlockAppCard: View {
                             selected: selectedApps.contains(app.id)
                         ) { toggleApp(app) }
                     }
-                    if !isSearching, !showAllApps, filteredApps.count > topCount {
-                        showMoreButton(count: filteredApps.count - topCount, noun: "app") {
-                            withAnimation(.easeOut(duration: 0.15)) { showAllApps = true }
-                        }
+                    if !isSearching, filteredApps.count > topCount {
+                        searchHint(noun: "app")
                     }
                 }
             } else {
@@ -257,10 +254,8 @@ private struct BlockAppCard: View {
                             selected: selectedCategories.contains(cat.id)
                         ) { toggleCategory(cat) }
                     }
-                    if !isSearching, !showAllCategories, filteredCategories.count > topCount {
-                        showMoreButton(count: filteredCategories.count - topCount, noun: "category") {
-                            withAnimation(.easeOut(duration: 0.15)) { showAllCategories = true }
-                        }
+                    if !isSearching, filteredCategories.count > topCount {
+                        searchHint(noun: "category")
                     }
                 }
             }
@@ -334,18 +329,17 @@ private struct BlockAppCard: View {
         .buttonStyle(.plain)
     }
 
-    private func showMoreButton(count: Int, noun: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text("Show \(count) more \(noun)\(count == 1 ? "" : "s")")
-                    .font(Typography.font(13, weight: .semibold))
-                Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(EColor.primary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 40)
+    // Not a button — search above is the only way past the top 3, so this
+    // just tells a parent that path exists instead of offering a second one.
+    private func searchHint(noun: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
+            Text("Don't see it? Search for the \(noun) above.")
+                .font(Typography.font(12.5, weight: .medium))
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(EColor.onSurfaceVariant)
+        .frame(maxWidth: .infinity)
+        .frame(height: 34)
     }
 }
 
