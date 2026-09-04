@@ -58,6 +58,34 @@ struct TaskDetailView: View {
                             .foregroundStyle(KidTheme.inkSoft)
                             .padding(.top, 16)
 
+                        // The list card (ScreenTabletHome) already shows a
+                        // one-line preview of this, but that's easy to miss
+                        // on the way in — showing the full note again right
+                        // where the kid is about to act on it means they
+                        // don't have to remember or go back to reread it.
+                        if task.redoRequested {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label("Your parent asked for a redo", systemImage: "arrow.counterclockwise")
+                                    .font(Typography.font(14, weight: .heavy))
+                                    .foregroundStyle(Color(hex: "C2410C"))
+                                if let redoNote = task.redoNote, !redoNote.isEmpty {
+                                    Text(redoNote)
+                                        .font(Typography.font(14, weight: .regular))
+                                        .foregroundStyle(Color(hex: "9A3412"))
+                                }
+                                if task.redoHasVoiceNote {
+                                    Label("They also left a voice note", systemImage: "waveform")
+                                        .font(Typography.font(12.5, weight: .medium))
+                                        .foregroundStyle(Color(hex: "9A3412"))
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(Color(hex: "FFEDD5"))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .padding(.top, 16)
+                        }
+
                         if !panels.isEmpty {
                             Button { showComic = true } label: {
                                 HStack(spacing: 12) {
@@ -218,7 +246,7 @@ struct TaskDetailView: View {
                                     .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
                             }
                             .padding(22)
-                            .background(Color(hex: "FFF3E0"))
+                            .background(Color(hex: "DBEAFE"))
                             .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
                             .clipShape(RoundedRectangle(cornerRadius: 20))
                         } else {

@@ -21,13 +21,26 @@ struct ScreenRing: View {
     private var doneCount: Int { tasks.filter(\.done).count }
     private var allDone: Bool { !tasks.isEmpty && doneCount == tasks.count }
 
+    // Completed tasks first (each group keeping its own original relative
+    // order — Array.sorted is stable) — so evenlySpacedAngles below always
+    // gives them the first N slots starting at 12 o'clock. That way the
+    // progress fill's arc always ends exactly at the boundary between the
+    // completed cluster and what's left, instead of a proportional sweep
+    // that doesn't actually land on any particular token. A task's token
+    // slides to its new slot when it flips done (same animation that
+    // already reacts to task.done below), which reads as it "joining" the
+    // completed side rather than just changing color in place.
+    private var orderedTasks: [KidTask] {
+        tasks.sorted { $0.done && !$1.done }
+    }
+
     // One slot per task, evenly spaced around the full 360° starting at 12
     // o'clock — no longer tied to due time at all, so this never needs to
     // resolve collisions the way the old clock-position layout did.
     private var evenlySpacedAngles: [(task: KidTask, angle: Double)] {
         guard !tasks.isEmpty else { return [] }
         let step = 360.0 / Double(tasks.count)
-        return tasks.enumerated().map { index, task in
+        return orderedTasks.enumerated().map { index, task in
             (task, Double(index) * step - 90)
         }
     }
@@ -133,16 +146,33 @@ struct ScreenRing: View {
         let radians = deg * .pi / 180
         let resting = CGSize(width: cos(radians) * diameter / 2, height: sin(radians) * diameter / 2)
 
-        return ZStack {
-            Circle()
-                .fill(task.done ? KidTheme.green : .white)
-                .overlay(Circle().strokeBorder(task.done ? KidTheme.green : KidTheme.line, lineWidth: 2))
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-            Image(systemName: task.done ? "checkmark" : TabletData.sfIcon(for: task.iconTaskId))
-                .font(.system(size: 19, weight: .bold))
-                .foregroundStyle(task.done ? .white : KidTheme.greenDeep)
+        return VStack(spacing: 4) {
+            ZStack {
+                Circle()
+                    .fill(task.done ? KidTheme.green : .white)
+                    .overlay(Circle().strokeBorder(task.done ? KidTheme.green : KidTheme.line, lineWidth: 2))
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+                Image(systemName: task.done ? "checkmark" : TabletData.sfIcon(for: task.iconTaskId))
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(task.done ? .white : KidTheme.greenDeep)
+            }
+            .frame(width: tokenSize, height: tokenSize)
+
+            // Evenly-spaced position no longer says anything about when a
+            // task is due, so the due time rides along as its own small
+            // label instead — restores that at-a-glance info without going
+            // back to a layout where it was implied by placement alone.
+            if let due = task.due {
+                Text(due)
+                    .font(Typography.font(9.5, weight: .bold))
+                    .foregroundStyle(KidTheme.inkSoft)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(.white.opacity(0.8))
+                    .clipShape(Capsule())
+            }
         }
-        .frame(width: tokenSize, height: tokenSize)
         .offset(appeared ? resting : .zero)
         .scaleEffect(appeared ? 1 : 0.2)
         .opacity(appeared ? 1 : 0)
@@ -151,8 +181,11 @@ struct ScreenRing: View {
             value: appeared
         )
         // Redone/completed after the initial assembly still gets its own
-        // little pop rather than waiting on the (already-fired) stagger.
+        // little pop rather than waiting on the (already-fired) stagger —
+        // also what animates a token sliding into its new slot when
+        // orderedTasks regroups it into the completed cluster.
         .animation(.spring(response: 0.4, dampingFraction: 0.7), value: task.done)
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: deg)
     }
 
     private var centerContent: some View {

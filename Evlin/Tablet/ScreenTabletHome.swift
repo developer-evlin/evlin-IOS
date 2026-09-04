@@ -19,13 +19,22 @@ struct ScreenTabletHome: View {
     // too rather than staying untouched.
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var isRegular: Bool { hSizeClass == .regular }
-    private var contentMaxWidth: CGFloat? { isRegular ? 640 : nil }
-    private var taskIconSize: CGFloat { isRegular ? 60 : 54 }
-    private var taskIconFont: CGFloat { isRegular ? 24 : 22 }
-    private var taskTitleFont: CGFloat { isRegular ? 19 : 17 }
-    private var taskMetaFont: CGFloat { isRegular ? 13.5 : 13 }
-    private var taskCheckSize: CGFloat { isRegular ? 34 : 30 }
-    private var taskCardPadding: CGFloat { isRegular ? 18 : 16 }
+    // The first pass at this only bumped these a few points over the phone
+    // values, which on an actual iPad still read as a stretched phone list
+    // floating in a wide margin rather than a layout actually sized for
+    // the bigger canvas — these are now a real step up, not a nudge.
+    private var contentMaxWidth: CGFloat? { isRegular ? 760 : nil }
+    private var taskIconSize: CGFloat { isRegular ? 72 : 54 }
+    private var taskIconFont: CGFloat { isRegular ? 28 : 22 }
+    private var taskTitleFont: CGFloat { isRegular ? 21 : 17 }
+    private var taskMetaFont: CGFloat { isRegular ? 15 : 13 }
+    private var taskCheckSize: CGFloat { isRegular ? 38 : 30 }
+    private var taskCardPadding: CGFloat { isRegular ? 22 : 16 }
+    private var taskCardSpacing: CGFloat { isRegular ? 18 : 12 }
+    private var greetingFont: CGFloat { isRegular ? 16 : 14 }
+    private var nameFont: CGFloat { isRegular ? 36 : 30 }
+    private var sectionTitleFont: CGFloat { isRegular ? 24 : 20 }
+    private var sectionCountFont: CGFloat { isRegular ? 15 : 13.5 }
     private var nextTaskId: String? { tasks.first { !$0.done }?.id }
     private var doneCount: Int { tasks.filter(\.done).count }
 
@@ -38,19 +47,19 @@ struct ScreenTabletHome: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Good \(greeting)").font(Typography.font(14, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
-                    Text("Hey \(TabletData.child.name)! 👋").font(Typography.display(30, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                    Text("Good \(greeting)").font(Typography.font(greetingFont, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
+                    Text("Hey \(TabletData.child.name)! 👋").font(Typography.display(nameFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
 
                     HStack {
-                        Text("Today").font(Typography.display(20, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                        Text("Today").font(Typography.display(sectionTitleFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
                         Spacer()
                         Text("\(doneCount) of \(tasks.count) done")
-                            .font(Typography.font(13.5, weight: .heavy))
+                            .font(Typography.font(sectionCountFont, weight: .heavy))
                             .foregroundStyle(doneCount == tasks.count ? KidTheme.greenDeep : KidTheme.inkSoft)
                     }
                     .padding(.top, 22).padding(.bottom, 13)
 
-                    VStack(spacing: isRegular ? 16 : 12) {
+                    VStack(spacing: taskCardSpacing) {
                         ForEach($tasks) { $task in
                             Button { selectedTask = task } label: {
                                 taskCard(task, isNext: task.id == nextTaskId)
@@ -117,12 +126,13 @@ struct ScreenTabletHome: View {
         return h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"
     }
 
-    // Amber "waiting on a parent to check it" — a different color from the
-    // bypass lavender so a kid can tell "I asked to skip this" apart from
-    // "I finished this, they just haven't looked yet." Same amber the
-    // parent side uses for its own guideline warnings (ScreenProfile).
-    private let approvalAmberTint = Color(hex: "FFF3E0")
-    private let approvalAmberText = Color(hex: "B26A00")
+    // Blue "waiting on a parent to check it" — distinct from both the
+    // bypass lavender (so a kid can tell "I asked to skip this" apart from
+    // "I finished this, they just haven't looked yet") and the redo orange
+    // right below, which read too close to this state's original amber to
+    // tell apart at a glance.
+    private let approvalBlueTint = Color(hex: "DBEAFE")
+    private let approvalBlueText = Color(hex: "2563EB")
     // A parent asking for a redo instead of approving, rather than the
     // bright orange used for e.g. KidAccent — a redo isn't an alarm, it's
     // "almost there, one more pass."
@@ -138,10 +148,10 @@ struct ScreenTabletHome: View {
         // rather than the row just looking like nothing ever happened.
         let doneLook = task.done && !needsRedo && !awaitingApproval
 
-        let chipColor = needsRedo ? redoOrangeTint : (awaitingBypass ? KidTheme.lavender : (awaitingApproval ? approvalAmberTint : KidTheme.cream))
-        let chipIconColor = needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalAmberText : KidTheme.greenDeep))
+        let chipColor = needsRedo ? redoOrangeTint : (awaitingBypass ? KidTheme.lavender : (awaitingApproval ? approvalBlueTint : KidTheme.cream))
+        let chipIconColor = needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalBlueText : KidTheme.greenDeep))
         let chipIcon = awaitingBypass ? "hand.raised.fill" : (awaitingApproval ? "hourglass" : TabletData.sfIcon(for: task.iconTaskId))
-        let ringColor = doneLook ? KidTheme.green : (needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalAmberText : (isNext ? KidTheme.green : Color(hex: "D5DED8")))))
+        let ringColor = doneLook ? KidTheme.green : (needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalBlueText : (isNext ? KidTheme.green : Color(hex: "D5DED8")))))
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 16) {
@@ -174,7 +184,7 @@ struct ScreenTabletHome: View {
                             .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.lavenderText)
                     } else if awaitingApproval {
                         Label("Waiting for your parent to check it", systemImage: "hourglass")
-                            .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(approvalAmberText)
+                            .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(approvalBlueText)
                     } else if !task.done {
                         if let due = task.due {
                             Label("Due \(due)", systemImage: "clock")
@@ -194,7 +204,7 @@ struct ScreenTabletHome: View {
                         if doneLook {
                             Image(systemName: "checkmark").font(.system(size: taskCheckSize * 0.46, weight: .bold)).foregroundStyle(.white)
                         } else if awaitingApproval {
-                            Image(systemName: "hourglass").font(.system(size: taskCheckSize * 0.4, weight: .bold)).foregroundStyle(approvalAmberText)
+                            Image(systemName: "hourglass").font(.system(size: taskCheckSize * 0.4, weight: .bold)).foregroundStyle(approvalBlueText)
                         }
                     }
             }
@@ -213,8 +223,8 @@ struct ScreenTabletHome: View {
             }
         }
         .padding(taskCardPadding)
-        .background(needsRedo ? KidTheme.cream : (awaitingBypass ? KidTheme.lavender.opacity(0.5) : (awaitingApproval ? approvalAmberTint.opacity(0.6) : (isNext && !task.done ? KidTheme.greenTint : KidTheme.cream))))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(needsRedo ? redoOrangeText.opacity(0.4) : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalAmberText.opacity(0.4) : (isNext && !task.done ? KidTheme.green : KidTheme.line)))))
+        .background(needsRedo ? KidTheme.cream : (awaitingBypass ? KidTheme.lavender.opacity(0.5) : (awaitingApproval ? approvalBlueTint.opacity(0.6) : (isNext && !task.done ? KidTheme.greenTint : KidTheme.cream))))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(needsRedo ? redoOrangeText.opacity(0.4) : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalBlueText.opacity(0.4) : (isNext && !task.done ? KidTheme.green : KidTheme.line)))))
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .opacity(doneLook ? 0.65 : 1)
     }
