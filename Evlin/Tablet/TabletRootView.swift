@@ -4,6 +4,11 @@ struct TabletRootView: View {
     var onSwitchMode: () -> Void
     @State private var tab = 0
     @State private var tasks = TabletData.tasks
+    // Lifted up from ScreenTabletHome so the Ring tab's tokens can open the
+    // same task detail flow — both tabs share this one `tasks` array, so
+    // completing/redoing a task from either place needs to land in the
+    // same source of truth rather than each tab keeping its own copy.
+    @State private var selectedTask: KidTask?
 
     // Screen-time numbers used to live only in the immutable TabletData.child
     // snapshot — lifted into @State here so it can actually mutate.
@@ -40,10 +45,10 @@ struct TabletRootView: View {
                 // gear icon in this tab's own toolbar (see ScreenTabletHome)
                 // instead of being mistaken for real settings.
                 TabView(selection: $tab) {
-                    ScreenTabletHome(tasks: $tasks, onSwitchMode: onSwitchMode)
+                    ScreenTabletHome(tasks: $tasks, onSwitchMode: onSwitchMode, onSelectTask: { selectedTask = $0 })
                         .tabItem { Label("Task", systemImage: "checkmark.circle.fill") }
                         .tag(0)
-                    ScreenRing(tasks: tasks)
+                    ScreenRing(tasks: tasks, onSelectTask: { selectedTask = $0 })
                         .tabItem { Label("Ring", systemImage: "chart.pie.fill") }
                         .tag(1)
                     ScreenTabletLibrary()
@@ -86,6 +91,30 @@ struct TabletRootView: View {
             } else if newValue < tasks.count {
                 didCelebrateThisCompletion = false
             }
+        }
+        .fullScreenCover(item: $selectedTask) { task in
+            TaskDetailView(task: task, onComplete: { photoCount, note in
+                if let i = tasks.firstIndex(where: { $0.id == task.id }) {
+                    tasks[i].done = true
+                    tasks[i].submittedPhotoCount = photoCount
+                    tasks[i].submissionNote = note
+                    // Submitting means "a parent hasn't looked at it yet,"
+                    // not "fully approved" — see KidTask.pendingApproval.
+                    // Clearing redoRequested too: a resubmission after a
+                    // redo ask puts the task right back into the review
+                    // queue instead of staying stuck showing the old note.
+                    tasks[i].pendingApproval = true
+                    tasks[i].approved = false
+                    tasks[i].redoRequested = false
+                }
+                selectedTask = nil
+            }, onRequestBypass: { reason, hasVoice in
+                if let i = tasks.firstIndex(where: { $0.id == task.id }) {
+                    tasks[i].bypassRequested = true
+                    tasks[i].bypassNote = reason.isEmpty ? nil : reason
+                    tasks[i].bypassHasVoiceNote = hasVoice
+                }
+            })
         }
     }
 }

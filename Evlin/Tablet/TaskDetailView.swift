@@ -67,16 +67,16 @@ struct TaskDetailView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Label("Your parent asked for a redo", systemImage: "arrow.counterclockwise")
                                     .font(Typography.font(14, weight: .heavy))
-                                    .foregroundStyle(Color(hex: "C2410C"))
+                                    .foregroundStyle(Color(hex: "EA580C"))
                                 if let redoNote = task.redoNote, !redoNote.isEmpty {
                                     Text(redoNote)
                                         .font(Typography.font(14, weight: .regular))
-                                        .foregroundStyle(Color(hex: "9A3412"))
+                                        .foregroundStyle(KidTheme.ink)
                                 }
                                 if task.redoHasVoiceNote {
                                     Label("They also left a voice note", systemImage: "waveform")
-                                        .font(Typography.font(12.5, weight: .medium))
-                                        .foregroundStyle(Color(hex: "9A3412"))
+                                        .font(Typography.font(12.5, weight: .bold))
+                                        .foregroundStyle(Color(hex: "EA580C"))
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)

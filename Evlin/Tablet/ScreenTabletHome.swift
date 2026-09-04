@@ -3,7 +3,11 @@ import SwiftUI
 struct ScreenTabletHome: View {
     @Binding var tasks: [KidTask]
     var onSwitchMode: () -> Void
-    @State private var selectedTask: KidTask?
+    // Owned by TabletRootView (which presents the shared TaskDetailView
+    // cover) — the Ring tab needs to open the same detail flow for the
+    // same shared `tasks` array, so this can't be this screen's own local
+    // @State any more.
+    var onSelectTask: (KidTask) -> Void
     // Settings/Parent Controls used to be its own bottom tab — its only
     // content was this one request, so it's a toolbar icon here instead,
     // out of the kid's main navigation entirely (see TabletRootView).
@@ -61,7 +65,7 @@ struct ScreenTabletHome: View {
 
                     VStack(spacing: taskCardSpacing) {
                         ForEach($tasks) { $task in
-                            Button { selectedTask = task } label: {
+                            Button { onSelectTask(task) } label: {
                                 taskCard(task, isNext: task.id == nextTaskId)
                             }
                             .buttonStyle(.plain)
@@ -95,30 +99,6 @@ struct ScreenTabletHome: View {
         .sheet(isPresented: $showSettings) {
             ScreenTabletSettings(onSwitchMode: onSwitchMode)
         }
-        .fullScreenCover(item: $selectedTask) { task in
-            TaskDetailView(task: task, onComplete: { photoCount, note in
-                if let i = tasks.firstIndex(where: { $0.id == task.id }) {
-                    tasks[i].done = true
-                    tasks[i].submittedPhotoCount = photoCount
-                    tasks[i].submissionNote = note
-                    // Submitting means "a parent hasn't looked at it yet,"
-                    // not "fully approved" — see KidTask.pendingApproval.
-                    // Clearing redoRequested too: a resubmission after a
-                    // redo ask puts the task right back into the review
-                    // queue instead of staying stuck showing the old note.
-                    tasks[i].pendingApproval = true
-                    tasks[i].approved = false
-                    tasks[i].redoRequested = false
-                }
-                selectedTask = nil
-            }, onRequestBypass: { reason, hasVoice in
-                if let i = tasks.firstIndex(where: { $0.id == task.id }) {
-                    tasks[i].bypassRequested = true
-                    tasks[i].bypassNote = reason.isEmpty ? nil : reason
-                    tasks[i].bypassHasVoiceNote = hasVoice
-                }
-            })
-        }
     }
 
     private var greeting: String {
@@ -133,11 +113,14 @@ struct ScreenTabletHome: View {
     // tell apart at a glance.
     private let approvalBlueTint = Color(hex: "DBEAFE")
     private let approvalBlueText = Color(hex: "2563EB")
-    // A parent asking for a redo instead of approving, rather than the
-    // bright orange used for e.g. KidAccent — a redo isn't an alarm, it's
-    // "almost there, one more pass."
+    // A parent asking for a redo instead of approving — "almost there, one
+    // more pass," not an alarm. A genuinely bright, warm orange (close to
+    // KidAccent's own) instead of the muted rust/brown this used to be,
+    // which read as too serious/adult for a kid audience — kept just a
+    // shade deeper than KidAccent's brightest orange so the small label
+    // text stays legible on a light background.
     private let redoOrangeTint = Color(hex: "FFEDD5")
-    private let redoOrangeText = Color(hex: "C2410C")
+    private let redoOrangeText = Color(hex: "EA580C")
 
     private func taskCard(_ task: KidTask, isNext: Bool) -> some View {
         let awaitingBypass = task.bypassRequested && !task.done
@@ -209,21 +192,28 @@ struct ScreenTabletHome: View {
                     }
             }
 
+            // A colored accent bar instead of its own nested box — the
+            // note reads as the parent's own words sitting inside this
+            // card, not as a separate sticker glued underneath it (the
+            // card's own background is tinted the same orange below).
             if needsRedo, let note = task.redoNote, !note.isEmpty {
-                HStack(alignment: .top, spacing: 6) {
-                    if task.redoHasVoiceNote {
-                        Image(systemName: "waveform").font(.system(size: 11, weight: .bold))
+                HStack(alignment: .top, spacing: 10) {
+                    Capsule().fill(redoOrangeText).frame(width: 3)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(note)
+                            .font(Typography.font(taskMetaFont, weight: .medium))
+                            .foregroundStyle(KidTheme.ink)
+                        if task.redoHasVoiceNote {
+                            Label("Voice note", systemImage: "waveform")
+                                .font(Typography.font(taskMetaFont - 1, weight: .bold))
+                                .foregroundStyle(redoOrangeText)
+                        }
                     }
-                    Text(note).font(Typography.font(taskMetaFont, weight: .regular))
                 }
-                .foregroundStyle(redoOrangeText)
-                .padding(10)
-                .background(redoOrangeTint)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
             }
         }
         .padding(taskCardPadding)
-        .background(needsRedo ? KidTheme.cream : (awaitingBypass ? KidTheme.lavender.opacity(0.5) : (awaitingApproval ? approvalBlueTint.opacity(0.6) : (isNext && !task.done ? KidTheme.greenTint : KidTheme.cream))))
+        .background(needsRedo ? redoOrangeTint.opacity(0.55) : (awaitingBypass ? KidTheme.lavender.opacity(0.5) : (awaitingApproval ? approvalBlueTint.opacity(0.6) : (isNext && !task.done ? KidTheme.greenTint : KidTheme.cream))))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(needsRedo ? redoOrangeText.opacity(0.4) : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalBlueText.opacity(0.4) : (isNext && !task.done ? KidTheme.green : KidTheme.line)))))
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .opacity(doneLook ? 0.65 : 1)

@@ -15,6 +15,7 @@ import SwiftUI
 // "assembles itself" rather than just being there.
 struct ScreenRing: View {
     var tasks: [KidTask]
+    var onSelectTask: (KidTask) -> Void
 
     @State private var appeared = false
 
@@ -146,33 +147,36 @@ struct ScreenRing: View {
         let radians = deg * .pi / 180
         let resting = CGSize(width: cos(radians) * diameter / 2, height: sin(radians) * diameter / 2)
 
-        return VStack(spacing: 4) {
-            ZStack {
-                Circle()
-                    .fill(task.done ? KidTheme.green : .white)
-                    .overlay(Circle().strokeBorder(task.done ? KidTheme.green : KidTheme.line, lineWidth: 2))
-                    .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-                Image(systemName: task.done ? "checkmark" : TabletData.sfIcon(for: task.iconTaskId))
-                    .font(.system(size: 19, weight: .bold))
-                    .foregroundStyle(task.done ? .white : KidTheme.greenDeep)
-            }
-            .frame(width: tokenSize, height: tokenSize)
+        return Button { onSelectTask(task) } label: {
+            VStack(spacing: 4) {
+                ZStack {
+                    Circle()
+                        .fill(task.done ? KidTheme.green : .white)
+                        .overlay(Circle().strokeBorder(task.done ? KidTheme.green : KidTheme.line, lineWidth: 2))
+                        .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+                    Image(systemName: task.done ? "checkmark" : TabletData.sfIcon(for: task.iconTaskId))
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(task.done ? .white : KidTheme.greenDeep)
+                }
+                .frame(width: tokenSize, height: tokenSize)
 
-            // Evenly-spaced position no longer says anything about when a
-            // task is due, so the due time rides along as its own small
-            // label instead — restores that at-a-glance info without going
-            // back to a layout where it was implied by placement alone.
-            if let due = task.due {
-                Text(due)
-                    .font(Typography.font(9.5, weight: .bold))
-                    .foregroundStyle(KidTheme.inkSoft)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(.white.opacity(0.8))
-                    .clipShape(Capsule())
+                // Evenly-spaced position no longer says anything about when a
+                // task is due, so the due time rides along as its own small
+                // label instead — restores that at-a-glance info without going
+                // back to a layout where it was implied by placement alone.
+                if let due = task.due {
+                    Text(due)
+                        .font(Typography.font(9.5, weight: .bold))
+                        .foregroundStyle(KidTheme.inkSoft)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.white.opacity(0.8))
+                        .clipShape(Capsule())
+                }
             }
         }
+        .buttonStyle(.plain)
         .offset(appeared ? resting : .zero)
         .scaleEffect(appeared ? 1 : 0.2)
         .opacity(appeared ? 1 : 0)
