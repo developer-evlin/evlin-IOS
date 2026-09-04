@@ -91,6 +91,14 @@ struct ComicReaderView: View {
                         .lineLimit(1)
                 }
                 Spacer()
+                ShareLink(item: "Check out the comic \"\(comic.title)\" on Evlin — \(comic.excerpt)") {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(.black.opacity(0.35))
+                        .clipShape(Circle())
+                }
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 15, weight: .bold))

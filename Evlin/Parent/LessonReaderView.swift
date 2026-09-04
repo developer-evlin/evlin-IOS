@@ -33,6 +33,14 @@ struct LessonReaderView: View {
                         Text(lesson.title).font(Typography.font(12, weight: .heavy)).foregroundStyle(.white)
                     }
                     Spacer()
+                    ShareLink(item: "Check out \"\(lesson.title)\" on Evlin — \(lesson.subtitle)") {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(.white.opacity(0.16))
+                            .clipShape(Circle())
+                    }
                     Button { dismiss() } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 15, weight: .bold))
