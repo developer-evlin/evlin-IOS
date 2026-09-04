@@ -266,6 +266,26 @@ struct ScreenSettings: View {
                     )
                 }
             }
+
+            // Back here (not on each kid's own profile) — a kid's profile
+            // is for their day-to-day (tasks/rules), while adding, editing,
+            // and removing the kids themselves — and now what's paired to
+            // them — is one settings-level concern in one place.
+            Section("Registered Devices") {
+                ForEach(FamilyStore.children) { child in
+                    ForEach(child.devices) { device in
+                        deviceRow(device)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    FamilyStore.removeDevice(device.id, from: child.id)
+                                    familyRefreshTick += 1
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                            }
+                    }
+                }
+            }
         }
         .navigationTitle("Children & Devices")
         .navigationBarTitleDisplayMode(.inline)
@@ -297,6 +317,25 @@ struct ScreenSettings: View {
                 onCancel: { editingChild = nil }
             )
         }
+    }
+
+    private func deviceRow(_ device: RegisteredDevice) -> some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(EColor.primaryContainer)
+                .frame(width: 44, height: 44)
+                .overlay(Image(systemName: "iphone").font(.system(size: 19, weight: .semibold)).foregroundStyle(EColor.primary))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(device.name).font(Typography.font(14.5, weight: .bold)).foregroundStyle(EColor.onSurface)
+                Text("\(device.model) · \(device.osVersion)").font(Typography.font(12, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                Text("Paired \(device.pairedOn)").font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+            }
+            Spacer(minLength: 8)
+            Text(device.lastActive)
+                .font(Typography.font(11, weight: .bold))
+                .foregroundStyle(device.lastActive == "Active now" ? Color(hex: "25924A") : EColor.onSurfaceVariant)
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Billing (net-new — see the state block above for why this
