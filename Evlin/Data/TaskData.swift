@@ -28,6 +28,41 @@ struct ChildTask: Identifiable {
     // submission.
     var redoNote: String? = nil
     var redoHasVoiceNote: Bool = false
+    // Whether finishing this specific task is one of the things holding the
+    // device lock open — not every chore should gate the iPad, and without
+    // this a parent has no way to mark "the one that matters" apart from
+    // "nice if it happens." Defaults on since most tasks created before this
+    // existed were implicitly gating ones.
+    var gatesApps: Bool = true
+    // Display/ordering + reminder timing only (see TaskTimeOfDay) — never
+    // read by the lock/unlock decision, which stays day-scoped, not tied to
+    // a time of day.
+    var timeOfDay: TaskTimeOfDay = .anytime
+    // nil/0 = no points set — collapsed behind More Options in AddTaskSheet,
+    // so most tasks simply don't have this rather than defaulting to some
+    // arbitrary number.
+    var points: Int? = nil
+    // Whether a parent needs to review a submission before it counts as
+    // done — off lets a kid's own checkmark be the end of it. Defaults to
+    // the app's long-standing implicit behavior (every submission lands in
+    // Review) so existing tasks' behavior doesn't change under them.
+    var requiresApproval: Bool = true
+}
+
+// A chore's place in a kid's day — a coarse bucket, not a clock time. Drives
+// list ordering and reminder timing only; it's unrelated to due dates or the
+// lock/unlock decision, which is day-scoped (see ChildTask.gatesApps).
+enum TaskTimeOfDay: String, CaseIterable {
+    case morning, afterSchool, evening, anytime
+
+    var label: String {
+        switch self {
+        case .morning: "Morning"
+        case .afterSchool: "After school"
+        case .evening: "Evening"
+        case .anytime: "Anytime"
+        }
+    }
 }
 
 // Mirrors Evlin_Parent_view/index.html's RULE_TYPES — each kind has a fixed
