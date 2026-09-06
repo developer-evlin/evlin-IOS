@@ -449,7 +449,7 @@ struct BlockTargetPicker: View {
                     ForEach(visibleApps) { app in
                         targetRow(
                             icon: app.icon, color: app.color, title: app.name, subtitle: app.bundleID,
-                            selected: selectedApps.contains(app.id)
+                            bundleID: app.bundleID, selected: selectedApps.contains(app.id)
                         ) { toggleApp(app) }
                     }
                     if !isSearching, filteredApps.count > topCount {
@@ -491,13 +491,17 @@ struct BlockTargetPicker: View {
     // tint fill when selected — a parent picking an app to block should be
     // able to hit the row without aiming, and see at a glance what's
     // already picked without reading each checkbox individually.
-    private func targetRow(icon: String, color: Color, title: String, subtitle: String?, selected: Bool, onTap: @escaping () -> Void) -> some View {
+    private func targetRow(icon: String, color: Color, title: String, subtitle: String?, bundleID: String? = nil, selected: Bool, onTap: @escaping () -> Void) -> some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(color)
-                    .frame(width: 44, height: 44)
-                    .overlay(Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.white))
+                if let bundleID {
+                    AppIconView(bundleID: bundleID, fallbackIcon: icon, fallbackColor: color)
+                } else {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(color)
+                        .frame(width: 44, height: 44)
+                        .overlay(Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.white))
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
                     if let subtitle {
