@@ -71,8 +71,14 @@ final class Child: Identifiable, ObservableObject {
     // nil falls back to a colored initials circle wherever a child's
     // avatar is shown.
     @Published var avatar: UIImage?
+    // Owned by the Child itself (not re-seeded per ScreenProfile instance
+    // any more) so a rule survives navigating away and back, and so
+    // anything else holding this same Child — chat's block-an-app flow,
+    // eventually — can add/update a rule that actually shows up on the
+    // profile instead of only existing in that one screen's local state.
+    @Published var rules: [ChildRule]
 
-    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, status: ChildStatus, timeLeft: String, timePct: Int, usageTodayMin: Int, tasksDone: Int = 0, tasksTotal: Int = 5, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false, avatar: UIImage? = nil) {
+    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, status: ChildStatus, timeLeft: String, timePct: Int, usageTodayMin: Int, tasksDone: Int = 0, tasksTotal: Int = 5, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false, avatar: UIImage? = nil, rules: [ChildRule] = []) {
         self.id = id; self.name = name; self.age = age; self.dailyLimitMin = dailyLimitMin
         self.color = color; self.status = status; self.timeLeft = timeLeft; self.timePct = timePct
         self.usageTodayMin = usageTodayMin; self.tasksDone = tasksDone; self.tasksTotal = tasksTotal
@@ -81,6 +87,7 @@ final class Child: Identifiable, ObservableObject {
         self.trialExhausted = trialExhausted
         self.needsProtectionSetup = needsProtectionSetup
         self.avatar = avatar
+        self.rules = rules.isEmpty ? TaskStore.rules(dailyLimitMin: dailyLimitMin) : rules
         // Every kid has at least one paired device in real usage — synthesize
         // a plausible default (their own device, on the app's current min
         // supported iOS) rather than leaving this empty when a specific

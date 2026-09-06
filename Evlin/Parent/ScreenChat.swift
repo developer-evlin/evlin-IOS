@@ -846,6 +846,20 @@ struct ScreenChat: View {
         let list = apps.count == 1 ? apps[0] : apps.dropLast().joined(separator: ", ") + " and " + (apps.last ?? "")
         let duration = minutes.map { "for \(formatMinutes($0))" } ?? "until you unlock it"
         respondAfterDelay(with: "Blocked \(list) for Liam \(duration).")
+
+        // Surfaces the same way a parent-authored Custom rule would — see
+        // ScreenProfile's Active Rules. Appended onto the shared Child
+        // object itself (not this screen's own state), so it's actually
+        // there the next time Liam's profile is opened, not just in this
+        // chat transcript.
+        FamilyStore.child("liam").rules.append(ChildRule(
+            id: UUID().uuidString,
+            kind: .custom,
+            icon: "sf:nosign",
+            title: "Block \(list)",
+            detail: minutes.map { "Blocked for \(formatMinutes($0))" } ?? "Blocked until unlocked",
+            on: true
+        ))
     }
 
     private func handleAddTask(_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) {

@@ -18,7 +18,6 @@ struct ScreenProfile: View {
 
     @ObservedObject private var child: Child
     @State private var tasks: [ChildTask]
-    @State private var rules: [ChildRule]
     @State private var rulesExpanded = true
     // Which task the parent tapped — opens TaskReviewDeckView starting there
     // (a Tinder-style swipeable queue over `tasks`, not a single-task sheet).
@@ -69,7 +68,6 @@ struct ScreenProfile: View {
         _child = ObservedObject(wrappedValue: c)
         let taskList = TaskStore.tasks(for: childId)
         _tasks = State(initialValue: taskList)
-        _rules = State(initialValue: TaskStore.rules(for: c))
         _tutorialActive = State(initialValue: startInTutorial)
         if let openTaskId, let index = taskList.firstIndex(where: { $0.id == openTaskId }) {
             _reviewStartIndex = State(initialValue: index)
@@ -77,14 +75,14 @@ struct ScreenProfile: View {
     }
 
     private var doneCount: Int { tasks.filter { $0.state == .done }.count }
-    private var activeRulesCount: Int { rules.filter(\.on).count }
+    private var activeRulesCount: Int { child.rules.filter(\.on).count }
 
     // Drives headerCard's "Unlimited screen time today" state — the daily
     // cap only stops applying once this built-in rule is switched off (see
     // ScreenTimeOffConfirmCard), not just because the child happens to be
     // unlocked.
     private var screenTimeLimitOff: Bool {
-        !(rules.first(where: { $0.kind == .screenTimeLimit })?.on ?? true)
+        !(child.rules.first(where: { $0.kind == .screenTimeLimit })?.on ?? true)
     }
 
     // Same partitioned time bar as the family dashboard grid (ScreenHome's
@@ -211,8 +209,8 @@ struct ScreenProfile: View {
                 ScreenTimeOffConfirmCard(
                     childName: child.name,
                     onTurnOff: {
-                        if let i = rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
-                            rules[i].on = false
+                        if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
+                            child.rules[i].on = false
                         }
                         showScreenTimeOffConfirm = false
                     },
@@ -298,7 +296,7 @@ struct ScreenProfile: View {
                     }, onCancel: { addMode = nil })
                 case .rule:
                     AddRuleSheet(onCreate: { newRule in
-                        rules.append(newRule)
+                        child.rules.append(newRule)
                         addMode = nil
                     }, onCancel: { addMode = nil })
                 }
@@ -613,7 +611,7 @@ struct ScreenProfile: View {
                 Button { withAnimation { rulesExpanded.toggle() } } label: {
                     HStack {
                         Text("Active Rules").font(Typography.font(16, weight: .heavy)).foregroundStyle(EColor.onSurface)
-                        Text("\(activeRulesCount)/\(rules.count)").font(Typography.font(10, weight: .bold)).foregroundStyle(Color(hex: "25924A"))
+                        Text("\(activeRulesCount)/\(child.rules.count)").font(Typography.font(10, weight: .bold)).foregroundStyle(Color(hex: "25924A"))
                             .padding(.horizontal, 8).padding(.vertical, 3).background(Color(hex: "E4F8E9")).clipShape(Capsule())
                         Spacer()
                         Image(systemName: "chevron.down").rotationEffect(.degrees(rulesExpanded ? 180 : 0))
@@ -623,7 +621,7 @@ struct ScreenProfile: View {
                 .buttonStyle(.plain)
 
                 if rulesExpanded {
-                    ForEach($rules) { $rule in
+                    ForEach($child.rules) { $rule in
                         Divider().padding(.leading, 16)
                         HStack(spacing: 12) {
                             // Screen Time Limit is a built-in protection — it
@@ -673,10 +671,10 @@ struct ScreenProfile: View {
         }
         .sheet(item: $editingRule) { rule in
             EditRuleSheet(rule: rule, onSave: { updated in
-                if let i = rules.firstIndex(where: { $0.id == updated.id }) { rules[i] = updated }
+                if let i = child.rules.firstIndex(where: { $0.id == updated.id }) { child.rules[i] = updated }
                 editingRule = nil
             }, onCancel: { editingRule = nil }, onDelete: {
-                rules.removeAll { $0.id == rule.id }
+                child.rules.removeAll { $0.id == rule.id }
                 editingRule = nil
                 if rule.kind == .downtime { exitDowntimeIfActive() }
             })
@@ -688,8 +686,8 @@ struct ScreenProfile: View {
                 current: child.dailyLimitMin,
                 onSave: { limit in
                     child.dailyLimitMin = limit
-                    if let i = rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
-                        rules[i].detail = "\(formatMinutes(limit)) per day"
+                    if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
+                        child.rules[i].detail = "\(formatMinutes(limit)) per day"
                     }
                     editingScreenTimeLimit = false
                 },

@@ -87,12 +87,15 @@ enum TaskStore {
         ]
     }
 
-    static func rules(for child: Child) -> [ChildRule] {
+    // Takes the raw minutes rather than a whole Child — Child seeds its own
+    // `rules` from this in its init, before `self` is fully constructed, so
+    // this can't take `child: Child` and read child.dailyLimitMin off it.
+    static func rules(dailyLimitMin: Int) -> [ChildRule] {
         [
             // A built-in protection, not something a parent authored — see
             // the `.screenTimeLimit` branch in ScreenProfile's rulesSection
             // for why it can be toggled but not edited or deleted.
-            ChildRule(id: "screen-time-limit", kind: .screenTimeLimit, icon: "sf:hourglass", title: "Screen Time Limit", detail: "\(formatMinutes(child.dailyLimitMin)) per day", on: true),
+            ChildRule(id: "screen-time-limit", kind: .screenTimeLimit, icon: "sf:hourglass", title: "Screen Time Limit", detail: "\(formatMinutes(dailyLimitMin)) per day", on: true),
             ChildRule(id: "downtime", kind: .downtime, icon: "dark_mode", title: "Downtime", detail: "8:00 PM – 7:00 AM", on: true),
         ]
     }
