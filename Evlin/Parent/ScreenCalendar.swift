@@ -297,6 +297,7 @@ private struct DayTimelineView: View {
                     }
                     .frame(height: timeToY(endHour) + 24)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding(12)
@@ -337,21 +338,45 @@ private struct DayTimelineView: View {
 
 // Ported from the native Reminders/Calendar "tap to change date" pattern:
 // tapping the day header opens this bottom sheet with a plain Sunday-first
-// month grid; picking a day selects it and dismisses the sheet.
+// month grid; picking a day selects it and dismisses the sheet. Browsing
+// isn't limited to the one month the mock data lives in — arrows and a
+// swipe both page to the next/previous month — but since eventsByDay/
+// dayNames only model that single seeded month (CalendarData.dataMonth/
+// dataYear), a day is only actually pickable there; other months are
+// look-but-don't-touch, same idea as the existing `d == nil` blank cells.
 private struct MonthPickerSheet: View {
     var selectedDay: Int
     var onPickDay: (Int) -> Void
 
-    private var cells: [Int?] { CalendarData.monthGrid(year: CalendarData.dataYear, month: CalendarData.dataMonth) }
+    @State private var displayedYear = CalendarData.dataYear
+    @State private var displayedMonth = CalendarData.dataMonth
+
+    private var cells: [Int?] { CalendarData.monthGrid(year: displayedYear, month: displayedMonth) }
+    private var isDataMonth: Bool { displayedYear == CalendarData.dataYear && displayedMonth == CalendarData.dataMonth }
+
+    private func shiftMonth(by delta: Int) {
+        var m = displayedMonth + delta
+        var y = displayedYear
+        if m < 1 { m = 12; y -= 1 }
+        if m > 12 { m = 1; y += 1 }
+        withAnimation(.easeInOut(duration: 0.2)) { displayedMonth = m; displayedYear = y }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(CalendarData.monthFull[CalendarData.dataMonth - 1])
-                .font(Typography.font(24, weight: .heavy))
-                .foregroundStyle(EColor.onSurface)
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 14)
+            HStack {
+                Text("\(CalendarData.monthFull[displayedMonth - 1]) \(String(displayedYear))")
+                    .font(Typography.font(24, weight: .heavy))
+                    .foregroundStyle(EColor.onSurface)
+                Spacer()
+                HStack(spacing: 8) {
+                    Button { shiftMonth(by: -1) } label: { monthNavCircle("chevron.left") }
+                    Button { shiftMonth(by: 1) } label: { monthNavCircle("chevron.right") }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 14)
 
             HStack(spacing: 0) {
                 ForEach(Array(["S", "M", "T", "W", "T", "F", "S"].enumerated()), id: \.offset) { _, d in
@@ -367,6 +392,14 @@ private struct MonthPickerSheet: View {
                 }
             }
             .padding(.horizontal, 12)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 24)
+                    .onEnded { value in
+                        if value.translation.width < -40 { shiftMonth(by: 1) }
+                        else if value.translation.width > 40 { shiftMonth(by: -1) }
+                    }
+            )
 
             Spacer(minLength: 0)
         }
@@ -374,19 +407,29 @@ private struct MonthPickerSheet: View {
         .background(EColor.surface)
     }
 
+    private func monthNavCircle(_ icon: String) -> some View {
+        Image(systemName: icon)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(EColor.primary)
+            .frame(width: 30, height: 30)
+            .background(EColor.surfaceContainerLowest)
+            .clipShape(Circle())
+    }
+
     @ViewBuilder
     private func dayCell(_ d: Int?) -> some View {
-        let isToday = d == CalendarData.dataDay
-        let isSel = d == selectedDay && !isToday
+        let isToday = isDataMonth && d == CalendarData.dataDay
+        let isSel = isDataMonth && d == selectedDay && !isToday
+        let isPickable = d != nil && isDataMonth
 
         Button {
-            if let d { onPickDay(d) }
+            if let d, isDataMonth { onPickDay(d) }
         } label: {
             Group {
                 if let d {
                     Text("\(d)")
                         .font(Typography.font(16, weight: isToday ? .heavy : .semibold))
-                        .foregroundStyle(isToday ? .white : EColor.onSurface)
+                        .foregroundStyle(isToday ? .white : (isPickable ? EColor.onSurface : EColor.onSurfaceVariant.opacity(0.5)))
                 } else {
                     Color.clear
                 }
@@ -397,7 +440,7 @@ private struct MonthPickerSheet: View {
             .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(.plain)
-        .disabled(d == nil)
+        .disabled(!isPickable)
     }
 }
 
