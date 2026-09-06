@@ -700,6 +700,12 @@ struct ScreenChat: View {
                 .transition(.move(edge: .leading))
             }
         }
+        // Switching to a different bottom tab shouldn't leave the history
+        // panel stuck open underneath — TabView keeps this tab's state
+        // alive, but the content view still disappears while another tab
+        // is frontmost, so this fires exactly on a tab switch (not on the
+        // panel's own overlay presentation, which lives above this view).
+        .onDisappear { showHistory = false }
     }
 
     // Applied to every message row so a new one slides/fades in from the
@@ -1009,6 +1015,11 @@ private struct ChatHistorySidebar: View {
     @State private var query = ""
     @State private var renamingEntry: ChatHistoryEntry?
     @State private var renameText = ""
+    // Lets a finger drag the whole panel toward its exit edge (matching the
+    // .move(edge: .leading) transition it entered with) instead of the x/
+    // sidebar button being the only way out — dragged part-way then
+    // released short of the threshold springs back rather than committing.
+    @State private var dragOffset: CGFloat = 0
 
     private var filtered: [ChatHistoryEntry] {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return entries }
@@ -1028,24 +1039,24 @@ private struct ChatHistorySidebar: View {
             if filtered.isEmpty {
                 Spacer()
                 Text("No conversations found")
-                    .font(Typography.font(13, weight: .regular))
+                    .font(Typography.font(15, weight: .regular))
                     .foregroundStyle(EColor.onSurfaceVariant)
                     .frame(maxWidth: .infinity)
                 Spacer()
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 24) {
                         if query.isEmpty {
                             newChatRow
                         }
                         ForEach(sections, id: \.self) { section in
-                            VStack(alignment: .leading, spacing: 6) {
+                            VStack(alignment: .leading, spacing: 8) {
                                 Text(section.uppercased())
-                                    .font(Typography.font(11, weight: .bold))
+                                    .font(Typography.font(12.5, weight: .bold))
                                     .foregroundStyle(EColor.onSurfaceVariant)
                                     .tracking(0.4)
-                                    .padding(.horizontal, 6)
-                                VStack(spacing: 2) {
+                                    .padding(.horizontal, 8)
+                                VStack(spacing: 3) {
                                     ForEach(filtered.filter { $0.section == section }) { entry in
                                         row(entry)
                                     }
@@ -1053,14 +1064,32 @@ private struct ChatHistorySidebar: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 4)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 6)
                     .padding(.bottom, 24)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .dismissKeyboardOnTap()
             }
         }
+        .offset(x: min(0, dragOffset))
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { value in
+                    // Predominantly-horizontal only, so this doesn't fight
+                    // the ScrollView's own vertical drag for scrolling.
+                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    if value.translation.width < 0 { dragOffset = value.translation.width }
+                }
+                .onEnded { value in
+                    let dismiss = value.translation.width < -80 || value.predictedEndTranslation.width < -160
+                    if dismiss {
+                        onClose()
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
+                    }
+                }
+        )
         .alert("Rename Chat", isPresented: Binding(get: { renamingEntry != nil }, set: { if !$0 { renamingEntry = nil } })) {
             TextField("Chat name", text: $renameText)
             Button("Cancel", role: .cancel) { renamingEntry = nil }
@@ -1076,58 +1105,58 @@ private struct ChatHistorySidebar: View {
     private var header: some View {
         HStack {
             Text("Chats")
-                .font(Typography.font(17, weight: .heavy))
+                .font(Typography.font(26, weight: .heavy))
                 .foregroundStyle(EColor.onSurface)
             Spacer()
             Button(action: onClose) {
                 Image(systemName: "sidebar.leading")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(EColor.onSurfaceVariant)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 36, height: 36)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Close chat history")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 14)
     }
 
     private var searchField: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13))
+                .font(.system(size: 15))
                 .foregroundStyle(EColor.onSurfaceVariant)
             TextField("Search conversations", text: $query)
-                .font(Typography.font(13, weight: .regular))
+                .font(Typography.font(15, weight: .regular))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(EColor.surfaceContainerHigh)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 14)
-        .padding(.bottom, 12)
+        .padding(.vertical, 12)
+        .background(EColor.surfaceContainerHigh)
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 14)
     }
 
     private var newChatRow: some View {
         Button(action: onNewChat) {
-            HStack(spacing: 12) {
+            HStack(spacing: 14) {
                 Circle()
                     .fill(EColor.primaryContainer)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 38, height: 38)
                     .overlay(
                         Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(EColor.primary)
                     )
                 Text("New chat")
-                    .font(Typography.font(14, weight: .semibold))
+                    .font(Typography.font(16, weight: .semibold))
                     .foregroundStyle(EColor.onSurface)
                 Spacer()
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1138,14 +1167,14 @@ private struct ChatHistorySidebar: View {
         return Button {
             onSelect(entry)
         } label: {
-            HStack(spacing: 6) {
-                VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(entry.title)
-                        .font(Typography.font(13.5, weight: isActive ? .bold : .medium))
+                        .font(Typography.font(16, weight: isActive ? .bold : .medium))
                         .foregroundStyle(EColor.onSurface)
                         .lineLimit(1)
                     Text(entry.time)
-                        .font(Typography.font(11, weight: .regular))
+                        .font(Typography.font(13, weight: .regular))
                         .foregroundStyle(EColor.onSurfaceVariant)
                 }
                 Spacer(minLength: 4)
@@ -1165,19 +1194,19 @@ private struct ChatHistorySidebar: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(EColor.onSurfaceVariant)
-                        .frame(width: 26, height: 26)
+                        .frame(width: 30, height: 30)
                         .contentShape(Rectangle())
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
             // The tinted pill is the only "which thread am I looking at"
             // signal in a drawer this narrow — mirrors the selected-row
             // highlight in ChatGPT/Claude's sidebar.
             .background(isActive ? EColor.primaryContainer : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
     }
