@@ -596,11 +596,7 @@ struct ScreenProfile: View {
                 .foregroundStyle(EColor.primary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(rule.title).font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
-                HStack(spacing: 4) {
-                    Text(rule.detail).font(Typography.font(12, weight: .semibold)).foregroundStyle(EColor.primary)
-                    Text("· Tap to change")
-                        .font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                }
+                Text(rule.detail).font(Typography.font(12, weight: .semibold)).foregroundStyle(EColor.primary)
             }
         }
     }
@@ -1630,21 +1626,22 @@ private struct EditDailyScreenTimeLimitSheet: View {
     // settle, not continuously during a fast fling — the warning message
     // below it visibly lagged behind the finger. A ScrollView driven by
     // live scroll geometry (.scrollPosition) reports position continuously
-    // instead, so the warning keeps pace with the flick, same fix as
-    // GrantExtraTimeSheet's customRuler.
+    // instead, so the warning keeps pace with the flick. Horizontal, same
+    // itemWidth/itemHeight as GrantExtraTimeSheet's customRuler — trying
+    // the same side-to-side feel here instead of the vertical wheel this
+    // used at first.
     private var limitWheel: some View {
-        let itemHeight: CGFloat = 40
-        let boxHeight: CGFloat = 150
+        let itemWidth: CGFloat = 68
+        let itemHeight: CGFloat = 56
         return GeometryReader { geo in
-            let sideInset = max(0, (boxHeight - itemHeight) / 2)
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 0) {
+            let sideInset = max(0, (geo.size.width - itemWidth) / 2)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
                     ForEach(options, id: \.self) { m in
                         Text(formatMinutes(m))
-                            .font(Typography.font(m == limit ? 18 : 15, weight: m == limit ? .heavy : .semibold))
-                            .foregroundStyle(m == limit ? EColor.onSurface : EColor.onSurfaceVariant)
-                            .frame(height: itemHeight)
-                            .frame(maxWidth: .infinity)
+                            .font(Typography.font(m == limit ? 17 : 14, weight: m == limit ? .heavy : .semibold))
+                            .foregroundStyle(m == limit ? EColor.primary : EColor.onSurfaceVariant)
+                            .frame(width: itemWidth, height: itemHeight)
                             .id(m)
                     }
                 }
@@ -1652,15 +1649,15 @@ private struct EditDailyScreenTimeLimitSheet: View {
             }
             .scrollTargetBehavior(.viewAligned)
             .scrollPosition(id: $scrollID)
-            .contentMargins(.vertical, sideInset, for: .scrollContent)
+            .contentMargins(.horizontal, sideInset, for: .scrollContent)
             .overlay {
                 Capsule()
                     .fill(EColor.primary.opacity(0.1))
-                    .frame(height: itemHeight)
+                    .frame(width: itemWidth - 10, height: 40)
                     .allowsHitTesting(false)
             }
         }
-        .frame(height: boxHeight)
+        .frame(height: itemHeight)
         .onChange(of: scrollID) { _, newValue in
             if let newValue { limit = newValue }
         }
