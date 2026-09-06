@@ -1915,15 +1915,6 @@ private struct TaskRowView: View {
 
 // MARK: - Add Task
 
-// Default state is just three things: a name, Repeats (defaulting to Every
-// day — the common case; "does not repeat" used to be the default, which
-// meant a parent setting up a chore during onboarding and never touching
-// the toggle left their kid with nothing assigned the next day), and Gates
-// apps (defaulting on). Everything else — a specific date, a time-of-day
-// bucket, points, requires-approval — is secondary and starts tucked behind
-// More Options; none of it is prefilled with a live value on open, since
-// "unset" should actually mean unset rather than silently becoming whatever
-// moment the sheet happened to be opened at.
 private struct AddTaskSheet: View {
     @ObservedObject var child: Child
     var onCreate: (ChildTask) -> Void
@@ -1932,13 +1923,9 @@ private struct AddTaskSheet: View {
     @State private var title = ""
     @State private var category = "Chore"
     @State private var description = ""
-    @State private var repeatDays: Set<String> = Set(weekDayCodes)
-    @State private var gatesApps = true
-    @State private var hasDueDate = false
     @State private var dueDate = Date()
-    @State private var timeOfDay: TaskTimeOfDay = .anytime
-    @State private var points = 0
-    @State private var requiresApproval = true
+    @State private var hasDueDate = false
+    @State private var repeatDays: Set<String> = []
 
     init(child: Child, onCreate: @escaping (ChildTask) -> Void, onCancel: @escaping () -> Void) {
         self.child = child
@@ -1955,21 +1942,15 @@ private struct AddTaskSheet: View {
                 id: 0, title: title, state: .pending, category: category,
                 description: description, note: nil, submittedAt: nil,
                 dueLabel: hasDueDate ? formatted(dueDate) : nil, photoCount: 0,
-                repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ","),
-                gatesApps: gatesApps, timeOfDay: timeOfDay,
-                points: points > 0 ? points : nil, requiresApproval: requiresApproval
+                repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
             ))
         }, canSave: canSave, saveLabel: "Create task") {
             FormField(label: "Task name") {
                 FormTextField(placeholder: "e.g. Make your bed", text: $title)
             }
+            FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
             RepeatPicker(selectedDays: $repeatDays)
-            gatesAppsRow
             MoreOptions {
-                specificDateField
-                timeOfDayField
-                pointsField
-                requiresApprovalRow
                 FormField(label: "What to do") {
                     TextField("Instructions for the student…", text: $description, axis: .vertical)
                         .font(Typography.font(15, weight: .regular))
@@ -1982,103 +1963,8 @@ private struct AddTaskSheet: View {
         }
     }
 
-    private var gatesAppsRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Gates apps").font(Typography.font(17, weight: .heavy)).foregroundStyle(FormGreen.title)
-                Spacer()
-                EToggle(on: $gatesApps)
-            }
-            Text("Locks apps for the day until this is done.")
-                .font(Typography.font(12.5, weight: .medium))
-                .foregroundStyle(EColor.onSurfaceVariant)
-        }
-        .padding(.bottom, 18)
-    }
-
-    // Starts as a plain "add a date" button rather than a picker already
-    // showing today's date — a visible date box always reads as a live
-    // value, even one nobody's touched yet.
-    @ViewBuilder
-    private var specificDateField: some View {
-        FormField(label: "Specific date") {
-            if hasDueDate {
-                HStack(spacing: 8) {
-                    DatePicker("", selection: $dueDate, displayedComponents: .date)
-                        .labelsHidden()
-                        .padding(.horizontal, 14)
-                        .frame(height: 48)
-                        .frame(maxWidth: .infinity)
-                        .background(FormGreen.fieldBg)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    Button { hasDueDate = false } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(EColor.onSurfaceVariant)
-                    }
-                    .buttonStyle(.plain)
-                }
-            } else {
-                Button {
-                    dueDate = Date()
-                    hasDueDate = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus.circle.fill").font(.system(size: 16))
-                        Text("Add a specific date").font(Typography.font(14, weight: .semibold))
-                    }
-                    .foregroundStyle(FormGreen.accent)
-                    .padding(.horizontal, 14)
-                    .frame(height: 48)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(FormGreen.fieldBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var timeOfDayField: some View {
-        FormField(label: "Time of day") {
-            FlowChips {
-                ForEach(TaskTimeOfDay.allCases, id: \.self) { t in
-                    DotChip(label: t.label, color: nil, selected: timeOfDay == t) { timeOfDay = t }
-                }
-            }
-        }
-    }
-
-    private var pointsField: some View {
-        FormField(label: "Points") {
-            Stepper(value: $points, in: 0...100, step: 5) {
-                Text(points > 0 ? "\(points) points" : "No points")
-                    .font(Typography.font(15, weight: .regular))
-                    .foregroundStyle(EColor.onSurface)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 48)
-            .background(FormGreen.fieldBg)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-    }
-
-    private var requiresApprovalRow: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Requires approval").font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                Text("You review it before it counts as done.")
-                    .font(Typography.font(12, weight: .regular))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-            }
-            Spacer()
-            EToggle(on: $requiresApproval)
-        }
-        .padding(.bottom, 18)
-    }
-
     private func formatted(_ date: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "MMM d"; return f.string(from: date)
+        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f.string(from: date)
     }
 }
 
