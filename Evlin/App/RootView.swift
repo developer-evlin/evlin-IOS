@@ -16,14 +16,6 @@ struct RootView: View {
     // (no persistence): a fresh app launch always re-onboards both.
     @State private var parentOnboarded = false
     @State private var childOnboarded = false
-    // Tracks whether a role has entered onboarding at least once this
-    // session — the very first step's "back to mode picker" button only
-    // shows the first time through (see OnboardingV2Coordinator). Once a
-    // parent/kid has started (even if they later bail back to the picker
-    // and re-enter), that escape hatch stops being offered — backing out
-    // no longer reads as "I haven't started yet."
-    @State private var parentOnboardingStarted = false
-    @State private var childOnboardingStarted = false
     // Gates the first-task spotlight tutorial (see ScreenProfile) — starts
     // false so the very first entry into parent mode after onboarding walks
     // the parent through adding a task before anything else is reachable.
@@ -48,10 +40,9 @@ struct RootView: View {
                     } else {
                         OnboardingV2Coordinator(
                             role: .parent,
-                            onExitToModePicker: parentOnboardingStarted ? nil : { mode = nil },
+                            onExitToModePicker: { mode = nil },
                             onComplete: { parentOnboarded = true }
                         )
-                        .onAppear { parentOnboardingStarted = true }
                     }
                 case .tablet:
                     if childOnboarded {
@@ -59,10 +50,9 @@ struct RootView: View {
                     } else {
                         OnboardingV2Coordinator(
                             role: .child,
-                            onExitToModePicker: childOnboardingStarted ? nil : { mode = nil },
+                            onExitToModePicker: { mode = nil },
                             onComplete: { childOnboarded = true }
                         )
-                        .onAppear { childOnboardingStarted = true }
                     }
                 }
             }
