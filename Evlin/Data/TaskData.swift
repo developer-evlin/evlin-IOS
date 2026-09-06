@@ -32,7 +32,7 @@ struct ChildTask: Identifiable {
 
 // Mirrors Evlin_Parent_view/index.html's RULE_TYPES — each kind has a fixed
 // icon and builds its own detail line from typed fields.
-enum RuleKind: String { case downtime, custom, screenTimeLimit, blockedApps }
+enum RuleKind: String { case downtime, custom, screenTimeLimit }
 
 struct ChildRule: Identifiable {
     let id: String
