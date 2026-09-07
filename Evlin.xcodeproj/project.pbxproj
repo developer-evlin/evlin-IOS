@@ -53,6 +53,7 @@
 		BE9E925FD91473528D791854 /* TabletRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB765EA0B6A70CD8AC83D0E /* TabletRootView.swift */; };
 		BEA2C979B0B4CE3CD808D610 /* OnboardingV2Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1231BBF6CB90F4A9ABFC7634 /* OnboardingV2Components.swift */; };
 		C00DCF7BBB942A465AB60FB9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C45B887714E40ADEA10C9103 /* Assets.xcassets */; };
+		C552747695EA262271AD7134 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 072A665B8F6487876B64EE96 /* Sentry */; };
 		C895FB379F58FF4789EF58F4 /* LibraryData.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C3ABFD36105EFE6EE6C0EE /* LibraryData.swift */; };
 		CB3EAC09260310DFC1B20DA2 /* LessonReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */; };
 		DC41F1DF55F3583A080BD7F1 /* Keyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6CF5B901EEEEE19804D8030 /* Keyboard.swift */; };
@@ -134,6 +135,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F872287144FC0F3521FA5488 /* Lottie in Frameworks */,
+				C552747695EA262271AD7134 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -327,6 +329,7 @@
 			name = Evlin;
 			packageProductDependencies = (
 				9FFEBC3CBCB4A02DA1386ADF /* Lottie */,
+				072A665B8F6487876B64EE96 /* Sentry */,
 			);
 			productName = Evlin;
 			productReference = C3552C1175661B1ABC302984 /* Evlin.app */;
@@ -352,6 +355,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				BA2CE0DC7B49C1A744BA3712 /* XCRemoteSwiftPackageReference "lottie-ios" */,
+				BDA532432696AB474B168D9E /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 04DADB4957415F3803CC0D3D /* Products */;
@@ -627,9 +631,22 @@
 				version = 4.6.1;
 			};
 		};
+		BDA532432696AB474B168D9E /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = exactVersion;
+				version = 9.27.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		072A665B8F6487876B64EE96 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BDA532432696AB474B168D9E /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
 		9FFEBC3CBCB4A02DA1386ADF /* Lottie */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = BA2CE0DC7B49C1A744BA3712 /* XCRemoteSwiftPackageReference "lottie-ios" */;

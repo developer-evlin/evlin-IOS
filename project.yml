@@ -12,6 +12,9 @@ packages:
   Lottie:
     url: https://github.com/airbnb/lottie-ios
     exactVersion: 4.6.1
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa
+    exactVersion: 9.27.0
 targets:
   Evlin:
     type: application
@@ -21,6 +24,8 @@ targets:
     dependencies:
       - package: Lottie
         product: Lottie
+      - package: Sentry
+        product: Sentry
     resources:
       - path: Evlin/Resources
     info:
