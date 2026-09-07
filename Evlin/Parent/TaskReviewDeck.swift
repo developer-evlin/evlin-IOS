@@ -864,6 +864,7 @@ private struct EditTaskReviewSheet: View {
             updated.title = title.trimmingCharacters(in: .whitespaces)
             updated.description = description
             updated.dueLabel = hasDueDate ? formatted(dueDate) : nil
+            updated.dueDate = hasDueDate ? dueDate : nil
             let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
             updated.repeats = repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
             onSave(updated)
@@ -904,14 +905,16 @@ private struct EditTaskReviewSheet: View {
     @ViewBuilder
     private var whenField: some View {
         if hasDueDate {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
                 Button("Remove date") { hasDueDate = false }
                     .buttonStyle(.plain)
-                    .font(Typography.font(12.5, weight: .semibold))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-                    .frame(height: 32)
-                    .contentShape(Rectangle())
+                    .font(Typography.font(14, weight: .bold))
+                    .foregroundStyle(EColor.danger)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
             }
         } else {
             FormField(label: "When") {

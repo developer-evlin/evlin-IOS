@@ -13,6 +13,14 @@ struct ChildTask: Identifiable {
     var note: String?
     var submittedAt: String?
     var dueLabel: String?
+    // The actual date behind dueLabel's display string — nil for every
+    // pre-seeded mock task here (their dueLabel is hand-authored text like
+    // "Yesterday, 5:00 PM" with nothing real backing it), so a nil dueDate
+    // always counts as "show it today," matching how those always behaved.
+    // Only tasks created through the real New Task flow (which picks from
+    // an actual date, not a label) set this, which is what lets a task
+    // due tomorrow actually stay off today's list.
+    var dueDate: Date? = nil
     // 0 = no photo, 1 = the original single-photo layout, 2+ = a grid —
     // a kid submitting multi-page homework (see Math Practice) photographs
     // each page separately rather than one photo standing in for the

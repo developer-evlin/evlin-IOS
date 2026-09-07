@@ -223,6 +223,17 @@ struct FormDateTimeRow: View {
     @Binding var date: Date
     @Binding var hasDate: Bool
 
+    // A task is day-scoped — it's due today or it's due tomorrow, full
+    // stop (see ChildTask.dueDate/isDueToday: a task due any other day
+    // simply doesn't show up on a day it isn't due). Offering a
+    // years-wide default date range read as "schedule this whenever,"
+    // which isn't a thing this app actually does anything with.
+    private var dateRange: ClosedRange<Date> {
+        let start = Calendar.current.startOfDay(for: Date())
+        let end = Calendar.current.date(byAdding: .day, value: 2, to: start)?.addingTimeInterval(-1) ?? start
+        return start...end
+    }
+
     var body: some View {
         // Already functionally optional (canSave only requires a title —
         // leaving these pickers untouched just leaves hasDate false), but
@@ -238,7 +249,7 @@ struct FormDateTimeRow: View {
 
     private var dateBox: some View {
         HStack {
-            DatePicker("", selection: $date, displayedComponents: .date)
+            DatePicker("", selection: $date, in: dateRange, displayedComponents: .date)
                 .labelsHidden()
                 .onChange(of: date) { _, _ in hasDate = true }
         }

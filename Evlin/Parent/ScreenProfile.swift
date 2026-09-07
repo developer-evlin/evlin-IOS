@@ -74,7 +74,16 @@ struct ScreenProfile: View {
         }
     }
 
-    private var doneCount: Int { tasks.filter { $0.state == .done }.count }
+    // A task due on some other day (tomorrow, via the New Task date
+    // picker) isn't part of today's list at all — nil dueDate (every
+    // pre-seeded mock task) always counts as visible today.
+    private func isDueToday(_ task: ChildTask) -> Bool {
+        guard let due = task.dueDate else { return true }
+        return Calendar.current.isDateInToday(due)
+    }
+
+    private var todaysTasks: [ChildTask] { tasks.filter(isDueToday) }
+    private var doneCount: Int { todaysTasks.filter { $0.state == .done }.count }
     private var activeRulesCount: Int { child.rules.filter(\.on).count }
 
     // Drives headerCard's "Unlimited screen time today" state — the daily
@@ -144,7 +153,7 @@ struct ScreenProfile: View {
             if showUnlockConfirm {
                 UnlockConfirmCard(
                     childName: child.name,
-                    remaining: tasks.count - doneCount,
+                    remaining: todaysTasks.count - doneCount,
                     onUnlock: {
                         child.status = .unlocked
                         child.timeLeft = formatMinutes(child.dailyLimitMin)
@@ -454,7 +463,7 @@ struct ScreenProfile: View {
                             // and comes back as-is on unlock instead of
                             // being reported as used up.
                             child.status = .locked
-                        } else if tasks.count - doneCount > 0 {
+                        } else if todaysTasks.count - doneCount > 0 {
                             // Unlocking (unlike locking) needs a confirm — it's
                             // the easy-to-regret direction, especially with
                             // chores still open, so don't apply it on the
@@ -512,7 +521,11 @@ struct ScreenProfile: View {
             // this was the same count shown twice on one screen.
             SectionHead("Current Tasks")
             VStack(spacing: 10) {
-                ForEach(Array(tasks.enumerated()), id: \.element.id) { i, task in
+                // Enumerate the full array first, filter after — `i` has
+                // to stay the task's true index into `tasks` (what
+                // reviewStartIndex/TaskReviewDeckView expect), not its
+                // position among just today's visible rows.
+                ForEach(Array(tasks.enumerated()).filter { isDueToday($0.element) }, id: \.element.id) { i, task in
                     TaskRowView(task: task, onOpen: { reviewStartIndex = i })
                 }
             }
@@ -1946,7 +1959,7 @@ private struct AddTaskSheet: View {
             onCreate(ChildTask(
                 id: 0, title: title, state: .pending, category: category,
                 description: description, note: nil, submittedAt: nil,
-                dueLabel: hasDueDate ? formatted(dueDate) : nil, photoCount: 0,
+                dueLabel: hasDueDate ? formatted(dueDate) : nil, dueDate: hasDueDate ? dueDate : nil, photoCount: 0,
                 repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
             ))
         }, canSave: canSave, saveLabel: "Create task") {
@@ -1976,14 +1989,16 @@ private struct AddTaskSheet: View {
     @ViewBuilder
     private var whenField: some View {
         if hasDueDate {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
                 Button("Remove date") { hasDueDate = false }
                     .buttonStyle(.plain)
-                    .font(Typography.font(12.5, weight: .semibold))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-                    .frame(height: 32)
-                    .contentShape(Rectangle())
+                    .font(Typography.font(14, weight: .bold))
+                    .foregroundStyle(EColor.danger)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
             }
         } else {
             FormField(label: "When") {
