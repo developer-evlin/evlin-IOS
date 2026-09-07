@@ -480,6 +480,11 @@ struct BlockTargetPicker: View {
                 }
             }
         }
+        // Warms every app's icon the moment this picker appears — the
+        // catalog is only 8 apps, so this is cheap, and it means typing
+        // into search never has to wait on a fresh lookup for anything
+        // that could possibly match. See ITunesLookup.prefetchAll.
+        .task { ITunesLookup.prefetchAll(bundleIDs: mockAppCatalog.map(\.bundleID)) }
     }
 
     private func toggleApp(_ app: MockApp) {

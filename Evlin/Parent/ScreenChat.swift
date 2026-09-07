@@ -621,6 +621,18 @@ struct ScreenChat: View {
                 .scrollDismissesKeyboard(.interactively)
                 .dismissKeyboardOnTap()
                 .onPreferenceChange(ChatScrollOffsetKey.self) { newOffset in
+                    // The keyboard opening/closing shrinks the safe area,
+                    // which shifts this same offset enough to cross the
+                    // thresholds below on its own — without this guard,
+                    // focusing the compose field could toggle the nav/tab
+                    // bar's visibility at the exact moment the keyboard is
+                    // also animating in, two competing chrome transitions
+                    // firing at once. Chrome-hiding is meant to respond to
+                    // an actual scroll gesture, not a side effect of typing.
+                    guard !inputFocused else {
+                        lastChatScrollOffset = newOffset
+                        return
+                    }
                     let delta = newOffset - lastChatScrollOffset
                     lastChatScrollOffset = newOffset
                     if newOffset > -8 {
