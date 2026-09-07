@@ -1164,10 +1164,18 @@ private struct SettingsAddChildSheet: View {
 
             OnboardingV2CodeField(code: $code)
                 .onChange(of: code) { _, newValue in
-                    let digits = newValue.filter(\.isNumber)
-                    if digits != newValue { code = digits }
-                    if digits.count > 6 { code = String(digits.prefix(6)) }
-                    if code.count == 6 && !busy { pair() }
+                    // Rewriting a TextField's own bound text synchronously
+                    // from inside its own onChange, while the keyboard's
+                    // input session for that keystroke is still live, is a
+                    // known crash trigger (RTIInputSystemClient /
+                    // NSTaggedPointerString on-device). Defer the rewrite
+                    // to the next run loop tick so that transaction
+                    // finishes first.
+                    let digits = String(newValue.filter(\.isNumber).prefix(6))
+                    if digits != newValue {
+                        DispatchQueue.main.async { code = digits }
+                    }
+                    if digits.count == 6 && !busy { pair() }
                 }
                 .padding(.horizontal, 24)
 

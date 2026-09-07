@@ -222,11 +222,20 @@ struct ParentSignInStep: View {
 
             OnboardingV2CodeField(code: $confirmCode)
                 .onChange(of: confirmCode) { _, newValue in
-                    let digits = newValue.filter(\.isNumber)
-                    if digits != newValue { confirmCode = digits }
-                    if digits.count > 6 { confirmCode = String(digits.prefix(6)) }
+                    // Rewriting a TextField's own bound text synchronously,
+                    // from inside its own onChange, while the keyboard's
+                    // input session for that same keystroke is still live,
+                    // is a known crash trigger (RTIInputSystemClient /
+                    // NSTaggedPointerString — a real device crash traced to
+                    // exactly this pattern). Deferring the rewrite to the
+                    // next run loop tick lets that keystroke's transaction
+                    // finish first.
+                    let digits = String(newValue.filter(\.isNumber).prefix(6))
+                    if digits != newValue {
+                        DispatchQueue.main.async { confirmCode = digits }
+                    }
                     codeError = nil
-                    if confirmCode.count == 6 && !busy { Task { await finishSignUp() } }
+                    if digits.count == 6 && !busy { Task { await finishSignUp() } }
                 }
 
             if busy {
@@ -348,8 +357,12 @@ struct ParentProfileStep: View {
 
                         OnboardingV2EditableField(label: "AGE", text: $ageText, placeholder: "e.g. 35", keyboardType: .numberPad)
                             .onChange(of: ageText) { _, newValue in
-                                let digits = newValue.filter(\.isNumber).prefix(2)
-                                if String(digits) != newValue { ageText = String(digits) }
+                                // See the confirmCode onChange above — same
+                                // deferred-rewrite fix for the same crash.
+                                let digits = String(newValue.filter(\.isNumber).prefix(2))
+                                if digits != newValue {
+                                    DispatchQueue.main.async { ageText = digits }
+                                }
                             }
 
                         VStack(alignment: .leading, spacing: 6) {
@@ -641,11 +654,14 @@ struct ParentPairScanStep: View {
 
                     OnboardingV2CodeField(code: $code)
                         .onChange(of: code) { _, newValue in
-                            let digits = newValue.filter(\.isNumber)
-                            if digits != newValue { code = digits }
-                            if digits.count > 6 { code = String(digits.prefix(6)) }
+                            // See ParentSignUpStep's confirmCode onChange —
+                            // same deferred-rewrite fix for the same crash.
+                            let digits = String(newValue.filter(\.isNumber).prefix(6))
+                            if digits != newValue {
+                                DispatchQueue.main.async { code = digits }
+                            }
                             errorText = nil
-                            if code.count == 6 && !busy { Task { await submit() } }
+                            if digits.count == 6 && !busy { Task { await submit() } }
                         }
 
                     if busy {
