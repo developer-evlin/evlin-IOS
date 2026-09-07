@@ -910,8 +910,8 @@ private struct EditTaskReviewSheet: View {
                     .buttonStyle(.plain)
                     .font(Typography.font(12.5, weight: .semibold))
                     .foregroundStyle(EColor.onSurfaceVariant)
-                    .padding(.top, -10)
-                    .padding(.bottom, 10)
+                    .frame(height: 32)
+                    .contentShape(Rectangle())
             }
         } else {
             FormField(label: "When") {
