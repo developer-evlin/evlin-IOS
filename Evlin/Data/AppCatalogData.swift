@@ -11,19 +11,17 @@ struct MockApp: Identifiable {
     let id = UUID()
     var name: String
     var bundleID: String
-    var icon: String
-    var color: Color
 }
 
 let mockAppCatalog: [MockApp] = [
-    MockApp(name: "TikTok", bundleID: "com.zhiliaoapp.musically", icon: "music.note", color: .black),
-    MockApp(name: "Instagram", bundleID: "com.burbn.instagram", icon: "camera.fill", color: Color(hex: "E1306C")),
-    MockApp(name: "YouTube", bundleID: "com.google.ios.youtube", icon: "play.rectangle.fill", color: .red),
-    MockApp(name: "Roblox", bundleID: "com.roblox.robloxmobile", icon: "gamecontroller.fill", color: Color(hex: "00A2FF")),
-    MockApp(name: "Snapchat", bundleID: "com.toyopagroup.picaboo", icon: "camera.fill", color: Color(hex: "FFFC00")),
-    MockApp(name: "Discord", bundleID: "com.hammerandchisel.discord", icon: "bubble.left.and.bubble.right.fill", color: Color(hex: "5865F2")),
-    MockApp(name: "Messages", bundleID: "com.apple.MobileSMS", icon: "message.fill", color: .green),
-    MockApp(name: "Safari", bundleID: "com.apple.mobilesafari", icon: "safari.fill", color: .blue),
+    MockApp(name: "TikTok", bundleID: "com.zhiliaoapp.musically"),
+    MockApp(name: "Instagram", bundleID: "com.burbn.instagram"),
+    MockApp(name: "YouTube", bundleID: "com.google.ios.youtube"),
+    MockApp(name: "Roblox", bundleID: "com.roblox.robloxmobile"),
+    MockApp(name: "Snapchat", bundleID: "com.toyopagroup.picaboo"),
+    MockApp(name: "Discord", bundleID: "com.hammerandchisel.discord"),
+    MockApp(name: "Messages", bundleID: "com.apple.MobileSMS"),
+    MockApp(name: "Safari", bundleID: "com.apple.mobilesafari"),
 ]
 
 // Mirrors LockListManagerView's real Apps/Categories split (Views/Settings/
@@ -44,13 +42,12 @@ let mockCategoryCatalog: [MockCategory] = [
 ]
 
 // The App Store's own lookup endpoint — public, unauthenticated, just the
-// bundle ID as a query param — used only to pull each app's real icon
-// artwork for the block-an-app picker so a parent recognizes TikTok/
-// Instagram/etc. by their actual icon instead of a generic SF Symbol
-// standing in for it. This is the one bit of networking anywhere in this
-// otherwise fully offline/mock-data prototype, so a failed or slow lookup
-// (no connection, rate limit, unrecognized bundle ID) just falls back to
-// that same SF Symbol tile rather than leaving a blank space.
+// bundle ID as a query param — used to pull each app's real icon artwork
+// for the block-an-app picker. This is the one bit of networking anywhere
+// in this otherwise fully offline/mock-data prototype, so there's no
+// generic-icon fallback to fall back to — a failed lookup (offline, rate
+// limited, unrecognized bundle ID) leaves that row's icon area empty
+// rather than substituting a guess that isn't the app's actual icon.
 //
 // Confined to the main actor rather than a plain `enum` with `static var`
 // storage: every row that shows an icon reads/writes `cache`/`inFlight`
@@ -102,8 +99,7 @@ enum ITunesLookup {
                 return resolvedURL
             } catch {
                 // Offline, rate-limited, or an unrecognized bundle ID —
-                // any of these just means "no icon," handled the same way
-                // by the caller (AppIconView keeps its fallback tile).
+                // any of these just means "no icon" to the caller.
                 return nil
             }
         }
@@ -126,28 +122,23 @@ enum ITunesLookup {
     }
 }
 
-// Real App Store artwork once the lookup resolves; the same colored-SF-
-// Symbol tile every row already had otherwise (still shown immediately, not
-// a spinner, so a slow/offline lookup never reads as broken).
+// Real App Store artwork, and nothing else — no generic per-app guess
+// standing in for it. Given BlockTargetPicker prefetches the whole catalog
+// the moment it appears, this is resolved before a row is ever likely to
+// render; while genuinely unresolved (still in flight, or the lookup
+// failed) the tile is just an empty outline, not a wrong-shaped stand-in.
 struct AppIconView: View {
     var bundleID: String
-    var fallbackIcon: String
-    var fallbackColor: Color
     var size: CGFloat = 44
 
     @State private var iconURL: URL?
 
     // Seeded from the cache synchronously — a bundle ID already looked up
-    // once (very likely, given BlockTargetPicker prefetches the whole
-    // catalog on appear) renders its real icon on the very first frame,
-    // with no fallback-then-swap flash. A genuinely new/unresolved one
-    // still shows the fallback until its lookup finishes, since there's
-    // nothing real to show before that.
+    // once (very likely, given the prefetch) renders its real icon on the
+    // very first frame, no flash.
     @MainActor
-    init(bundleID: String, fallbackIcon: String, fallbackColor: Color, size: CGFloat = 44) {
+    init(bundleID: String, size: CGFloat = 44) {
         self.bundleID = bundleID
-        self.fallbackIcon = fallbackIcon
-        self.fallbackColor = fallbackColor
         self.size = size
         _iconURL = State(initialValue: ITunesLookup.cachedIconURL(bundleID: bundleID))
     }
@@ -159,11 +150,11 @@ struct AppIconView: View {
                     if case .success(let image) = phase {
                         image.resizable().scaledToFill()
                     } else {
-                        fallbackTile
+                        emptyTile
                     }
                 }
             } else {
-                fallbackTile
+                emptyTile
             }
         }
         .frame(width: size, height: size)
@@ -178,9 +169,9 @@ struct AppIconView: View {
         }
     }
 
-    private var fallbackTile: some View {
+    private var emptyTile: some View {
         RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
-            .fill(fallbackColor)
-            .overlay(Image(systemName: fallbackIcon).font(.system(size: size * 0.4)).foregroundStyle(.white))
+            .fill(EColor.surfaceContainerHigh)
+            .overlay(RoundedRectangle(cornerRadius: size * 0.25, style: .continuous).strokeBorder(EColor.outlineVariant))
     }
 }

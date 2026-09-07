@@ -458,7 +458,7 @@ struct BlockTargetPicker: View {
                 VStack(spacing: 6) {
                     ForEach(visibleApps) { app in
                         targetRow(
-                            icon: app.icon, color: app.color, title: app.name,
+                            title: app.name,
                             bundleID: app.bundleID, selected: selectedApps.contains(app.id)
                         ) { toggleApp(app) }
                     }
@@ -470,7 +470,7 @@ struct BlockTargetPicker: View {
                 VStack(spacing: 6) {
                     ForEach(visibleCategories) { cat in
                         targetRow(
-                            icon: cat.icon, color: cat.color, title: cat.name,
+                            title: cat.name, categoryIcon: cat.icon, categoryColor: cat.color,
                             selected: selectedCategories.contains(cat.id)
                         ) { toggleCategory(cat) }
                     }
@@ -510,16 +510,19 @@ struct BlockTargetPicker: View {
     // was standing in for (telling two similarly-named apps apart), and
     // a raw identifier like "com.zhiliaoapp.musically" routinely wrapped to
     // two lines and crowded the row below it.
-    private func targetRow(icon: String, color: Color, title: String, bundleID: String? = nil, selected: Bool, onTap: @escaping () -> Void) -> some View {
+    // categoryIcon/categoryColor only apply to the no-bundle-ID (category)
+    // case — a real app always renders through AppIconView now, with
+    // nothing app-specific left to guess a fallback glyph/color from.
+    private func targetRow(title: String, categoryIcon: String? = nil, categoryColor: Color? = nil, bundleID: String? = nil, selected: Bool, onTap: @escaping () -> Void) -> some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 if let bundleID {
-                    AppIconView(bundleID: bundleID, fallbackIcon: icon, fallbackColor: color)
-                } else {
+                    AppIconView(bundleID: bundleID)
+                } else if let categoryIcon, let categoryColor {
                     RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(color)
+                        .fill(categoryColor)
                         .frame(width: 44, height: 44)
-                        .overlay(Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.white))
+                        .overlay(Image(systemName: categoryIcon).font(.system(size: 18)).foregroundStyle(.white))
                 }
                 Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
                 Spacer(minLength: 8)
