@@ -850,6 +850,7 @@ private struct EditTaskReviewSheet: View {
         _title = State(initialValue: task.title)
         _description = State(initialValue: task.description)
         _hasDueDate = State(initialValue: task.dueLabel != nil)
+        _dueDate = State(initialValue: Self.parseDueDate(task.dueLabel))
         _repeatDays = State(initialValue: task.repeats == "none"
             ? []
             : Set(task.repeats.split(separator: ",").map(String.init)))
@@ -870,9 +871,14 @@ private struct EditTaskReviewSheet: View {
             FormField(label: "Task name") {
                 FormTextField(placeholder: "e.g. Make your bed", text: $title)
             }
-            FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
             RepeatPicker(selectedDays: $repeatDays)
-            MoreOptions {
+            // Starts expanded when there's already something to show
+            // (a due date already set, or existing instructions) so
+            // editing a task doesn't hide its own current values behind
+            // an extra tap — a brand-new task has nothing to hide, so
+            // AddTaskSheet's version of this always starts closed instead.
+            MoreOptions(onCollapse: { hasDueDate = false }, startOpen: hasDueDate || !description.isEmpty) {
+                whenField
                 FormField(label: "What to do") {
                     TextField("Instructions for the student…", text: $description, axis: .vertical)
                         .font(Typography.font(15, weight: .regular))
@@ -891,7 +897,59 @@ private struct EditTaskReviewSheet: View {
         }
     }
 
+    // Same collapsed-until-asked-for field as AddTaskSheet's whenField —
+    // kept in sync there rather than shared outright since this one also
+    // has to seed from an existing task's due date instead of always
+    // starting empty.
+    @ViewBuilder
+    private var whenField: some View {
+        if hasDueDate {
+            VStack(alignment: .leading, spacing: 8) {
+                FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
+                Button("Remove date") { hasDueDate = false }
+                    .buttonStyle(.plain)
+                    .font(Typography.font(12.5, weight: .semibold))
+                    .foregroundStyle(EColor.onSurfaceVariant)
+                    .padding(.top, -10)
+                    .padding(.bottom, 10)
+            }
+        } else {
+            FormField(label: "When") {
+                Button {
+                    dueDate = Date()
+                    hasDueDate = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle.fill").font(.system(size: 16))
+                        Text("Add a date & time").font(Typography.font(14, weight: .semibold))
+                    }
+                    .foregroundStyle(FormGreen.accent)
+                    .padding(.horizontal, 14)
+                    .frame(height: 48)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     private func formatted(_ date: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f.string(from: date)
+    }
+
+    // task.dueLabel is a freeform display string ("Today, 6:00 PM",
+    // "Yesterday, 5:00 PM") from mock data, not a stored Date — pulling
+    // just the trailing clock time out of it and pinning it to today is a
+    // reasonable stand-in given there's no real backing Date to read, and
+    // fixes editing a scheduled task from showing the current live time
+    // as if that were its actual due time.
+    private static func parseDueDate(_ label: String?) -> Date {
+        guard let label, let timeToken = label.split(separator: ",").last else { return Date() }
+        let f = DateFormatter(); f.dateFormat = "h:mm a"
+        guard let time = f.date(from: timeToken.trimmingCharacters(in: .whitespaces)) else { return Date() }
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: time)
+        return Calendar.current.date(bySettingHour: comps.hour ?? 0, minute: comps.minute ?? 0, second: 0, of: Date()) ?? Date()
     }
 }

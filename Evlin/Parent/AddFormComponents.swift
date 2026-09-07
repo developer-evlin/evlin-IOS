@@ -353,8 +353,19 @@ struct MoreOptions<Content: View>: View {
     // is expanded (see AddTaskSheet's whenField), on the idea that hiding
     // the section again means "never mind," not "keep it but out of sight."
     var onCollapse: (() -> Void)? = nil
-    @State private var open = false
+    // Lets a caller open this pre-expanded when there's already something
+    // inside worth seeing without an extra tap (e.g. editing a task that
+    // already has a due date) — new/empty forms still default closed.
+    var startOpen: Bool = false
+    @State private var open: Bool
     @ViewBuilder var content: Content
+
+    init(onCollapse: (() -> Void)? = nil, startOpen: Bool = false, @ViewBuilder content: () -> Content) {
+        self.onCollapse = onCollapse
+        self.startOpen = startOpen
+        self.content = content()
+        _open = State(initialValue: startOpen)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
