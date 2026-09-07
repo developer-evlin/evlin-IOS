@@ -778,7 +778,7 @@ private struct TrialExhaustedPopupCard: View {
 
             VStack(spacing: 0) {
                 Spacer()
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .center, spacing: 14) {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(EColor.primaryContainer)
                         .frame(width: 44, height: 44)
@@ -787,9 +787,11 @@ private struct TrialExhaustedPopupCard: View {
                     Text("You've used your free trial")
                         .font(Typography.font(18, weight: .heavy))
                         .foregroundStyle(EColor.onSurface)
+                        .multilineTextAlignment(.center)
                     Text("Upgrade to Evlin Plus to keep managing \(childName)'s screen time, tasks, and rules.")
                         .font(Typography.font(13, weight: .regular))
                         .foregroundStyle(EColor.onSurfaceVariant)
+                        .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
 
                     if isUpgrading {

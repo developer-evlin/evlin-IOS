@@ -770,24 +770,26 @@ struct ScreenChat: View {
         }
     }
 
+    // One rounded compose card (Gemini's layout) instead of a pill field
+    // with a separate floating circle beside it — the text sits up top and
+    // the send button anchors to the card's own bottom-right corner, so
+    // typing and sending read as one control, not two. Also grows taller
+    // before capping (1...4 -> 1...8), since a longer message used to hit
+    // the ceiling and start internally scrolling sooner than it needed to.
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        VStack(alignment: .trailing, spacing: 8) {
             TextField("Message Evlin…", text: $draft, axis: .vertical)
                 .font(Typography.font(16, weight: .regular))
-                .lineLimit(1...4) // grows for a pasted paragraph, caps so the bar can't eat the whole screen
+                .lineLimit(1...8)
                 .focused($inputFocused)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .background(EColor.surfaceContainerLowest)
-                .clipShape(RoundedRectangle(cornerRadius: 24))
-                .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(EColor.outlineVariant))
+                .padding(.horizontal, 6)
                 .onSubmit(send)
 
             Button(action: send) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 19, weight: .bold))
+                    .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 50, height: 50)
+                    .frame(width: 38, height: 38)
                     .background(canSend ? Brand.greenDeep : EColor.outlineVariant)
                     .clipShape(Circle())
             }
@@ -795,6 +797,12 @@ struct ScreenChat: View {
             .disabled(!canSend)
             .accessibilityLabel("Send message")
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+        .background(EColor.surfaceContainerLowest)
+        .clipShape(RoundedRectangle(cornerRadius: 26))
+        .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(EColor.outlineVariant))
         .padding(12)
         .background(.ultraThinMaterial)
     }
