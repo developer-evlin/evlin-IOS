@@ -877,7 +877,7 @@ private struct EditTaskReviewSheet: View {
             // editing a task doesn't hide its own current values behind
             // an extra tap — a brand-new task has nothing to hide, so
             // AddTaskSheet's version of this always starts closed instead.
-            MoreOptions(onCollapse: { hasDueDate = false }, startOpen: hasDueDate || !description.isEmpty) {
+            MoreOptions(startOpen: hasDueDate || !description.isEmpty) {
                 whenField
                 FormField(label: "What to do") {
                     TextField("Instructions for the student…", text: $description, axis: .vertical)

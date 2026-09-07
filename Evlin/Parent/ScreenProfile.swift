@@ -1954,7 +1954,7 @@ private struct AddTaskSheet: View {
                 FormTextField(placeholder: "e.g. Make your bed", text: $title)
             }
             RepeatPicker(selectedDays: $repeatDays)
-            MoreOptions(onCollapse: { hasDueDate = false }) {
+            MoreOptions {
                 whenField
                 FormField(label: "What to do") {
                     TextField("Instructions for the student…", text: $description, axis: .vertical)

@@ -348,11 +348,6 @@ struct RepeatPicker: View {
 
 // Collapsed-by-default disclosure — tucks secondary fields behind a tap.
 struct MoreOptions<Content: View>: View {
-    // Fires only on open -> closed, not the reverse — a caller uses this to
-    // discard whatever was entered in a field that only exists while this
-    // is expanded (see AddTaskSheet's whenField), on the idea that hiding
-    // the section again means "never mind," not "keep it but out of sight."
-    var onCollapse: (() -> Void)? = nil
     // Lets a caller open this pre-expanded when there's already something
     // inside worth seeing without an extra tap (e.g. editing a task that
     // already has a due date) — new/empty forms still default closed.
@@ -360,8 +355,7 @@ struct MoreOptions<Content: View>: View {
     @State private var open: Bool
     @ViewBuilder var content: Content
 
-    init(onCollapse: (() -> Void)? = nil, startOpen: Bool = false, @ViewBuilder content: () -> Content) {
-        self.onCollapse = onCollapse
+    init(startOpen: Bool = false, @ViewBuilder content: () -> Content) {
         self.startOpen = startOpen
         self.content = content()
         _open = State(initialValue: startOpen)
@@ -370,10 +364,7 @@ struct MoreOptions<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.16)) {
-                    open.toggle()
-                    if !open { onCollapse?() }
-                }
+                withAnimation(.easeInOut(duration: 0.16)) { open.toggle() }
             } label: {
                 HStack {
                     Text("More options").font(Typography.font(15, weight: .heavy)).foregroundStyle(EColor.onSurface)
