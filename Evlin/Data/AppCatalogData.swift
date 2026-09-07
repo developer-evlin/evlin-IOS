@@ -62,6 +62,13 @@ enum ITunesLookup {
 
     private static var cache: [String: URL] = [:]
 
+    // A synchronous peek at the cache — lets AppIconView seed its state
+    // with an already-known icon before its first render, so re-opening
+    // the picker (or switching tabs and back) shows the real icon
+    // immediately instead of flashing the fallback tile again while an
+    // already-answered lookup re-resolves.
+    static func cachedIconURL(bundleID: String) -> URL? { cache[bundleID] }
+
     static func iconURL(bundleID: String) async -> URL? {
         if let cached = cache[bundleID] { return cached }
         var comps = URLComponents(string: "https://itunes.apple.com/lookup")
@@ -90,6 +97,19 @@ struct AppIconView: View {
     var size: CGFloat = 44
 
     @State private var iconURL: URL?
+
+    // Seeded from the cache synchronously — a bundle ID already looked up
+    // once this session renders its real icon on the very first frame,
+    // with no fallback-then-swap flash. A genuinely new one still shows
+    // the fallback until the lookup resolves, since there's nothing to
+    // show before that finishes.
+    init(bundleID: String, fallbackIcon: String, fallbackColor: Color, size: CGFloat = 44) {
+        self.bundleID = bundleID
+        self.fallbackIcon = fallbackIcon
+        self.fallbackColor = fallbackColor
+        self.size = size
+        _iconURL = State(initialValue: ITunesLookup.cachedIconURL(bundleID: bundleID))
+    }
 
     var body: some View {
         Group {
