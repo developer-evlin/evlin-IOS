@@ -1948,9 +1948,9 @@ private struct AddTaskSheet: View {
             FormField(label: "Task name") {
                 FormTextField(placeholder: "e.g. Make your bed", text: $title)
             }
-            FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
             RepeatPicker(selectedDays: $repeatDays)
             MoreOptions {
+                whenField
                 FormField(label: "What to do") {
                     TextField("Instructions for the student…", text: $description, axis: .vertical)
                         .font(Typography.font(15, weight: .regular))
@@ -1959,6 +1959,45 @@ private struct AddTaskSheet: View {
                         .background(FormGreen.fieldBg)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
+            }
+        }
+    }
+
+    // Collapsed under More Options rather than sitting out with the rest —
+    // and, until a parent actually taps in, there's no date/time box to
+    // read at all, just a button to add one. Two always-visible pickers
+    // pre-filled to right-now read as a value that's already set even when
+    // nothing's been chosen yet.
+    @ViewBuilder
+    private var whenField: some View {
+        if hasDueDate {
+            VStack(alignment: .leading, spacing: 8) {
+                FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
+                Button("Remove date") { hasDueDate = false }
+                    .buttonStyle(.plain)
+                    .font(Typography.font(12.5, weight: .semibold))
+                    .foregroundStyle(EColor.onSurfaceVariant)
+                    .padding(.top, -10)
+                    .padding(.bottom, 10)
+            }
+        } else {
+            FormField(label: "When") {
+                Button {
+                    dueDate = Date()
+                    hasDueDate = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle.fill").font(.system(size: 16))
+                        Text("Add a date & time").font(Typography.font(14, weight: .semibold))
+                    }
+                    .foregroundStyle(FormGreen.accent)
+                    .padding(.horizontal, 14)
+                    .frame(height: 48)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
             }
         }
     }
