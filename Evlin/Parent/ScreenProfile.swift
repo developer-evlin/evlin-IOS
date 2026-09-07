@@ -1628,38 +1628,41 @@ private struct EditDailyScreenTimeLimitSheet: View {
     // settle, not continuously during a fast fling — the warning message
     // below it visibly lagged behind the finger. A ScrollView driven by
     // live scroll geometry (.scrollPosition) reports position continuously
-    // instead, so the warning keeps pace with the flick. Horizontal, same
-    // itemWidth/itemHeight as GrantExtraTimeSheet's customRuler — trying
-    // the same side-to-side feel here instead of the vertical wheel this
-    // used at first.
+    // instead, so the warning keeps pace with the flick. Vertical, back to
+    // the up/down feel of a standard wheel picker (tried horizontal for a
+    // stretch, matching GrantExtraTimeSheet's ruler, but it read as a thin
+    // strip of mostly-empty space rather than a real picker).
     private var limitWheel: some View {
-        let itemWidth: CGFloat = 68
-        let itemHeight: CGFloat = 56
+        let itemHeight: CGFloat = 46
+        let visibleRows: CGFloat = 5
         return GeometryReader { geo in
-            let sideInset = max(0, (geo.size.width - itemWidth) / 2)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 0) {
+            let topInset = max(0, (geo.size.height - itemHeight) / 2)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
                     ForEach(options, id: \.self) { m in
                         Text(formatMinutes(m))
                             .font(Typography.font(m == limit ? 17 : 14, weight: m == limit ? .heavy : .semibold))
                             .foregroundStyle(m == limit ? EColor.primary : EColor.onSurfaceVariant)
-                            .frame(width: itemWidth, height: itemHeight)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: itemHeight)
                             .id(m)
                     }
                 }
+                .frame(maxWidth: .infinity)
                 .scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned)
             .scrollPosition(id: $scrollID)
-            .contentMargins(.horizontal, sideInset, for: .scrollContent)
+            .contentMargins(.vertical, topInset, for: .scrollContent)
             .overlay {
                 Capsule()
                     .fill(EColor.primary.opacity(0.1))
-                    .frame(width: itemWidth - 10, height: 40)
+                    .frame(height: itemHeight - 8)
+                    .padding(.horizontal, 32)
                     .allowsHitTesting(false)
             }
         }
-        .frame(height: itemHeight)
+        .frame(height: itemHeight * visibleRows)
         .onChange(of: scrollID) { _, newValue in
             if let newValue { limit = newValue }
         }
