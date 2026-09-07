@@ -680,11 +680,25 @@ struct ScreenSettings: View {
             VStack(spacing: 12) {
                 Circle().fill(accentColor).frame(width: 88, height: 88)
                     .overlay(Text(initials(from: parentName)).font(Typography.font(28, weight: .heavy)).foregroundStyle(.white))
+                    // A thin gold ring on top of the avatar is the same "you can
+                    // tell at a glance" signal Opal/similar apps use for a paid
+                    // member — nothing extra to read, just present or not.
+                    .overlay(
+                        Circle()
+                            .strokeBorder(
+                                billing.isPlus
+                                    ? AnyShapeStyle(LinearGradient(colors: [Color(hex: "FFD972"), Color(hex: "F5A623")], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                    : AnyShapeStyle(Color.clear),
+                                lineWidth: 3
+                            )
+                            .padding(-4)
+                    )
 
-                VStack(spacing: 3) {
+                VStack(spacing: 8) {
                     Text(parentName)
                         .font(Typography.font(18, weight: .bold))
                         .foregroundStyle(EColor.onSurface)
+                    planBadge
                     Text("Email not exposed in this prototype")
                         .font(Typography.font(12, weight: .regular))
                         .foregroundStyle(EColor.onSurfaceVariant)
@@ -703,6 +717,40 @@ struct ScreenSettings: View {
         .padding(.horizontal, 16)
         .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(EColor.surfaceContainerLowest))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(EColor.outlineVariant.opacity(0.7), lineWidth: 1))
+    }
+
+    // A status pill under the name, the way Opal and similar apps mark a
+    // profile as paid/free right on the profile itself rather than only
+    // inside a separate billing screen — tapping it (free or Plus) opens
+    // the same billing page the root Settings list's "Evlin Plan" row does.
+    private var planBadge: some View {
+        Button { path.append(SettingsRoute.billing) } label: {
+            HStack(spacing: 5) {
+                Image(systemName: billing.isPlus ? "crown.fill" : "lock.fill")
+                    .font(.system(size: 10, weight: .bold))
+                Text(billing.isPlus ? "Evlin Plus" : "Free Plan")
+                    .font(Typography.font(12, weight: .bold))
+                if !billing.isPlus {
+                    Text("· Upgrade")
+                        .font(Typography.font(12, weight: .bold))
+                        .foregroundStyle(EColor.primary)
+                }
+            }
+            .foregroundStyle(billing.isPlus ? Color(hex: "8A5A00") : EColor.onSurfaceVariant)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(
+                    billing.isPlus
+                        ? AnyShapeStyle(LinearGradient(colors: [Color(hex: "FFEBB0"), Color(hex: "FFD972")], startPoint: .leading, endPoint: .trailing))
+                        : AnyShapeStyle(EColor.surfaceContainerHigh)
+                )
+            )
+            .overlay(
+                Capsule().strokeBorder(billing.isPlus ? Color(hex: "F5A623").opacity(0.5) : EColor.outlineVariant, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var accentColor: Color { Color(hex: selectedAccentHex) }
