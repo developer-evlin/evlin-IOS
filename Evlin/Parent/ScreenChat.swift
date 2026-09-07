@@ -115,13 +115,10 @@ private struct TypingIndicator: View {
 
 // MARK: - Inline chat cards
 
-// Row shape (icon, name, subtitle, trailing checkbox) is closest to
-// Evlin-iOS's U1Card (unlock_picker), adapted for picking targets to block
-// instead of unlock. The Apps/Categories tab split, search field, and
-// bundle-ID subtitle mirror LockListManagerView's real section layout —
-// production hides bundle IDs behind a separate manual-naming step (Apple's
-// FamilyActivityPicker doesn't expose them), which doesn't apply here since
-// this catalog is mock data with real names already attached.
+// Row shape (icon, name, trailing checkbox) is closest to Evlin-iOS's
+// U1Card (unlock_picker), adapted for picking targets to block instead of
+// unlock. The Apps/Categories tab split and search field mirror
+// LockListManagerView's real section layout.
 private struct BlockAppCard: View {
     // Just the target pick — duration is its own follow-up turn
     // (BlockDurationCard below), not a section tacked onto this same card.

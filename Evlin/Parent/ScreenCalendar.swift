@@ -31,69 +31,25 @@ private struct LaidOutEvent: Identifiable {
     var top: CGFloat
     var height: CGFloat
     var col: Int
-    var span: Int
     var numCols: Int
 }
 
-// Overlapping events split width between themselves and expand rightward
-// into columns that stay free for their whole span, Google-Calendar style.
-// Column assignment is a FIXED per-person lane (Family, then each kid in
-// CalendarData.people order) rather than first-fit bin-packing — so
-// whenever two people's events overlap, each person's block always lands
-// in the same relative left-to-right slot (and same color) instead of
-// shifting around based on whatever happened to fit first that day.
-private func layoutDayEvents(_ events: [CalDayEvent]) -> [LaidOutEvent] {
-    struct Item { var dayEvent: CalDayEvent; var start: CGFloat; var end: CGFloat }
-    var items = events.map { de -> Item in
+// Every person gets a permanently-assigned lane spanning the whole day, in
+// the same left-to-right order as the avatar row above the timeline — not
+// just splitting width when two people happen to overlap in time. That used
+// to mean a non-overlapping event (the common case: most of a family's
+// events don't collide) rendered full-width, with nothing to visually tie
+// it to "this is Emma's lane" the way the header row implies. Now Emma's
+// events always sit under Emma's avatar, whether or not anyone else has
+// something scheduled at the same time.
+private func layoutDayEvents(_ events: [CalDayEvent], lanes: [FamilyPerson]) -> [LaidOutEvent] {
+    let numCols = max(lanes.count, 1)
+    return events.compactMap { de -> LaidOutEvent? in
+        guard let colIndex = lanes.firstIndex(where: { $0.id == de.event.personId }) else { return nil }
         let start = evTop(de.event.start)
         let end = max(evTop(de.event.end), start + 1)
-        return Item(dayEvent: de, start: start, end: end)
+        return LaidOutEvent(id: de.id, dayEvent: de, top: start, height: end - start, col: colIndex, numCols: numCols)
     }
-    items.sort { $0.start != $1.start ? $0.start < $1.start : $0.end < $1.end }
-
-    var groups: [[Item]] = []
-    var group: [Item] = []
-    var groupEnd: CGFloat = -.greatestFiniteMagnitude
-    for item in items {
-        if group.isEmpty || item.start < groupEnd {
-            group.append(item)
-            groupEnd = max(groupEnd, item.end)
-        } else {
-            groups.append(group)
-            group = [item]
-            groupEnd = item.end
-        }
-    }
-    if !group.isEmpty { groups.append(group) }
-
-    var result: [LaidOutEvent] = []
-    for g in groups {
-        // Only the people actually present in this overlap group get a
-        // lane, so a single-person group still renders full-width — the
-        // fixed ordering only matters once there's something to stay
-        // consistent relative to.
-        let presentPersonIds = CalendarData.people.map(\.id).filter { pid in g.contains { $0.dayEvent.event.personId == pid } }
-        let numCols = presentPersonIds.count
-        var columns: [[Item]] = Array(repeating: [], count: numCols)
-        for item in g {
-            guard let ci = presentPersonIds.firstIndex(of: item.dayEvent.event.personId) else { continue }
-            columns[ci].append(item)
-        }
-        for (ci, col) in columns.enumerated() {
-            for item in col {
-                var span = 1
-                var c = ci + 1
-                while c < numCols {
-                    let blocked = columns[c].contains { !($0.end <= item.start || $0.start >= item.end) }
-                    if blocked { break }
-                    span += 1
-                    c += 1
-                }
-                result.append(LaidOutEvent(id: item.dayEvent.id, dayEvent: item.dayEvent, top: item.start, height: item.end - item.start, col: ci, span: span, numCols: numCols))
-            }
-        }
-    }
-    return result
 }
 
 struct ScreenCalendar: View {
@@ -221,7 +177,20 @@ private struct DayTimelineView: View {
         return events.filter { $0.event.personId == focusPerson }
     }
 
-    private var hours: [Int] { Array(startHour...endHour) }
+    // Skips whatever empty hours sit before the day's first event (an hour
+    // of lead-in ahead of it) instead of always opening at midnight — most
+    // of a family's day has nothing scheduled before mid-morning, and
+    // scrolling past all of it just to reach real content wasted the
+    // screen space between the header and the first thing worth seeing.
+    // Based on the day's full event list, not the person-filtered one, so
+    // toggling a focus avatar doesn't jerk the visible range around.
+    private var renderStartHour: Int {
+        guard let earliestMinutes = events.map({ CalendarData.minutesSinceMidnight($0.event.start) }).min() else { return startHour }
+        return max(startHour, earliestMinutes / 60 - 1)
+    }
+    private var renderStartY: CGFloat { timeToY(renderStartHour) }
+
+    private var hours: [Int] { Array(renderStartHour...endHour) }
 
     var body: some View {
         Card(padded: false) {
@@ -264,18 +233,18 @@ private struct DayTimelineView: View {
                 .padding(.horizontal, 16).padding(.bottom, 10)
                 Divider()
 
-                // Opens at the top of the day rather than auto-scrolling to
-                // the first event — SwiftUI's ScrollViewReader.scrollTo
-                // relies on a view's *layout* position, which offset()-based
-                // absolute placement (used below for the timeline rows)
-                // never updates, so any scrollTo target here always resolved
-                // to the same spot. Not worth chasing further for what's a
-                // cosmetic nicety; a plain top-opening scroll is standard
-                // calendar behavior anyway.
+                // Opens near the day's first event (see renderStartHour)
+                // rather than always at midnight — this crops the empty
+                // leading hours out of the scrollable range entirely
+                // instead of trying to scroll to a computed position after
+                // the fact, which sidesteps SwiftUI's ScrollViewReader:
+                // .scrollTo relies on a view's *layout* position, and the
+                // offset()-based absolute placement used below for the
+                // timeline rows never resolves one reliably.
                 ScrollView {
                     GeometryReader { geo in
                         let trackWidth = geo.size.width - timeColW
-                        let laidOut = layoutDayEvents(filteredEvents)
+                        let laidOut = layoutDayEvents(filteredEvents, lanes: visiblePeople)
                         ZStack(alignment: .topLeading) {
                             ForEach(hours, id: \.self) { h in
                                 HStack(spacing: 0) {
@@ -287,7 +256,7 @@ private struct DayTimelineView: View {
                                     Rectangle().fill(EColor.outlineVariant).frame(maxWidth: .infinity).frame(height: 0.5)
                                 }
                                 .frame(width: geo.size.width, alignment: .leading)
-                                .offset(y: timeToY(h) - 6)
+                                .offset(y: timeToY(h) - 6 - renderStartY)
                             }
 
                             ForEach(laidOut) { item in
@@ -295,7 +264,7 @@ private struct DayTimelineView: View {
                             }
                         }
                     }
-                    .frame(height: timeToY(endHour) + 24)
+                    .frame(height: timeToY(endHour) - renderStartY + 24)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -307,7 +276,7 @@ private struct DayTimelineView: View {
 
     private func eventBlock(_ item: LaidOutEvent, trackWidth: CGFloat) -> some View {
         let p = CalendarData.person(item.dayEvent.event.personId)
-        let widthFrac = CGFloat(item.span) / CGFloat(item.numCols)
+        let widthFrac = 1 / CGFloat(item.numCols)
         let leftFrac = CGFloat(item.col) / CGFloat(item.numCols)
         let w = max(trackWidth * widthFrac - 6, 24)
         return Button { onSelect(item.dayEvent) } label: {
@@ -332,7 +301,7 @@ private struct DayTimelineView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .offset(x: timeColW + trackWidth * leftFrac + 3, y: item.top)
+        .offset(x: timeColW + trackWidth * leftFrac + 3, y: item.top - renderStartY)
     }
 }
 

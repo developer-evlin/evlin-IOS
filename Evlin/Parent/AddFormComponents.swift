@@ -458,7 +458,7 @@ struct BlockTargetPicker: View {
                 VStack(spacing: 6) {
                     ForEach(visibleApps) { app in
                         targetRow(
-                            icon: app.icon, color: app.color, title: app.name, subtitle: app.bundleID,
+                            icon: app.icon, color: app.color, title: app.name,
                             bundleID: app.bundleID, selected: selectedApps.contains(app.id)
                         ) { toggleApp(app) }
                     }
@@ -470,7 +470,7 @@ struct BlockTargetPicker: View {
                 VStack(spacing: 6) {
                     ForEach(visibleCategories) { cat in
                         targetRow(
-                            icon: cat.icon, color: cat.color, title: cat.name, subtitle: nil,
+                            icon: cat.icon, color: cat.color, title: cat.name,
                             selected: selectedCategories.contains(cat.id)
                         ) { toggleCategory(cat) }
                     }
@@ -500,8 +500,12 @@ struct BlockTargetPicker: View {
     // circle instead of a small square) plus a colored border on top of the
     // tint fill when selected — a parent picking an app to block should be
     // able to hit the row without aiming, and see at a glance what's
-    // already picked without reading each checkbox individually.
-    private func targetRow(icon: String, color: Color, title: String, subtitle: String?, bundleID: String? = nil, selected: Bool, onTap: @escaping () -> Void) -> some View {
+    // already picked without reading each checkbox individually. No bundle
+    // ID line under the name any more — a real icon now does the job that
+    // was standing in for (telling two similarly-named apps apart), and
+    // a raw identifier like "com.zhiliaoapp.musically" routinely wrapped to
+    // two lines and crowded the row below it.
+    private func targetRow(icon: String, color: Color, title: String, bundleID: String? = nil, selected: Bool, onTap: @escaping () -> Void) -> some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 if let bundleID {
@@ -512,12 +516,7 @@ struct BlockTargetPicker: View {
                         .frame(width: 44, height: 44)
                         .overlay(Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.white))
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                    if let subtitle {
-                        Text(subtitle).font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                    }
-                }
+                Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
                 Spacer(minLength: 8)
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 23))
