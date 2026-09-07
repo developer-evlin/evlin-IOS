@@ -493,6 +493,12 @@ struct ScreenChat: View {
     @State private var messages: [ChatMessage] = []
     @State private var draft = ""
     @State private var isSending = false
+    // The one in-flight "assistant is replying" unit of work, whatever
+    // shape it currently is (a delay before a card appends, or a streaming
+    // reply writing itself in word by word) — see beginResponse. Cancelled
+    // before anything new starts, so two responses can never race each
+    // other into `messages` at once.
+    @State private var responseTask: Task<Void, Never>?
     @State private var showHelp = false
     @State private var showHistory = false
     // Tracks which history thread is currently loaded into `messages` so the
@@ -681,11 +687,18 @@ struct ScreenChat: View {
                 ChatHistorySidebar(
                     selectedID: selectedEntryID,
                     onSelect: { entry in
+                        // Cancel first — an in-flight response belongs to
+                        // whatever thread was showing when it started, and
+                        // has no business appending into a different one.
+                        responseTask?.cancel()
+                        isSending = false
                         selectedEntryID = entry.id
                         messages = entry.transcript.map { ChatMessage(fromUser: $0.fromUser, text: $0.text) }
                         withAnimation(.easeOut(duration: 0.22)) { showHistory = false }
                     },
                     onNewChat: {
+                        responseTask?.cancel()
+                        isSending = false
                         selectedEntryID = nil
                         messages = []
                         withAnimation(.easeOut(duration: 0.22)) { showHistory = false }
@@ -828,9 +841,7 @@ struct ScreenChat: View {
         guard !isSending else { return }
         messages.append(ChatMessage(fromUser: true, text: suggestion.prompt))
         if let card = suggestion.card {
-            isSending = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                isSending = false
+            beginResponse(afterSeconds: 0.6) {
                 let intro: String
                 switch card {
                 case .blockApp: intro = "Sure — which app should I block?"
@@ -854,6 +865,12 @@ struct ScreenChat: View {
     }
 
     private func handleBlockDuration(apps: [String], minutes: Int?) {
+        // Defensive: BlockDurationCard only ever gets built from a
+        // non-empty `names` (handleSelectTargets already guards that), but
+        // this closure crosses a card boundary, so it doesn't lean on that
+        // holding true forever — an empty list just quietly does nothing
+        // rather than producing a message that reads as "Blocked  and ."
+        guard !apps.isEmpty else { return }
         let list = apps.count == 1 ? apps[0] : apps.dropLast().joined(separator: ", ") + " and " + (apps.last ?? "")
         let duration = minutes.map { "for \(formatMinutes($0))" } ?? "until you unlock it"
         respondAfterDelay(with: "Blocked \(list) for Liam \(duration).")
@@ -895,15 +912,34 @@ struct ScreenChat: View {
         }
     }
 
+    // Every path that produces an assistant reply — a card appended after a
+    // short "typing" delay, or a streamed-in text reply — funnels through
+    // here so there is only ever one response in flight. Previously each
+    // path scheduled its own independent DispatchQueue.main.asyncAfter with
+    // nothing cancelling an earlier one: firing a second action (another
+    // suggestion tile, a thread switch) while the first was still mid-delay
+    // or mid-stream could leave two of these writing into `messages` at
+    // once — the likely cause of a stuck typing indicator sitting over an
+    // already-appended card. A structured Task, cancelled up front, means
+    // starting a new response always wins outright instead of racing.
+    private func beginResponse(afterSeconds seconds: Double, _ produceReply: @escaping () -> Void) {
+        responseTask?.cancel()
+        isSending = true
+        responseTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            isSending = false
+            produceReply()
+        }
+    }
+
     // Stand-in for a real backend call: after the typing-dots delay, appends
     // one empty assistant message, then streams words into it (Gemini/
     // ChatGPT-style) rather than popping the whole reply in at once. A real
-    // backend integration would replace the word-splitting/timer below with
+    // backend integration would replace the word-splitting/sleep below with
     // appending each chunk as it arrives over the wire.
     private func respondAfterDelay(with text: String) {
-        isSending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            isSending = false
+        beginResponse(afterSeconds: 0.9) {
             messages.append(ChatMessage(fromUser: false, text: ""))
             guard let id = messages.last?.id else { return }
             streamIn(text, into: id)
@@ -913,10 +949,16 @@ struct ScreenChat: View {
     // `messages.count` changing (from the empty-message append above) already
     // triggers a scroll-to-bottom; the growing bubble stays in view as it
     // streams since it's the last row, so no per-word re-scroll is needed.
+    // Takes over `responseTask` for its own duration, so it's cancelled the
+    // same way the delay before it was — a thread switch mid-stream stops
+    // writing into a transcript that's no longer showing, rather than a
+    // pile of independent timers that fire regardless of what changed.
     private func streamIn(_ fullText: String, into id: UUID) {
         let words = fullText.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        for i in words.indices {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.05) {
+        responseTask = Task { @MainActor in
+            for i in words.indices {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard !Task.isCancelled else { return }
                 guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
                 messages[idx].text = words[...i].joined(separator: " ")
             }
