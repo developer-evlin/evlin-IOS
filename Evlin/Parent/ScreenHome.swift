@@ -187,6 +187,17 @@ struct SegmentedTimeBar: View {
     var emptyColor: Color
 
     private let blockMinutes = 30
+    private let creditMinutes = 15
+
+    // The pool only ever moves in 30-min blocks, and a block only counts
+    // once you're at least 15 minutes into it — floor to that 15-min mark
+    // rather than filling proportionally to the exact minute, so a block
+    // only ever reads as empty, half, or full, never some arbitrary sliver
+    // in between (e.g. 81 of 90 minutes used to render as a 70%-filled
+    // segment; now it reads as a clean half-filled one).
+    private var quantizedFilledMinutes: Int {
+        (filledMinutes / creditMinutes) * creditMinutes
+    }
 
     // Still quantized to 30-min blocks — the fill snaps to the nearest
     // block boundary rather than an exact percentage — but rendered with no
@@ -225,10 +236,12 @@ struct SegmentedTimeBar: View {
                     // 15-min grant against a 30-min block lights up half of
                     // it, instead of the old all-or-nothing rule where any
                     // amount short of the whole block showed as fully empty.
+                    // Built on the quantized value, not the raw one, so this
+                    // only ever lands on 0, 0.5, or 1 within a block.
                     let fillFraction: CGFloat = {
-                        if filledMinutes >= blockEnd { return 1 }
-                        if filledMinutes <= blockStart { return 0 }
-                        return CGFloat(filledMinutes - blockStart) / CGFloat(blockEnd - blockStart)
+                        if quantizedFilledMinutes >= blockEnd { return 1 }
+                        if quantizedFilledMinutes <= blockStart { return 0 }
+                        return CGFloat(quantizedFilledMinutes - blockStart) / CGFloat(blockEnd - blockStart)
                     }()
                     ZStack(alignment: .leading) {
                         Rectangle().fill(emptyColor)

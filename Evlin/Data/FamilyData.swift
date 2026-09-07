@@ -101,12 +101,12 @@ final class Child: Identifiable, ObservableObject {
 enum FamilyStore {
     static var children: [Child] = [
         Child(id: "liam", name: "Liam", age: 12, dailyLimitMin: 120, color: Color(hex: "2563EB"), status: .unlocked, timeLeft: "1h 30m", timePct: 75, usageTodayMin: 96, subtitle: "Focused today · 3 of 5 tasks done"),
-        Child(id: "maya", name: "Maya", age: 8, dailyLimitMin: 60, color: Color(hex: "3DAA5C"), status: .unlocked, timeLeft: "45m", timePct: 38, usageTodayMin: 22, subtitle: "On bedtime wind-down in 2h"),
+        Child(id: "maya", name: "Maya", age: 8, dailyLimitMin: 60, color: Color(hex: "3DAA5C"), status: .unlocked, timeLeft: "45m", timePct: 75, usageTodayMin: 22, subtitle: "On bedtime wind-down in 2h"),
         Child(id: "emma", name: "Emma", age: 6, dailyLimitMin: 30, color: Color(hex: "F97316"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 30, subtitle: "Quiet time · unlocks at 4:00 PM"),
         Child(id: "noah", name: "Noah", age: 9, dailyLimitMin: 45, color: Color(hex: "7C3AED"), status: .lockedTasks, timeLeft: "0m", timePct: 0, usageTodayMin: 0, tasksDone: 1, tasksTotal: 5, subtitle: "Locked · finish today's tasks to earn screen time"),
         Child(id: "sam", name: "Sam", age: 11, dailyLimitMin: 90, color: Color(hex: "0EA5E9"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 41, subtitle: "Reflection time in progress",
               reflection: ChildReflection(minutes: 15, writtenText: "I felt frustrated when my time ran out — I was almost done with my level. Tomorrow I'll set a timer 10 minutes early so I can save first.", review: "pending")),
-        Child(id: "ava", name: "Ava", age: 10, dailyLimitMin: 100, color: downtimeIndigo, status: .downtime, timeLeft: "1h 20m", timePct: 80, usageTodayMin: 0, subtitle: "Downtime · until 7:00 AM",
+        Child(id: "ava", name: "Ava", age: 10, dailyLimitMin: 90, color: downtimeIndigo, status: .downtime, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 0, subtitle: "Downtime · until 7:00 AM",
               downtimeUntil: "7:00 AM"),
         // All tasks done, but the daily allowance ran out — distinct from
         // Noah (locked, tasks still open) and Emma (locked, schedule-based).
@@ -117,7 +117,7 @@ enum FamilyStore {
         // approvalBanner (ScreenProfile) immediately — a way to see the
         // parent-approval popup without first switching to Kid mode and
         // tapping "Parent controls" there to generate a real request.
-        Child(id: "jake", name: "Jake", age: 13, dailyLimitMin: 90, color: Color(hex: "0891B2"), status: .unlocked, timeLeft: "1h 10m", timePct: 60, usageTodayMin: 36, subtitle: "Requested Parent Controls access", parentApprovalStatus: .pending),
+        Child(id: "jake", name: "Jake", age: 13, dailyLimitMin: 90, color: Color(hex: "0891B2"), status: .unlocked, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 36, subtitle: "Requested Parent Controls access", parentApprovalStatus: .pending),
         // Empty profile — no tasks assigned yet, for seeing what a brand-new
         // kid's profile looks like before a parent adds anything.
         Child(id: "alex", name: "Alex", age: 7, dailyLimitMin: 60, color: Color(hex: "6366F1"), status: .unlocked, timeLeft: "1h 0m", timePct: 100, usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet"),
@@ -130,11 +130,11 @@ enum FamilyStore {
         // directions of the Lock/Unlock button are easy to try: Lock locks
         // instantly, then Unlock (tasks already done) opens the Grant Time
         // sheet rather than the plain "unlock anyway" confirm.
-        Child(id: "ben", name: "Ben", age: 10, dailyLimitMin: 90, color: Color(hex: "D97706"), status: .unlocked, timeLeft: "1h 10m", timePct: 78, usageTodayMin: 20, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · 1h 10m left today"),
+        Child(id: "ben", name: "Ben", age: 10, dailyLimitMin: 90, color: Color(hex: "D97706"), status: .unlocked, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 20, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · 1h 15m left today"),
         // Never finished the tamper-proofing step from onboarding — for
         // previewing the "set a Screen Time PIN or enroll in Family
         // Sharing" nudge (see ScreenProfile's ProtectionSetupNeededCard).
-        Child(id: "leo", name: "Leo", age: 11, dailyLimitMin: 90, color: Color(hex: "059669"), status: .unlocked, timeLeft: "1h 30m", timePct: 90, usageTodayMin: 9, tasksDone: 2, tasksTotal: 4, subtitle: "Screen Time PIN not set up yet", needsProtectionSetup: true),
+        Child(id: "leo", name: "Leo", age: 11, dailyLimitMin: 90, color: Color(hex: "059669"), status: .unlocked, timeLeft: "1h 30m", timePct: 100, usageTodayMin: 9, tasksDone: 2, tasksTotal: 4, subtitle: "Screen Time PIN not set up yet", needsProtectionSetup: true),
     ]
 
     static func child(_ id: String) -> Child { children.first { $0.id == id } ?? children[0] }
