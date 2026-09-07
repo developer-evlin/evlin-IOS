@@ -35,8 +35,13 @@ struct CalDayEvent: Identifiable {
 }
 
 enum CalendarData {
+    // No abstract "Family" entity on this calendar — every event belongs to
+    // an actual person's own profile, the parent's included. The id stays
+    // "family" (existing events reference it as personId) but it now
+    // displays as the parent's own profile, same name ScreenSettings' demo
+    // parent profile uses, rather than a group label nobody's an instance of.
     static let people: [FamilyPerson] = [
-        FamilyPerson(id: "family", name: "Family", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE")),
+        FamilyPerson(id: "family", name: "Alex Carter", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE")),
         FamilyPerson(id: "liam", name: "Liam", color: Color(hex: "2563EB"), bg: Color(hex: "DBEAFE")),
         FamilyPerson(id: "maya", name: "Maya", color: Color(hex: "16A34A"), bg: Color(hex: "DCFCE7")),
         FamilyPerson(id: "emma", name: "Emma", color: Color(hex: "F97316"), bg: Color(hex: "FFEDD5")),

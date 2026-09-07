@@ -162,7 +162,7 @@ struct ScreenCalendar: View {
                 selectedDay = d
                 showDatePicker = false
             })
-            .presentationDetents([.height(420)])
+            .presentationDetents([.height(480)])
             .presentationDragIndicator(.visible)
         }
     }
@@ -299,7 +299,9 @@ private struct DayTimelineView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(12)
     }
 
@@ -393,9 +395,16 @@ private struct MonthPickerSheet: View {
             }
             .padding(.horizontal, 12)
             .contentShape(Rectangle())
-            .gesture(
+            // highPriorityGesture, not gesture — a plain .gesture here was
+            // losing the touch to the sheet's own interactive-dismiss pan
+            // recognizer, so swiping sideways to change months was instead
+            // dragging the whole sheet down. Scoped to just the day grid
+            // (not the sheet's header/handle), so a swipe down from there
+            // still dismisses normally.
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 24)
                     .onEnded { value in
+                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
                         if value.translation.width < -40 { shiftMonth(by: 1) }
                         else if value.translation.width > 40 { shiftMonth(by: -1) }
                     }
