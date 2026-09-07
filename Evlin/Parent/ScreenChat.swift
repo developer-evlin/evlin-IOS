@@ -798,20 +798,27 @@ struct ScreenChat: View {
     // typing and sending read as one control, not two. Also grows taller
     // before capping (1...4 -> 1...8), since a longer message used to hit
     // the ceiling and start internally scrolling sooner than it needed to.
+    // Text and the send button sit side by side (button bottom-aligned),
+    // not stacked in their own rows — stacking them reserved space for the
+    // button's whole row even with an empty draft, so the card was always
+    // tall instead of only growing when there's actually more to show.
+    // This way it stays compact at rest and only expands as the text
+    // wraps to more lines, capping at 8 (lineLimit) and scrolling
+    // internally past that rather than growing forever.
     private var inputBar: some View {
-        VStack(alignment: .trailing, spacing: 8) {
+        HStack(alignment: .bottom, spacing: 8) {
             TextField("Message Evlin…", text: $draft, axis: .vertical)
                 .font(Typography.font(16, weight: .regular))
                 .lineLimit(1...8)
                 .focused($inputFocused)
-                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
                 .onSubmit(send)
 
             Button(action: send) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 34, height: 34)
                     .background(canSend ? Brand.greenDeep : EColor.outlineVariant)
                     .clipShape(Circle())
             }
@@ -819,14 +826,18 @@ struct ScreenChat: View {
             .disabled(!canSend)
             .accessibilityLabel("Send message")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
         .background(EColor.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: 26))
-        .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(EColor.outlineVariant))
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(EColor.outlineVariant))
         .padding(12)
-        .background(.ultraThinMaterial)
+        // Same token the scroll area above uses (EColor.surface), not
+        // .ultraThinMaterial — that's a translucent blur that composites
+        // with whatever's behind it (here, the tab bar's own gray), which
+        // is exactly what produced a visible seam between two different
+        // "off-white"s instead of one continuous background.
+        .background(EColor.surface)
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {

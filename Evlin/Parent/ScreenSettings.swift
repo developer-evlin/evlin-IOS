@@ -13,8 +13,6 @@ import SwiftUI
 enum SettingsRoute: Hashable {
     case parentProfile
     case signOut
-    case notifications
-    case coParents
     case privacyTerms
     case childrenDevices
     case billing
@@ -26,21 +24,12 @@ struct ScreenSettings: View {
     @State private var openChildId: String?
 
     // Root notification toggle — mirrors the source's `notifyPushEnabled`.
+    // Nothing else to configure — this is the only notification setting.
     @State private var pushOn = true
-    // Detail-page alert types — source's per-type @AppStorage toggles.
-    @State private var notifyKidRequests = true
-    @State private var notifyReflectionCompletions = true
-    @State private var notifyKidNudges = true
-    @State private var notifyWeeklySummary = false
 
     // Parent profile — source's parentName/selectedParentAccentHex.
     @State private var parentName = "Alex Carter"
     @State private var selectedAccentHex = SettingsPresentation.accentHexOptions[0]
-
-    // Co-parents — source's familyStore.parents.filter { !is_owner }.
-    @State private var coParents: [String] = []
-    @State private var showInviteCoParent = false
-    @State private var inviteCode = "482913"
 
     // Add child — source's `showAddChildPairing`. No real pairing flow exists
     // here (no FamilyControls/device pairing), so this is a name/age form
@@ -77,8 +66,6 @@ struct ScreenSettings: View {
                 switch route {
                 case .parentProfile: parentProfilePage
                 case .signOut: signOutPage
-                case .notifications: notificationsPage
-                case .coParents: coParentsPage
                 case .privacyTerms: privacyTermsPage
                 case .childrenDevices: childrenDevicesPage
                 case .billing: billingPage
@@ -102,9 +89,6 @@ struct ScreenSettings: View {
                 },
                 onCancel: { showAddChild = false }
             )
-        }
-        .sheet(isPresented: $showInviteCoParent) {
-            SettingsInviteCoParentSheet(code: inviteCode) { showInviteCoParent = false }
         }
         .preferredColorScheme(.light)
     }
@@ -149,16 +133,6 @@ struct ScreenSettings: View {
                 )
             }
 
-            NavigationLink(value: SettingsRoute.coParents) {
-                settingsRow(
-                    title: "Co-parents",
-                    subtitle: coParentSubtitle,
-                    systemImage: "person.2",
-                    value: coParentValue,
-                    accent: EColor.secondary
-                )
-            }
-
             Button {
                 showAddChild = true
             } label: {
@@ -171,15 +145,18 @@ struct ScreenSettings: View {
             }
         }
 
+        // Just a toggle — no subtitle, no drill-down page. There's only
+        // ever the one thing to configure here, so a detail screen with
+        // per-alert-type switches was a destination with nothing behind
+        // it worth a whole page.
         Section("Notifications") {
-            settingsNavigableToggleRow(
-                title: "Push Notifications",
-                subtitle: notificationRootSubtitle,
-                systemImage: "bell",
-                isOn: $pushOn,
-                accent: EColor.secondary,
-                navigate: { path.append(SettingsRoute.notifications) }
-            )
+            HStack(spacing: 12) {
+                settingsIconChip("bell", accent: EColor.secondary)
+                Text("Push Notifications").font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
+                Spacer(minLength: 10)
+                Toggle("", isOn: $pushOn).labelsHidden().tint(EColor.secondary)
+            }
+            .padding(.vertical, 4)
         }
 
         Section("About") {
@@ -212,13 +189,6 @@ struct ScreenSettings: View {
     private var childrenDevicesSummary: String {
         let ages = FamilyStore.children.map(\.age)
         return "Age range \(ages.min() ?? 0)–\(ages.max() ?? 0) · \(FamilyStore.children.count) child devices"
-    }
-
-    private var coParentSubtitle: String { coParents.isEmpty ? "Invite another parent or caregiver" : "Manage family-level access" }
-    private var coParentValue: String { coParents.isEmpty ? "None" : "\(coParents.count) adults" }
-
-    private var notificationRootSubtitle: String {
-        "\(pushOn ? "Allowed" : "Off") · kid requests, completions, alerts"
     }
 
     // MARK: - Children & Devices (ported from HomeSettingsSheet's childrenDevicesMenu)
@@ -267,25 +237,6 @@ struct ScreenSettings: View {
                 }
             }
 
-            // Back here (not on each kid's own profile) — a kid's profile
-            // is for their day-to-day (tasks/rules), while adding, editing,
-            // and removing the kids themselves — and now what's paired to
-            // them — is one settings-level concern in one place.
-            Section("Registered Devices") {
-                ForEach(FamilyStore.children) { child in
-                    ForEach(child.devices) { device in
-                        deviceRow(device)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    FamilyStore.removeDevice(device.id, from: child.id)
-                                    familyRefreshTick += 1
-                                } label: {
-                                    Label("Remove", systemImage: "trash")
-                                }
-                            }
-                    }
-                }
-            }
         }
         .navigationTitle("Children & Devices")
         .navigationBarTitleDisplayMode(.inline)
@@ -317,25 +268,6 @@ struct ScreenSettings: View {
                 onCancel: { editingChild = nil }
             )
         }
-    }
-
-    private func deviceRow(_ device: RegisteredDevice) -> some View {
-        HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(EColor.primaryContainer)
-                .frame(width: 44, height: 44)
-                .overlay(Image(systemName: "iphone").font(.system(size: 19, weight: .semibold)).foregroundStyle(EColor.primary))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(device.name).font(Typography.font(14.5, weight: .bold)).foregroundStyle(EColor.onSurface)
-                Text("\(device.model) · \(device.osVersion)").font(Typography.font(12, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
-                Text("Paired \(device.pairedOn)").font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-            }
-            Spacer(minLength: 8)
-            Text(device.lastActive)
-                .font(Typography.font(11, weight: .bold))
-                .foregroundStyle(device.lastActive == "Active now" ? Color(hex: "25924A") : EColor.onSurfaceVariant)
-        }
-        .padding(.vertical, 4)
     }
 
     // MARK: - Billing (net-new — see the state block above for why this
@@ -500,92 +432,6 @@ struct ScreenSettings: View {
         try? await Task.sleep(nanoseconds: 900_000_000)
         isProcessingUpgrade = false
         withAnimation { billing.isPlus = true }
-    }
-
-    // MARK: - Notifications detail (ported from HomeSettingsSheet's notificationsMenu)
-
-    private var notificationsPage: some View {
-        Form {
-            settingsHeroNote(
-                title: "Parent-side permission.",
-                message: "This replaces Screen Time on the parent phone. The parent mainly needs alerts for kid requests, completions, and nudges."
-            )
-
-            Section("Permission") {
-                settingsToggleRow(
-                    title: "Push Notifications",
-                    subtitle: "System permission for parent alerts",
-                    systemImage: "bell",
-                    isOn: $pushOn,
-                    accent: EColor.secondary
-                )
-            }
-
-            Section {
-                Toggle(isOn: $notifyKidRequests) {
-                    settingsRow(title: "Kid requests", subtitle: "Bypass requests, help requests", systemImage: "bell", accent: EColor.secondary)
-                }
-                Toggle(isOn: $notifyReflectionCompletions) {
-                    settingsRow(title: "Reflection completions", subtitle: "Notify when a kid finishes", systemImage: "checkmark.circle", accent: EColor.secondary)
-                }
-                Toggle(isOn: $notifyKidNudges) {
-                    settingsRow(title: "Nudges from kid device", subtitle: "Kid asks parent to review", systemImage: "hand.raised", accent: EColor.secondary)
-                }
-                Toggle(isOn: $notifyWeeklySummary) {
-                    settingsRow(title: "Weekly summary", subtitle: "Optional progress digest", systemImage: "calendar", accent: EColor.primary)
-                }
-            } header: {
-                Text("Alert Types")
-            } footer: {
-                Text("These switches are local presentation settings — there's no backend routing in this prototype.")
-            }
-        }
-        .navigationTitle("Notifications")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    // MARK: - Co-parents (ported from HomeSettingsSheet's coParentsMenu)
-
-    private var coParentsPage: some View {
-        Form {
-            settingsHeroNote(
-                title: "Family-level access belongs here.",
-                message: "Co-parents are not connected to app controls. They manage people, alerts, approvals, and family visibility."
-            )
-
-            Section("Parents") {
-                if coParents.isEmpty {
-                    settingsRow(
-                        title: "No co-parents yet",
-                        subtitle: "Invite another parent or caregiver when needed",
-                        systemImage: "person.2",
-                        value: "None",
-                        accent: EColor.secondary
-                    )
-                }
-
-                ForEach(coParents, id: \.self) { name in
-                    settingsRow(title: name, subtitle: "Co-parent", systemImage: "person.2", accent: EColor.secondary)
-                }
-
-                Button {
-                    showInviteCoParent = true
-                } label: {
-                    settingsRow(title: "Invite Co-parent", subtitle: "Create and share an invite code", systemImage: "plus", accent: EColor.primary)
-                }
-            }
-
-            Section {
-                settingsRow(title: "Can receive kid requests", subtitle: "Family notification access", systemImage: "checkmark.circle", value: "On", accent: EColor.secondary)
-                settingsRow(title: "Can approve tasks", subtitle: "Approval permissions", systemImage: "checkmark.circle", value: "On", accent: EColor.secondary)
-            } header: {
-                Text("Permissions")
-            } footer: {
-                Text("Permission editing is not wired yet; current rows describe the intended family-level model.")
-            }
-        }
-        .navigationTitle("Co-parents")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Parent Profile (ported from HomeSettingsSheet's parentProfileMenu)
@@ -894,62 +740,6 @@ struct ScreenSettings: View {
         .opacity(disabled ? 0.72 : 1)
     }
 
-    private func settingsToggleRow(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        isOn: Binding<Bool>,
-        accent: Color = EColor.primary
-    ) -> some View {
-        HStack(spacing: 12) {
-            settingsIconChip(systemImage, accent: accent)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                Text(subtitle).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant).lineLimit(2)
-            }
-            Spacer(minLength: 10)
-            Toggle("", isOn: isOn).labelsHidden().tint(EColor.secondary)
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func settingsNavigableToggleRow(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        isOn: Binding<Bool>,
-        accent: Color = EColor.primary,
-        navigate: @escaping () -> Void
-    ) -> some View {
-        HStack(spacing: 12) {
-            Button(action: navigate) {
-                HStack(spacing: 12) {
-                    settingsIconChip(systemImage, accent: accent)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                        if !subtitle.isEmpty {
-                            Text(subtitle).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant).lineLimit(2)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            Toggle("", isOn: isOn).labelsHidden().tint(EColor.secondary).fixedSize()
-
-            Button(action: navigate) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(EColor.outline)
-                    .frame(width: 18, height: 34)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.vertical, 4)
-    }
-
     private func settingsIconChip(_ systemImage: String, accent: Color, disabled: Bool = false) -> some View {
         Image(systemName: systemImage)
             .font(.system(size: 16, weight: .semibold))
@@ -1220,36 +1010,6 @@ private struct SettingsAddChildSheet: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-        }
-    }
-}
-
-private struct SettingsInviteCoParentSheet: View {
-    var code: String
-    var onDone: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 18) {
-                Image(systemName: "person.badge.plus").font(.system(size: 48, weight: .semibold)).foregroundStyle(EColor.secondary)
-                Text("Invite code").font(Typography.font(15, weight: .bold)).foregroundStyle(EColor.onSurface)
-                Text(code)
-                    .font(Typography.font(32, weight: .heavy))
-                    .tracking(4)
-                    .foregroundStyle(EColor.primary)
-                Text("Share this code with a co-parent. It's a demo value — this prototype has no real invite backend.")
-                    .font(Typography.font(12, weight: .regular))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 30)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(EColor.surface)
-            .navigationTitle("Invite Co-parent")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done", action: onDone) }
             }
         }
     }
