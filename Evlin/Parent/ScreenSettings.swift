@@ -105,7 +105,7 @@ struct ScreenSettings: View {
     // no matter how the colors were themed.
     @ViewBuilder
     private var settingsRootContent: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: settingsGroupGap) {
             NavigationLink(value: SettingsRoute.parentProfile) {
                 settingsAccountRow
             }
@@ -116,13 +116,6 @@ struct ScreenSettings: View {
                     // Just the count — the row already says "Children",
                     // so "12 children" was saying the same word twice.
                     settingsCompactRow(icon: "person", title: "Children and devices", value: "\(FamilyStore.children.count)")
-                }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                Button { showAddChild = true } label: {
-                    settingsCompactRow(icon: "plus", title: "Add a child")
                 }
                 .buttonStyle(.plain)
             }
@@ -143,9 +136,10 @@ struct ScreenSettings: View {
 
                 settingsDivider
 
-                // Not wired to anything yet (same as before this redesign)
-                // — no chevron, so it doesn't promise a tap it can't back up.
-                settingsCompactRow(icon: "sparkles", title: "Replay the tours", showChevron: false)
+                // Not wired to anything yet (same as before this redesign),
+                // but still tappable in principle — gets the same chevron
+                // as every other row instead of being the odd one out.
+                settingsCompactRow(icon: "sparkles", title: "Replay the tours")
 
                 settingsDivider
 
@@ -161,12 +155,23 @@ struct ScreenSettings: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .padding(.bottom, 24)
+        .padding(.bottom, 16)
     }
 
+    // A parent is a person like any other in this app — same solid
+    // assigned-color-fill-plus-white-initial treatment as a child's avatar
+    // on Home, not the generic mint InitialsAvatar (which is what made this
+    // row look like a placeholder rather than *this specific person*). The
+    // color itself comes from CalendarData rather than a second hardcoded
+    // value, so this can never drift from what the calendar's own "Alex
+    // Carter" lane uses.
     private var settingsAccountRow: some View {
-        HStack(spacing: 12) {
-            InitialsAvatar(name: parentName, size: 44)
+        let personColor = CalendarData.person("family").color
+        return HStack(spacing: 12) {
+            Circle()
+                .fill(personColor)
+                .frame(width: 44, height: 44)
+                .overlay(Text(String(parentName.prefix(1))).font(Typography.font(17, weight: .bold)).foregroundStyle(.white))
             VStack(alignment: .leading, spacing: 2) {
                 Text(parentName).font(Typography.font(16, weight: .bold)).foregroundStyle(EColor.onSurface)
                 Text("My Family · \(billing.isPlus ? "Plus" : "Free plan")")
@@ -178,7 +183,7 @@ struct ScreenSettings: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 60)
-        .background(EColor.surfaceContainerHigh)
+        .background(settingsCardFill)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -186,19 +191,31 @@ struct ScreenSettings: View {
         Divider().padding(.leading, 46)
     }
 
-    // The label sits right on top of its group (8pt) with the real
-    // separation (22pt, set by the outer VStack's own spacing) coming
-    // *before* the label, not after — that's what makes it read as
+    // Settings-local card fill — lighter than the shared surfaceContainerHigh
+    // token (which several other screens also use for chips/disabled states
+    // that weren't part of this pass) so this change stays scoped to
+    // Settings' own cards instead of shifting color everywhere that token
+    // appears.
+    private var settingsCardFill: Color { Color(hex: "F7F7F5") }
+
+    // Total whitespace from one card's bottom edge to the next header's top
+    // (outer spacing + the header's own line height) works out to ~22pt
+    // once combined with settingsGroup's 6pt header-to-card gap below.
+    private var settingsGroupGap: CGFloat { 3 }
+
+    // The label sits right on top of its group (6pt) with the real
+    // separation (settingsGroupGap, set by the outer VStack's own spacing)
+    // coming *before* the label, not after — that's what makes it read as
     // "attached to the group below," not floating between two groups.
     private func settingsGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(Typography.font(11, weight: .bold))
                 .tracking(0.6)
                 .foregroundStyle(EColor.onSurfaceVariant)
                 .padding(.leading, 4)
             VStack(spacing: 0, content: content)
-                .background(EColor.surfaceContainerHigh)
+                .background(settingsCardFill)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
@@ -217,7 +234,11 @@ struct ScreenSettings: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(EColor.onSurfaceVariant)
+                // Darker than the row's own secondary/value text
+                // (onSurfaceVariant) — a thin glyph reads noticeably
+                // lighter than solid text at the same color, so matching
+                // hex values alone still left icons looking washed out.
+                .foregroundStyle(EColor.onSurface)
                 .frame(width: 22)
             Text(title).font(Typography.font(15.5, weight: .regular)).foregroundStyle(EColor.onSurface)
             Spacer(minLength: 10)
@@ -271,22 +292,16 @@ struct ScreenSettings: View {
                 }
             }
 
-            Section("Setup") {
-                Button {
-                    showAddChild = true
-                } label: {
-                    settingsRow(
-                        title: "Add Child",
-                        subtitle: "Scan the new child's first device",
-                        systemImage: "qrcode.viewfinder",
-                        accent: EColor.primary
-                    )
-                }
-            }
-
         }
         .navigationTitle("Children & Devices")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showAddChild = true } label: {
+                    Image(systemName: "plus")
+                }
+            }
+        }
         .alert(
             "Remove \(childPendingRemoval?.name ?? "this child")'s profile?",
             isPresented: Binding(get: { childPendingRemoval != nil }, set: { if !$0 { childPendingRemoval = nil } })
