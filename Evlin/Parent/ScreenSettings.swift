@@ -14,7 +14,6 @@ enum SettingsRoute: Hashable {
     case parentProfile
     case signOut
     case privacyTerms
-    case childrenDevices
     case billing
 }
 
@@ -68,7 +67,6 @@ struct ScreenSettings: View {
                 case .parentProfile: parentProfilePage
                 case .signOut: signOutPage
                 case .privacyTerms: privacyTermsPage
-                case .childrenDevices: childrenDevicesPage
                 case .billing: billingPage
                 }
             }
@@ -91,6 +89,39 @@ struct ScreenSettings: View {
                 onCancel: { showAddChild = false }
             )
         }
+        // Used to live on the (now-removed) "Children and devices" list
+        // page, reachable there by swipe — the root Family rows are plain
+        // VStack rows, not a List, so swipeActions has no host here. A
+        // long-press context menu is the nearest equivalent that doesn't
+        // require rebuilding the section as a List.
+        .sheet(item: $editingChild) { child in
+            EditChildProfileSheet(
+                child: child,
+                onSave: { name, age, avatar in
+                    child.name = name
+                    child.age = age
+                    child.avatar = avatar
+                    familyRefreshTick += 1
+                    editingChild = nil
+                },
+                onCancel: { editingChild = nil }
+            )
+        }
+        .alert(
+            "Remove \(childPendingRemoval?.name ?? "this child")'s profile?",
+            isPresented: Binding(get: { childPendingRemoval != nil }, set: { if !$0 { childPendingRemoval = nil } })
+        ) {
+            Button("Cancel", role: .cancel) { childPendingRemoval = nil }
+            Button("Remove", role: .destructive) {
+                if let id = childPendingRemoval?.id {
+                    FamilyStore.removeChild(id)
+                    familyRefreshTick += 1
+                }
+                childPendingRemoval = nil
+            }
+        } message: {
+            Text("This removes their profile, tasks, rules, and paired devices. This can't be undone.")
+        }
         .preferredColorScheme(.light)
     }
 
@@ -106,16 +137,23 @@ struct ScreenSettings: View {
     @ViewBuilder
     private var settingsRootContent: some View {
         VStack(alignment: .leading, spacing: settingsGroupGap) {
-            NavigationLink(value: SettingsRoute.parentProfile) {
-                settingsAccountRow
-            }
-            .buttonStyle(.plain)
+            settingsAccountCard
 
             settingsGroup("FAMILY") {
-                NavigationLink(value: SettingsRoute.childrenDevices) {
-                    // Just the count — the row already says "Children",
-                    // so "12 children" was saying the same word twice.
-                    settingsCompactRow(icon: "person", title: "Children and devices", value: "\(FamilyStore.children.count)")
+                ForEach(FamilyStore.children) { child in
+                    Button { openChildId = child.id } label: {
+                        settingsFamilyChildRow(child)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button { editingChild = child } label: { Label("Edit", systemImage: "pencil") }
+                        Button(role: .destructive) { childPendingRemoval = child } label: { Label("Remove", systemImage: "trash") }
+                    }
+                    settingsDivider
+                }
+
+                Button { showAddChild = true } label: {
+                    addChildRow
                 }
                 .buttonStyle(.plain)
             }
@@ -124,67 +162,192 @@ struct ScreenSettings: View {
                 settingsCompactRow(icon: "bell", title: "Push notifications", showChevron: false) {
                     Toggle("", isOn: $pushOn).labelsHidden().tint(EColor.secondary)
                 }
+
+                settingsDivider
+
+                NavigationLink(value: SettingsRoute.billing) {
+                    settingsCompactRow(icon: "creditcard", title: "Billing and receipts")
+                }
+                .buttonStyle(.plain)
             }
 
-            // Share Evlin used to be its own single-row section — folded
-            // in here so it isn't a group of one.
-            settingsGroup("ABOUT") {
-                ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
-                    settingsCompactRow(icon: "square.and.arrow.up", title: "Share Evlin")
+            settingsGroup("SUPPORT") {
+                // Honest about what this actually is — a mailbox, not a
+                // help center — and the prefilled metadata is what turns
+                // "it's not working" into something traceable.
+                Button {
+                    if let url = reportProblemURL { UIApplication.shared.open(url) }
+                } label: {
+                    settingsCompactRow(icon: "exclamationmark.bubble", title: "Report a problem")
                 }
                 .buttonStyle(.plain)
 
                 settingsDivider
 
-                // Not wired to anything yet (same as before this redesign),
-                // but still tappable in principle — gets the same chevron
-                // as every other row instead of being the odd one out.
+                // Not wired to anything yet, but still tappable in
+                // principle — gets the same chevron as every other row
+                // instead of being the odd one out.
                 settingsCompactRow(icon: "sparkles", title: "Replay the tours")
 
                 settingsDivider
 
-                settingsCompactRow(icon: "info.circle", title: "Version", value: "1.0 (100)", showChevron: false)
-
-                settingsDivider
-
-                NavigationLink(value: SettingsRoute.privacyTerms) {
-                    settingsCompactRow(icon: "shield", title: "Privacy & Terms")
+                ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
+                    settingsCompactRow(icon: "square.and.arrow.up", title: "Share Evlin")
                 }
                 .buttonStyle(.plain)
             }
+
+            settingsFooter
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 16)
     }
 
-    // A parent is a person like any other in this app — same solid
-    // assigned-color-fill-plus-white-initial treatment as a child's avatar
-    // on Home, not the generic mint InitialsAvatar (which is what made this
-    // row look like a placeholder rather than *this specific person*). The
-    // color itself comes from CalendarData rather than a second hardcoded
-    // value, so this can never drift from what the calendar's own "Alex
-    // Carter" lane uses.
-    private var settingsAccountRow: some View {
+    // Avatar/name/subtitle is its own tap target into Parent Profile; the
+    // lock note + Upgrade button below is a second, independent tap target
+    // in the same card — nesting a Button inside the NavigationLink's own
+    // label would break hit-testing, so they're siblings sharing one
+    // background/clip instead of one row wrapping the other.
+    private var settingsAccountCard: some View {
         let personColor = CalendarData.person("family").color
-        return HStack(spacing: 12) {
-            Circle()
-                .fill(personColor)
-                .frame(width: 44, height: 44)
-                .overlay(Text(String(parentName.prefix(1))).font(Typography.font(17, weight: .bold)).foregroundStyle(.white))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(parentName).font(Typography.font(16, weight: .bold)).foregroundStyle(EColor.onSurface)
-                Text("My Family · \(billing.isPlus ? "Plus" : "Free plan")")
+        return VStack(alignment: .leading, spacing: 0) {
+            NavigationLink(value: SettingsRoute.parentProfile) {
+                HStack(spacing: 14) {
+                    Circle()
+                        .fill(personColor)
+                        .frame(width: 68, height: 68)
+                        .overlay(Text(String(parentName.prefix(1))).font(Typography.font(26, weight: .bold)).foregroundStyle(.white))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(parentName).font(Typography.font(19, weight: .bold)).foregroundStyle(EColor.onSurface)
+                        Text("My Family · \(billing.isPlus ? "Pro" : "Free plan")")
+                            .font(Typography.font(13, weight: .regular))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                    Spacer(minLength: 10)
+                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Removed entirely once on Pro — nothing left to upsell.
+            if !billing.isPlus {
+                Divider().padding(.horizontal, 14)
+
+                Text("Repeating tasks, downtime, and bedtime are locked on the free plan.")
                     .font(Typography.font(13, weight: .regular))
                     .foregroundStyle(EColor.onSurfaceVariant)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+
+                Button { path.append(SettingsRoute.billing) } label: {
+                    Text("Upgrade to Pro")
+                        .font(Typography.font(15, weight: .bold))
+                        .foregroundStyle(EColor.onSurface)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                }
+                .buttonStyle(.plain)
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(EColor.outlineVariant, lineWidth: 1))
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+                .padding(.bottom, 14)
             }
+        }
+        .background(settingsCardFill)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // Same 32px-avatar/name/device-count/chevron row every child gets, but
+    // solid-color-fill-plus-white-initial rather than the generic mint
+    // InitialsAvatar — same reasoning as the parent avatar: matches Home's
+    // per-child treatment instead of reading as a placeholder.
+    private func settingsFamilyChildRow(_ child: Child) -> some View {
+        HStack(spacing: 12) {
+            if let avatar = child.avatar {
+                Image(uiImage: avatar).resizable().scaledToFill()
+                    .frame(width: 32, height: 32).clipShape(Circle())
+            } else {
+                Circle().fill(child.color).frame(width: 32, height: 32)
+                    .overlay(Text(String(child.name.prefix(1))).font(Typography.font(13, weight: .bold)).foregroundStyle(.white))
+            }
+            Text(child.name).font(Typography.font(15.5, weight: .regular)).foregroundStyle(EColor.onSurface)
             Spacer(minLength: 10)
+            Text("\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
+                .font(Typography.font(13, weight: .regular))
+                .foregroundStyle(EColor.onSurfaceVariant)
             Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
         }
         .padding(.horizontal, 14)
-        .frame(height: 60)
-        .background(settingsCardFill)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(height: 48)
+    }
+
+    private var addChildRow: some View {
+        HStack(spacing: 12) {
+            Circle()
+                .strokeBorder(EColor.primary, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                .frame(width: 32, height: 32)
+                .overlay(Image(systemName: "plus").font(.system(size: 13, weight: .bold)).foregroundStyle(EColor.primary))
+            Text("Add a child").font(Typography.font(15.5, weight: .semibold)).foregroundStyle(EColor.primary)
+            Spacer(minLength: 10)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 48)
+    }
+
+    // mailto: with the diagnostic context a beta parent's "it's not
+    // working" report is otherwise missing — enough to cross-reference
+    // against Sentry without asking them to dig up any of it themselves.
+    // support@evlin.app is a placeholder inbox; swap for the real one.
+    private var reportProblemURL: URL? {
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+        // Nothing in this prototype persists a real anonymous install/child
+        // id — the first child's mock UUID stands in for one.
+        let childId = FamilyStore.children.first?.id ?? "none"
+        let body = """
+
+
+        ---
+        App version: \(appVersion) (\(buildNumber))
+        iOS version: \(UIDevice.current.systemVersion)
+        Device: \(UIDevice.current.model)
+        Child ID: \(childId)
+        """
+        var components = URLComponents(string: "mailto:support@evlin.app")
+        components?.queryItems = [
+            URLQueryItem(name: "subject", value: "Evlin bug report"),
+            URLQueryItem(name: "body", value: body),
+        ]
+        return components?.url
+    }
+
+    private var appVersionString: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(version) (\(build))"
+    }
+
+    // Small muted centered text, not rows — these are looked-at-once
+    // legal/version info, not settings a parent configures.
+    private var settingsFooter: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                NavigationLink(value: SettingsRoute.privacyTerms) {
+                    Text("Privacy and terms")
+                }
+                .buttonStyle(.plain)
+                Text("·")
+                Text("Version \(appVersionString)")
+            }
+            .font(Typography.font(12, weight: .regular))
+            .foregroundStyle(EColor.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 10)
     }
 
     private var settingsDivider: some View {
@@ -252,84 +415,6 @@ struct ScreenSettings: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
-    }
-
-    private var childrenDevicesSummary: String {
-        let ages = FamilyStore.children.map(\.age)
-        return "Age range \(ages.min() ?? 0)–\(ages.max() ?? 0) · \(FamilyStore.children.count) child devices"
-    }
-
-    // MARK: - Children & Devices (ported from HomeSettingsSheet's childrenDevicesMenu)
-
-    private var childrenDevicesPage: some View {
-        Form {
-            settingsHeroNote(
-                title: "Family devices are scoped by child.",
-                message: "\(childrenDevicesSummary). Choose which kid/device you are managing — app lists and controls live under the child device, not on the parent phone."
-            )
-
-            Section("Children") {
-                ForEach(FamilyStore.children) { child in
-                    Button { openChildId = child.id } label: {
-                        settingsChildRow(child)
-                    }
-                    .buttonStyle(.plain)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            childPendingRemoval = child
-                        } label: {
-                            Label("Remove", systemImage: "trash")
-                        }
-                    }
-                    .swipeActions(edge: .leading) {
-                        Button {
-                            editingChild = child
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                        .tint(EColor.secondary)
-                    }
-                }
-            }
-
-        }
-        .navigationTitle("Children & Devices")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showAddChild = true } label: {
-                    Image(systemName: "plus")
-                }
-            }
-        }
-        .alert(
-            "Remove \(childPendingRemoval?.name ?? "this child")'s profile?",
-            isPresented: Binding(get: { childPendingRemoval != nil }, set: { if !$0 { childPendingRemoval = nil } })
-        ) {
-            Button("Cancel", role: .cancel) { childPendingRemoval = nil }
-            Button("Remove", role: .destructive) {
-                if let id = childPendingRemoval?.id {
-                    FamilyStore.removeChild(id)
-                    familyRefreshTick += 1
-                }
-                childPendingRemoval = nil
-            }
-        } message: {
-            Text("This removes their profile, tasks, rules, and paired devices. This can't be undone.")
-        }
-        .sheet(item: $editingChild) { child in
-            EditChildProfileSheet(
-                child: child,
-                onSave: { name, age, avatar in
-                    child.name = name
-                    child.age = age
-                    child.avatar = avatar
-                    familyRefreshTick += 1
-                    editingChild = nil
-                },
-                onCancel: { editingChild = nil }
-            )
-        }
     }
 
     // MARK: - Billing (net-new — see the state block above for why this
@@ -791,27 +876,6 @@ struct ScreenSettings: View {
             .foregroundStyle(disabled ? EColor.outline : accent)
             .frame(width: 34, height: 34)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(disabled ? EColor.surfaceContainerHigh : accent.opacity(0.12)))
-    }
-
-    private func settingsChildRow(_ child: Child) -> some View {
-        HStack(spacing: 12) {
-            if let avatar = child.avatar {
-                Image(uiImage: avatar)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 34, height: 34)
-                    .clipShape(Circle())
-            } else {
-                InitialsAvatar(name: child.name, size: 34)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(child.name).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                Text("Age \(child.age) · \(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")").font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant).lineLimit(2)
-            }
-            Spacer(minLength: 10)
-            Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(EColor.outline)
-        }
-        .padding(.vertical, 4)
     }
 
     private func settingsPill(_ text: String, tone: SettingsPillTone) -> some View {
