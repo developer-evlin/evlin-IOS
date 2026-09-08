@@ -40,6 +40,14 @@ private struct ChatScrollOffsetKey: PreferenceKey {
 }
 private let chatScrollSpace = "chatScrollSpace"
 
+// Measures the compose pill's own rendered height, live, so its corner
+// radius can be derived from actual content rather than guessed from
+// line count — see composerCornerRadius.
+private struct ComposerHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 // Bubbles are capped so a long unbroken token (a URL, a hash, code with no
 // spaces) wraps inside the bubble instead of forcing the whole HStack wider
 // than the screen. `fixedSize(horizontal:false,...)` is the actual fix —
@@ -513,6 +521,19 @@ struct ScreenChat: View {
     // Scrolling back up (or landing near the top) restores it.
     @State private var chromeHidden = false
     @State private var lastChatScrollOffset: CGFloat = 0
+    // Live-measured height of the compose pill — drives its corner radius
+    // (see composerCornerRadius) so it eases from a full pill down to a
+    // fixed radius as the text wraps, instead of scaling into a stretched
+    // oval or snapping to a flat rect.
+    @State private var composerHeight: CGFloat = 0
+    // Coalesces "scroll to bottom" requests — messages.count and isSending
+    // often change in the same tick (see beginResponse), which used to
+    // fire two competing animated scrolls at once. Cancelling and
+    // deferring by one tick also gives a newly-inserted tall row (a card
+    // reply) time to finish laying out before the anchor position is
+    // computed, instead of landing short and leaving it half-hidden
+    // behind the composer.
+    @State private var scrollTask: Task<Void, Never>?
 
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
@@ -792,60 +813,122 @@ struct ScreenChat: View {
         }
     }
 
-    // One rounded compose card (Gemini's layout) instead of a pill field
-    // with a separate floating circle beside it — the text sits up top and
-    // the send button anchors to the card's own bottom-right corner, so
-    // typing and sending read as one control, not two. Also grows taller
-    // before capping (1...4 -> 1...8), since a longer message used to hit
-    // the ceiling and start internally scrolling sooner than it needed to.
-    // Text and the send button sit side by side (button bottom-aligned),
-    // not stacked in their own rows — stacking them reserved space for the
-    // button's whole row even with an empty draft, so the card was always
-    // tall instead of only growing when there's actually more to show.
-    // This way it stays compact at rest and only expands as the text
-    // wraps to more lines, capping at 8 (lineLimit) and scrolling
-    // internally past that rather than growing forever.
+    // Gemini's proportions, not just its rounded corners: a single-line
+    // pill (~52pt) at rest, not a tall rounded rectangle that reads like a
+    // textarea waiting for an essay — which was also why the bottom
+    // region needed its own background band in the first place. At this
+    // height the pill is light enough to float directly on the chat
+    // background (no band; see body's safeAreaInset).
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message Evlin…", text: $draft, axis: .vertical)
-                .font(Typography.font(16, weight: .regular))
-                .lineLimit(1...8)
-                .focused($inputFocused)
-                .padding(.vertical, 6)
-                .onSubmit(send)
+            composerQuickActions
 
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .background(canSend ? Brand.greenDeep : EColor.outlineVariant)
-                    .clipShape(Circle())
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("Message Evlin…", text: $draft, axis: .vertical)
+                    .font(Typography.font(16, weight: .regular))
+                    // Caps at 4 lines (not 8) — past that it scrolls
+                    // internally rather than keep growing toward a
+                    // full-screen textarea.
+                    .lineLimit(1...4)
+                    .focused($inputFocused)
+                    .onSubmit(send)
+
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        // A real filled state either way — quiet grey
+                        // while empty, not a near-white circle that reads
+                        // as broken rather than disabled; solid Evlin
+                        // green the moment there's something to send,
+                        // animating between the two rather than snapping.
+                        .background(canSend ? Brand.greenDeep : EColor.outline)
+                        .clipShape(Circle())
+                        .animation(.easeOut(duration: 0.15), value: canSend)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .accessibilityLabel("Send message")
             }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .accessibilityLabel("Send message")
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: ComposerHeightKey.self, value: geo.size.height)
+                }
+            )
+            .background(EColor.surfaceContainerLowest)
+            .clipShape(RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
+                    .strokeBorder(inputFocused ? EColor.outline : EColor.outlineVariant, lineWidth: 1)
+            )
+            .animation(.easeOut(duration: 0.18), value: composerHeight)
+            .animation(.easeOut(duration: 0.15), value: inputFocused)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(EColor.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: 22))
-        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(EColor.outlineVariant))
-        .padding(12)
-        // Same token the scroll area above uses (EColor.surface), not
-        // .ultraThinMaterial — that's a translucent blur that composites
-        // with whatever's behind it (here, the tab bar's own gray), which
-        // is exactly what produced a visible seam between two different
-        // "off-white"s instead of one continuous background.
-        .background(EColor.surface)
+        .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
+    }
+
+    // Fully rounded at rest (radius = half the single-line height, a true
+    // pill), easing down to a fixed 22pt as the text wraps to more lines —
+    // not scaling radius up *with* height, which is what would produce a
+    // stretched capsule instead of an ordinary rounded rect once it's
+    // grown past one line.
+    private var composerCornerRadius: CGFloat {
+        let restHeight: CGFloat = 46
+        let maxRadius = restHeight / 2
+        let minRadius: CGFloat = 22
+        let growthRange: CGFloat = 40
+        guard composerHeight > restHeight else { return maxRadius }
+        let eased = min(1, (composerHeight - restHeight) / growthRange)
+        return maxRadius - (maxRadius - minRadius) * eased
+    }
+
+    // The left slot Gemini gives to "+"/attach — this product's equivalent
+    // is jumping straight into the same quick actions the welcome grid
+    // offers, which matter more here than a generic attachment picker.
+    private var composerQuickActions: some View {
+        Menu {
+            ForEach(welcomeSuggestions) { s in
+                Button {
+                    sendSuggestion(s)
+                } label: {
+                    Label(s.title, systemImage: EIcon.sf(s.icon))
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(EColor.onSurfaceVariant)
+                .frame(width: 34, height: 34)
+                .background(EColor.surfaceContainerHigh)
+                .clipShape(Circle())
+        }
+        .disabled(isSending)
+        .accessibilityLabel("Quick actions")
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
-        let scroll = { proxy.scrollTo(bottomAnchorID, anchor: .bottom) }
-        if animated {
-            withAnimation(.easeOut(duration: 0.25), scroll)
-        } else {
-            scroll()
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            // A newly-inserted row — especially a tall card reply like
+            // BlockAppCard — hasn't necessarily finished laying out in the
+            // same tick its insertion transition starts. Scrolling to the
+            // bottom anchor immediately could compute its position before
+            // that row has taken up its final height, landing short and
+            // leaving the new message half-hidden behind the composer.
+            // One tick's deferral lets that layout settle first.
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            guard !Task.isCancelled else { return }
+            let scroll = { proxy.scrollTo(bottomAnchorID, anchor: .bottom) }
+            if animated {
+                withAnimation(.easeOut(duration: 0.25), scroll)
+            } else {
+                scroll()
+            }
         }
     }
 

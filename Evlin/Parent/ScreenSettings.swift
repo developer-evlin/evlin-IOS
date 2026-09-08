@@ -57,9 +57,10 @@ struct ScreenSettings: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            Form {
+            ScrollView {
                 settingsRootContent
             }
+            .background(EColor.surfaceContainerLowest)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SettingsRoute.self) { route in
@@ -93,97 +94,143 @@ struct ScreenSettings: View {
         .preferredColorScheme(.light)
     }
 
-    // MARK: - Root (ported from HomeSettingsSheet's settingsRootContent)
-
+    // MARK: - Root
+    //
+    // Hand-built instead of Form/Section: single-line rows by default (no
+    // subtitle unless the row would otherwise be ambiguous — none here
+    // are), small uppercase labels sitting tight against the group they
+    // name, and a light-grey card on a *white* page — Form's own
+    // insetGrouped styling only gives the opposite (white cards on a grey
+    // page), which is what a native Form/Section here would've produced
+    // no matter how the colors were themed.
     @ViewBuilder
     private var settingsRootContent: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 22) {
             NavigationLink(value: SettingsRoute.parentProfile) {
-                settingsProfileCard(
-                    title: parentName,
-                    subtitle: "Parent account · My Family",
-                    initials: initials(from: parentName)
-                )
+                settingsAccountRow
+            }
+            .buttonStyle(.plain)
+
+            settingsGroup("FAMILY") {
+                NavigationLink(value: SettingsRoute.childrenDevices) {
+                    // Just the count — the row already says "Children",
+                    // so "12 children" was saying the same word twice.
+                    settingsCompactRow(icon: "person", title: "Children and devices", value: "\(FamilyStore.children.count)")
+                }
+                .buttonStyle(.plain)
+
+                settingsDivider
+
+                Button { showAddChild = true } label: {
+                    settingsCompactRow(icon: "plus", title: "Add a child")
+                }
+                .buttonStyle(.plain)
+            }
+
+            settingsGroup("ALERTS") {
+                settingsCompactRow(icon: "bell", title: "Push notifications", showChevron: false) {
+                    Toggle("", isOn: $pushOn).labelsHidden().tint(EColor.secondary)
+                }
+            }
+
+            // Share Evlin used to be its own single-row section — folded
+            // in here so it isn't a group of one.
+            settingsGroup("ABOUT") {
+                ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
+                    settingsCompactRow(icon: "square.and.arrow.up", title: "Share Evlin")
+                }
+                .buttonStyle(.plain)
+
+                settingsDivider
+
+                // Not wired to anything yet (same as before this redesign)
+                // — no chevron, so it doesn't promise a tap it can't back up.
+                settingsCompactRow(icon: "sparkles", title: "Replay the tours", showChevron: false)
+
+                settingsDivider
+
+                settingsCompactRow(icon: "info.circle", title: "Version", value: "1.0 (100)", showChevron: false)
+
+                settingsDivider
+
+                NavigationLink(value: SettingsRoute.privacyTerms) {
+                    settingsCompactRow(icon: "shield", title: "Privacy & Terms")
+                }
+                .buttonStyle(.plain)
             }
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 24)
+    }
 
-        // Not duplicated at root any more — the "Plan" row inside Parent
-        // Profile (account management, not a pitch) is the one place for
-        // it now, so a parent isn't looking at two entry points into the
-        // same billingPage.
-        Section("Share") {
-            ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
-                settingsRow(
-                    title: "Share Evlin",
-                    subtitle: "Invite another parent to try it",
-                    systemImage: "square.and.arrow.up",
-                    accent: EColor.primary
-                )
+    private var settingsAccountRow: some View {
+        HStack(spacing: 12) {
+            InitialsAvatar(name: parentName, size: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(parentName).font(Typography.font(16, weight: .bold)).foregroundStyle(EColor.onSurface)
+                Text("My Family · \(billing.isPlus ? "Plus" : "Free plan")")
+                    .font(Typography.font(13, weight: .regular))
+                    .foregroundStyle(EColor.onSurfaceVariant)
+            }
+            Spacer(minLength: 10)
+            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 60)
+        .background(EColor.surfaceContainerHigh)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var settingsDivider: some View {
+        Divider().padding(.leading, 46)
+    }
+
+    // The label sits right on top of its group (8pt) with the real
+    // separation (22pt, set by the outer VStack's own spacing) coming
+    // *before* the label, not after — that's what makes it read as
+    // "attached to the group below," not floating between two groups.
+    private func settingsGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(label)
+                .font(Typography.font(11, weight: .bold))
+                .tracking(0.6)
+                .foregroundStyle(EColor.onSurfaceVariant)
+                .padding(.leading, 4)
+            VStack(spacing: 0, content: content)
+                .background(EColor.surfaceContainerHigh)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    // One line — icon, title, an optional trailing value or control, and a
+    // chevron only on rows that actually navigate or act. No subtitle slot
+    // at all: the old two-line rows paid the same ~72pt height whether or
+    // not there was a second line worth showing.
+    private func settingsCompactRow<Trailing: View>(
+        icon: String,
+        title: String,
+        value: String? = nil,
+        showChevron: Bool = true,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() }
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(EColor.onSurfaceVariant)
+                .frame(width: 22)
+            Text(title).font(Typography.font(15.5, weight: .regular)).foregroundStyle(EColor.onSurface)
+            Spacer(minLength: 10)
+            if let value {
+                Text(value).font(Typography.font(15, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+            }
+            trailing()
+            if showChevron {
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
             }
         }
-
-        Section("Family") {
-            NavigationLink(value: SettingsRoute.childrenDevices) {
-                settingsRow(
-                    title: "Children & Devices",
-                    subtitle: childrenDevicesSummary,
-                    systemImage: "person",
-                    value: "\(FamilyStore.children.count) \(FamilyStore.children.count == 1 ? "child" : "children")",
-                    accent: EColor.primary
-                )
-            }
-
-            Button {
-                showAddChild = true
-            } label: {
-                settingsRow(
-                    title: "Add Child",
-                    subtitle: "Scan the new child's first device",
-                    systemImage: "plus",
-                    accent: EColor.primary
-                )
-            }
-        }
-
-        // Just a toggle — no subtitle, no drill-down page. There's only
-        // ever the one thing to configure here, so a detail screen with
-        // per-alert-type switches was a destination with nothing behind
-        // it worth a whole page.
-        Section("Notifications") {
-            HStack(spacing: 12) {
-                settingsIconChip("bell", accent: EColor.secondary)
-                Text("Push Notifications").font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
-                Spacer(minLength: 10)
-                Toggle("", isOn: $pushOn).labelsHidden().tint(EColor.secondary)
-            }
-            .padding(.vertical, 4)
-        }
-
-        Section("About") {
-            settingsRow(
-                title: "Replay the tours",
-                subtitle: "Re-run each tab's quick intro",
-                systemImage: "sparkles",
-                accent: EColor.primary
-            )
-
-            settingsRow(
-                title: "Version",
-                subtitle: "",
-                systemImage: "info.circle",
-                value: "1.0 (100)",
-                accent: EColor.primary
-            )
-
-            NavigationLink(value: SettingsRoute.privacyTerms) {
-                settingsRow(
-                    title: "Privacy & Terms",
-                    subtitle: "Policies and service terms",
-                    systemImage: "shield",
-                    accent: EColor.primary
-                )
-            }
-        }
+        .padding(.horizontal, 14)
+        .frame(height: 48)
     }
 
     private var childrenDevicesSummary: String {
@@ -197,7 +244,7 @@ struct ScreenSettings: View {
         Form {
             settingsHeroNote(
                 title: "Family devices are scoped by child.",
-                message: "Choose which kid/device you are managing. App lists and controls live under the child device, not on the parent phone."
+                message: "\(childrenDevicesSummary). Choose which kid/device you are managing — app lists and controls live under the child device, not on the parent phone."
             )
 
             Section("Children") {
