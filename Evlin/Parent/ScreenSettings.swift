@@ -59,9 +59,12 @@ struct ScreenSettings: View {
             ScrollView {
                 settingsRootContent
             }
-            .background(EColor.surfaceContainerLowest)
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
+            .background(Color.white)
+            // Custom header (see settingsHeader) replaces the system nav
+            // bar on this root screen only — pushed destinations below
+            // keep their own .navigationTitle/back button untouched, since
+            // toolbar visibility is per-screen, not stack-wide.
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: SettingsRoute.self) { route in
                 switch route {
                 case .parentProfile: parentProfilePage
@@ -130,13 +133,38 @@ struct ScreenSettings: View {
     // Hand-built instead of Form/Section: single-line rows by default (no
     // subtitle unless the row would otherwise be ambiguous — none here
     // are), small uppercase labels sitting tight against the group they
-    // name, and a light-grey card on a *white* page — Form's own
-    // insetGrouped styling only gives the opposite (white cards on a grey
-    // page), which is what a native Form/Section here would've produced
-    // no matter how the colors were themed.
+    // name, rows on a plain white page separated by hairline dividers —
+    // Instagram-style, not Form's own insetGrouped card styling.
+
+    // Custom title row (system nav bar is hidden on this screen — see
+    // body) rather than .navigationTitle, so the title can sit at an exact
+    // 28pt/bold and share a line with the top-right action button, neither
+    // of which the system large-title mechanism gives direct control over.
+    private var settingsHeader: some View {
+        HStack {
+            Text("Settings")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(Color.black)
+            Spacer()
+            Button {
+                // Not wired to anything yet — same as this screen's other
+                // stubbed affordances (Replay the tours) until there's an
+                // actual menu of actions to put here.
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 23, weight: .regular))
+                    .foregroundStyle(Color.black)
+            }
+            .accessibilityLabel("More options")
+        }
+        .padding(.bottom, 6)
+    }
+
     @ViewBuilder
     private var settingsRootContent: some View {
         VStack(alignment: .leading, spacing: settingsGroupGap) {
+            settingsHeader
+
             settingsAccountCard
 
             settingsGroup("FAMILY") {
@@ -204,61 +232,75 @@ struct ScreenSettings: View {
         .padding(.bottom, 16)
     }
 
-    // Avatar/name/subtitle is its own tap target into Parent Profile; the
-    // lock note + Upgrade button below is a second, independent tap target
-    // in the same card — nesting a Button inside the NavigationLink's own
-    // label would break hit-testing, so they're siblings sharing one
-    // background/clip instead of one row wrapping the other.
+    // No card fill — the profile block sits directly on the white page,
+    // Instagram-profile-style. Avatar/name/subtitle is its own tap target
+    // into Parent Profile; the upgrade pill below is a second, independent
+    // tap target — nesting a Button inside the NavigationLink's own label
+    // would break hit-testing, so they're siblings, not one wrapping the
+    // other.
     private var settingsAccountCard: some View {
         let personColor = CalendarData.person("family").color
-        return VStack(alignment: .leading, spacing: 0) {
+        return VStack(alignment: .leading, spacing: 16) {
             NavigationLink(value: SettingsRoute.parentProfile) {
-                HStack(spacing: 14) {
-                    Circle()
-                        .fill(personColor)
-                        .frame(width: 68, height: 68)
-                        .overlay(Text(String(parentName.prefix(1))).font(Typography.font(26, weight: .bold)).foregroundStyle(.white))
+                HStack(spacing: 16) {
+                    storyRingAvatar(color: personColor, initial: String(parentName.prefix(1)))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(parentName).font(Typography.font(19, weight: .bold)).foregroundStyle(EColor.onSurface)
+                        Text(parentName).font(Typography.font(19, weight: .bold)).foregroundStyle(Color.black)
                         Text("My Family · \(billing.isPlus ? "Pro" : "Free plan")")
                             .font(Typography.font(13, weight: .regular))
-                            .foregroundStyle(EColor.onSurfaceVariant)
+                            .foregroundStyle(Color(.secondaryLabel))
                     }
                     Spacer(minLength: 10)
-                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
+                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 14)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             // Removed entirely once on Pro — nothing left to upsell.
             if !billing.isPlus {
-                Divider().padding(.horizontal, 14)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Repeating tasks, downtime, and bedtime are locked on the free plan.")
+                        .font(Typography.font(13, weight: .regular))
+                        .foregroundStyle(Color(.secondaryLabel))
 
-                Text("Repeating tasks, downtime, and bedtime are locked on the free plan.")
-                    .font(Typography.font(13, weight: .regular))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 12)
-
-                Button { path.append(SettingsRoute.billing) } label: {
-                    Text("Upgrade to Pro")
-                        .font(Typography.font(15, weight: .bold))
-                        .foregroundStyle(EColor.onSurface)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
+                    Button { path.append(SettingsRoute.billing) } label: {
+                        HStack(spacing: 4) {
+                            Spacer(minLength: 0)
+                            Text("Upgrade to Pro")
+                                .font(Typography.font(15, weight: .bold))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                        .foregroundStyle(Color.black)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(EColor.outlineVariant, lineWidth: 1))
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 14)
+                .padding(14)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
         }
-        .background(settingsCardFill)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // The Instagram story-highlight look: a gradient ring, a thin white
+    // gap, then the avatar itself — not the gradient stroked directly onto
+    // the avatar's own edge, which reads as a flat colored border instead
+    // of a separate ring floating around it.
+    private func storyRingAvatar(color: Color, initial: String) -> some View {
+        ZStack {
+            Circle()
+                .fill(
+                    AngularGradient(
+                        colors: [Color(hex: "FEDA75"), Color(hex: "FA7E1E"), Color(hex: "D62976"), Color(hex: "962FBF"), Color(hex: "4F5BD5"), Color(hex: "FEDA75")],
+                        center: .center
+                    )
+                )
+                .frame(width: 76, height: 76)
+            Circle().fill(Color.white).frame(width: 72, height: 72)
+            Circle().fill(color).frame(width: 66, height: 66)
+                .overlay(Text(initial).font(Typography.font(25, weight: .bold)).foregroundStyle(.white))
+        }
     }
 
     // Same 32px-avatar/name/device-count/chevron row every child gets, but
@@ -274,24 +316,27 @@ struct ScreenSettings: View {
                 Circle().fill(child.color).frame(width: 32, height: 32)
                     .overlay(Text(String(child.name.prefix(1))).font(Typography.font(13, weight: .bold)).foregroundStyle(.white))
             }
-            Text(child.name).font(Typography.font(15.5, weight: .regular)).foregroundStyle(EColor.onSurface)
+            Text(child.name).font(Typography.font(15.5, weight: .regular)).foregroundStyle(Color.black)
             Spacer(minLength: 10)
             Text("\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
                 .font(Typography.font(13, weight: .regular))
-                .foregroundStyle(EColor.onSurfaceVariant)
-            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
+                .foregroundStyle(Color(.secondaryLabel))
+            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
     }
 
+    // Plain "+" next to the label, no circle/box around it — the dashed
+    // stroke-circle container this used to have was exactly the kind of
+    // extra chrome this pass is meant to strip out.
     private var addChildRow: some View {
         HStack(spacing: 12) {
-            Circle()
-                .strokeBorder(EColor.primary, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                .frame(width: 32, height: 32)
-                .overlay(Image(systemName: "plus").font(.system(size: 13, weight: .bold)).foregroundStyle(EColor.primary))
-            Text("Add a child").font(Typography.font(15.5, weight: .semibold)).foregroundStyle(EColor.primary)
+            Image(systemName: "plus")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.black)
+                .frame(width: 32, alignment: .center)
+            Text("Add a child").font(Typography.font(15.5, weight: .bold)).foregroundStyle(Color.black)
             Spacer(minLength: 10)
         }
         .padding(.horizontal, 14)
@@ -344,42 +389,41 @@ struct ScreenSettings: View {
                 Text("Version \(appVersionString)")
             }
             .font(Typography.font(12, weight: .regular))
-            .foregroundStyle(EColor.onSurfaceVariant)
+            .foregroundStyle(Color(.secondaryLabel))
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 10)
     }
 
+    // Edge-to-edge (spans the same width as the rows above it, not
+    // indented on the trailing side) with only a leading inset, so it
+    // starts under the row's text rather than under its icon/avatar.
     private var settingsDivider: some View {
-        Divider().padding(.leading, 46)
+        Rectangle()
+            .fill(Color(.systemGray6))
+            .frame(height: 1)
+            .padding(.leading, 46)
     }
 
-    // Settings-local card fill — lighter than the shared surfaceContainerHigh
-    // token (which several other screens also use for chips/disabled states
-    // that weren't part of this pass) so this change stays scoped to
-    // Settings' own cards instead of shifting color everywhere that token
-    // appears.
-    private var settingsCardFill: Color { Color(hex: "F7F7F5") }
-
-    // Total whitespace from one card's bottom edge to the next header's top
+    // Total whitespace from one group's last row to the next header's top
     // (outer spacing + the header's own line height) works out to ~22pt
-    // once combined with settingsGroup's 6pt header-to-card gap below.
+    // once combined with settingsGroup's 6pt header-to-rows gap below.
     private var settingsGroupGap: CGFloat { 3 }
 
-    // The label sits right on top of its group (6pt) with the real
-    // separation (settingsGroupGap, set by the outer VStack's own spacing)
-    // coming *before* the label, not after — that's what makes it read as
+    // No card fill behind the group — rows sit directly on the white page,
+    // separated only by settingsDivider, Instagram-list-style. The label
+    // sits right on top of its group (6pt) with the real separation
+    // (settingsGroupGap, set by the outer VStack's own spacing) coming
+    // *before* the label, not after — that's what makes it read as
     // "attached to the group below," not floating between two groups.
     private func settingsGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(Typography.font(11, weight: .bold))
                 .tracking(0.6)
-                .foregroundStyle(EColor.onSurfaceVariant)
+                .foregroundStyle(Color(.secondaryLabel))
                 .padding(.leading, 4)
             VStack(spacing: 0, content: content)
-                .background(settingsCardFill)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -395,22 +439,20 @@ struct ScreenSettings: View {
         @ViewBuilder trailing: () -> Trailing = { EmptyView() }
     ) -> some View {
         HStack(spacing: 12) {
+            // Regular weight, plain black — clean line-art rather than a
+            // colored badge behind a heavier glyph.
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
-                // Darker than the row's own secondary/value text
-                // (onSurfaceVariant) — a thin glyph reads noticeably
-                // lighter than solid text at the same color, so matching
-                // hex values alone still left icons looking washed out.
-                .foregroundStyle(EColor.onSurface)
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(Color.black)
                 .frame(width: 22)
-            Text(title).font(Typography.font(15.5, weight: .regular)).foregroundStyle(EColor.onSurface)
+            Text(title).font(Typography.font(15.5, weight: .regular)).foregroundStyle(Color.black)
             Spacer(minLength: 10)
             if let value {
-                Text(value).font(Typography.font(15, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                Text(value).font(Typography.font(15, weight: .regular)).foregroundStyle(Color(.secondaryLabel))
             }
             trailing()
             if showChevron {
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
             }
         }
         .padding(.horizontal, 14)
