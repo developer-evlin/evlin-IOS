@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // Small stand-in catalog since there's no real installed-app inventory to
 // query — bundle IDs are shown because that's specifically what was asked
@@ -114,11 +115,56 @@ enum ITunesLookup {
     // (8 apps) that this is cheap, and it means the picker's default list
     // and every possible search result are already resolved before a
     // parent so much as taps into the search field, instead of each new
-    // row racing its own request into view.
+    // row racing its own request into view. Warms the actual image bytes
+    // too (IconImageCache), not just the URL — resolving the URL alone
+    // still left the first render of every row to pay for its own image
+    // download.
     static func prefetchAll(bundleIDs: [String]) {
         for id in bundleIDs where cache[id] == nil && inFlight[id] == nil {
-            Task { _ = await iconURL(bundleID: id) }
+            Task {
+                guard let url = await iconURL(bundleID: id) else { return }
+                _ = await IconImageCache.image(for: url)
+            }
         }
+    }
+}
+
+// ITunesLookup only caches the *resolved artwork URL* for a bundle ID —
+// it says nothing about the image bytes themselves. AsyncImage has no
+// cache of its own shared across view instances, so without this, every
+// time a row got filtered out of the picker's search results and back in
+// (a fresh AppIconView instance each time) it re-downloaded the same
+// full-size artwork from Apple's CDN from scratch — several times a
+// second while typing, per a real Sentry breadcrumb log showing the same
+// handful of icon URLs each fetched 3-4 times within a few seconds. This
+// caches the decoded image itself, keyed by URL, with the same
+// cache-plus-in-flight-coalescing shape as ITunesLookup below it, so a
+// bundle ID's artwork is only ever downloaded once per app launch no
+// matter how many times a row for it gets created.
+@MainActor
+enum IconImageCache {
+    private static var cache: [URL: UIImage] = [:]
+    private static var inFlight: [URL: Task<UIImage?, Never>] = [:]
+
+    static func cachedImage(for url: URL) -> UIImage? { cache[url] }
+
+    static func image(for url: URL) async -> UIImage? {
+        if let cached = cache[url] { return cached }
+        if let pending = inFlight[url] { return await pending.value }
+
+        let task = Task<UIImage?, Never> {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                return UIImage(data: data)
+            } catch {
+                return nil
+            }
+        }
+        inFlight[url] = task
+        let result = await task.value
+        inFlight[url] = nil
+        if let result { cache[url] = result }
+        return result
     }
 }
 
@@ -132,27 +178,26 @@ struct AppIconView: View {
     var size: CGFloat = 44
 
     @State private var iconURL: URL?
+    @State private var image: UIImage?
 
-    // Seeded from the cache synchronously — a bundle ID already looked up
-    // once (very likely, given the prefetch) renders its real icon on the
-    // very first frame, no flash.
+    // Seeded from both caches synchronously — a bundle ID already looked
+    // up and downloaded once (very likely, given the prefetch) renders its
+    // real icon on the very first frame, no flash and no redundant fetch,
+    // regardless of how many times this view gets torn down and recreated
+    // (e.g. filtered out of search results and back in).
     @MainActor
     init(bundleID: String, size: CGFloat = 44) {
         self.bundleID = bundleID
         self.size = size
-        _iconURL = State(initialValue: ITunesLookup.cachedIconURL(bundleID: bundleID))
+        let seededURL = ITunesLookup.cachedIconURL(bundleID: bundleID)
+        _iconURL = State(initialValue: seededURL)
+        _image = State(initialValue: seededURL.flatMap { IconImageCache.cachedImage(for: $0) })
     }
 
     var body: some View {
         Group {
-            if let iconURL {
-                AsyncImage(url: iconURL) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill()
-                    } else {
-                        emptyTile
-                    }
-                }
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
             } else {
                 emptyTile
             }
@@ -160,12 +205,15 @@ struct AppIconView: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.25, style: .continuous))
         .task(id: bundleID) {
-            // No-op when already seeded from cache — iconURL would just
-            // be reassigned the identical value, but skip it outright so
-            // a row that's already showing its real icon never has any
+            // No-op when already seeded from cache — skip outright so a
+            // row that's already showing its real icon never has any
             // reason to re-render because of this.
-            guard iconURL == nil else { return }
-            iconURL = await ITunesLookup.iconURL(bundleID: bundleID)
+            guard image == nil else { return }
+            let resolvedURL: URL?
+            if let iconURL { resolvedURL = iconURL } else { resolvedURL = await ITunesLookup.iconURL(bundleID: bundleID) }
+            guard let resolvedURL else { return }
+            iconURL = resolvedURL
+            image = await IconImageCache.image(for: resolvedURL)
         }
     }
 
