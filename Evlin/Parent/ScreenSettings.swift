@@ -530,23 +530,6 @@ struct ScreenSettings: View {
                 )
             }
 
-            // Its own section (not folded into "Profile") so it reads as
-            // account-level, same as Session below — and its own row here
-            // is a clear a link into the same billing page as the root
-            // list's "Evlin Plan" row, not a second copy of that screen.
-            Section("Plan") {
-                NavigationLink(value: SettingsRoute.billing) {
-                    settingsRow(
-                        title: "Evlin Plan",
-                        subtitle: billing.isPlus ? "Evlin Plus · \(billing.billingCycle == .yearly ? "Yearly" : "Monthly")" : "Upgrade for unlimited rules & AI insights",
-                        systemImage: "sparkles",
-                        pill: billing.isPlus ? "PLUS" : "FREE",
-                        pillTone: billing.isPlus ? .success : .neutral,
-                        accent: EColor.primary
-                    )
-                }
-            }
-
             Section("Session") {
                 NavigationLink(value: SettingsRoute.signOut) {
                     settingsRow(

@@ -24,16 +24,11 @@ struct ScreenProfile: View {
     @State private var reviewStartIndex: Int?
     @State private var showReflection = false
     @State private var editingRule: ChildRule?
-    @State private var addMode: AddMode?
+    // Was a menu offering "Add Task" or "Add Rule" — rules (including
+    // downtime) now come from chat instead, so the "+" goes straight to
+    // adding a task, no intermediate menu with a single choice on it.
+    @State private var showAddTask = false
     @State private var tutorialActive: Bool
-    // A fixed height, not a measured one — `.presentationDetents` doesn't
-    // reliably pick up a height correction delivered async (via
-    // GeometryReader + PreferenceKey) after the sheet has already started
-    // presenting, which showed up as a chunk of dead space below "Add Rule"
-    // sized to the stale initial guess. This menu's content (title + exactly
-    // two fixed-height rows) never actually changes shape, so a calibrated
-    // constant is both simpler and correct where the measured version wasn't.
-    private let addMenuHeight: CGFloat = 280
     @State private var showUnlockConfirm = false
     @State private var showGrantTimeSheet = false
     @State private var editingScreenTimeLimit = false
@@ -53,10 +48,6 @@ struct ScreenProfile: View {
     // immediately reappear from some other body re-evaluation.
     @State private var showTrialPopup = false
     @State private var showProtectionSetupPopup = false
-
-    enum AddMode: String, Identifiable { case menu, task, rule
-        var id: String { rawValue }
-    }
 
     init(childId: String, onBack: @escaping () -> Void, startInTutorial: Bool = false, onTutorialCompleted: (() -> Void)? = nil, openTaskId: Int? = nil) {
         self.childId = childId
@@ -131,7 +122,7 @@ struct ScreenProfile: View {
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Spacer()
-                Button { addMode = .menu } label: {
+                Button { showAddTask = true } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
@@ -209,7 +200,7 @@ struct ScreenProfile: View {
         // interactive while it's active.
         .overlay {
             if tutorialActive {
-                AddTaskTutorialOverlay(childName: child.name) { addMode = .task }
+                AddTaskTutorialOverlay(childName: child.name) { showAddTask = true }
                     .transition(.opacity)
             }
         }
@@ -282,55 +273,23 @@ struct ScreenProfile: View {
         .fullScreenCover(isPresented: Binding(get: { reviewStartIndex != nil }, set: { if !$0 { reviewStartIndex = nil } })) {
             TaskReviewDeckView(tasks: $tasks, childName: child.name, startIndex: reviewStartIndex ?? 0, onDismiss: { reviewStartIndex = nil })
         }
-        // One sheet, contents swapped by `addMode` — mirrors AddBottomSheet in
-        // index.html, which keeps a single sliding sheet and re-renders its
-        // body between the menu / AddTaskForm / AddRuleForm rather than
-        // presenting a new sheet per destination.
-        .sheet(item: $addMode) { mode in
-            Group {
-                switch mode {
-                case .menu:
-                    AddMenuView(childName: child.name) { addMode = $0 }
-                case .task:
-                    AddTaskSheet(child: child, onCreate: { newTask in
-                        let newId = (tasks.map(\.id).max() ?? 0) + 1
-                        var t = newTask
-                        t.id = newId
-                        tasks.append(t)
-                        addMode = nil
-                        if tutorialActive {
-                            tutorialActive = false
-                            onTutorialCompleted?()
-                        }
-                    }, onCancel: { addMode = nil })
-                case .rule:
-                    AddRuleSheet(onCreate: { newRule in
-                        child.rules.append(newRule)
-                        addMode = nil
-                    }, onCancel: { addMode = nil })
+        .sheet(isPresented: $showAddTask) {
+            AddTaskSheet(child: child, onCreate: { newTask in
+                let newId = (tasks.map(\.id).max() ?? 0) + 1
+                var t = newTask
+                t.id = newId
+                tasks.append(t)
+                showAddTask = false
+                if tutorialActive {
+                    tutorialActive = false
+                    onTutorialCompleted?()
                 }
-            }
-            // Forms fill the whole large sheet (they need room to scroll and
-            // grow with the keyboard) — but the menu must NOT be forced to
-            // fill, matching its fixed, non-scrolling content.
-            .frame(maxWidth: .infinity, maxHeight: mode == .menu ? nil : .infinity, alignment: .top)
-            // The menu step can be swiped away like the web app's tap-outside
-            // backdrop; once a form is showing, swipe-to-dismiss turns off so
-            // a stray drag can't silently discard a half-filled task/rule
-            // (Cancel is the only way out from there, same as FormShell).
-            .interactiveDismissDisabled(mode != .menu)
-            // The menu uses a calibrated fixed height (see addMenuHeight
-            // above) instead of a measured one. Forms stay at .large since
-            // they're taller and need room to grow with the keyboard.
-            .presentationDetents(mode == .menu ? [.height(addMenuHeight)] : [.large])
-            // presentationBackground (not a plain .background() on the
-            // content) is what actually paints behind the grab-handle strip
-            // and any leftover space below short content — a content-level
-            // .background() only covers the content's own hugged height,
-            // which is exactly what let the blurred backdrop show through
-            // above and below the "Add new" menu.
+            }, onCancel: { showAddTask = false })
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .interactiveDismissDisabled()
+            .presentationDetents([.large])
             .presentationBackground(EColor.surface)
-            .presentationDragIndicator(mode == .menu ? .visible : .hidden)
+            .presentationDragIndicator(.hidden)
         }
     }
 
@@ -1308,8 +1267,8 @@ private extension View {
 // fullScreenCover over the whole tab bar, the rest of the app) behind a
 // dimmed scrim with one spotlighted hole over the "+" FAB, plus a callout
 // explaining what to do. Nothing here is skippable — the only way out is
-// tapping the hole and actually creating a task (see the `.task` case of
-// ScreenProfile's addMode sheet, which clears `tutorialActive`).
+// tapping the hole and actually creating a task (see ScreenProfile's
+// showAddTask sheet, which clears `tutorialActive`).
 private struct AddTaskTutorialOverlay: View {
     var childName: String
     var onTapAddTask: () -> Void
@@ -1380,69 +1339,6 @@ private struct AddTaskTutorialOverlay: View {
     }
 }
 
-// MARK: - Add menu
-
-// Ported 1:1 from AddMenu in index.html:1866 — a titled list of two big
-// tappable rows (icon box, title, subtitle, chevron), not a native context
-// menu. Picking a row swaps this same sheet's content via `setMode`.
-private struct AddMenuRow: View {
-    var icon: String
-    var label: String
-    var sub: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: EIcon.sf(icon))
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(EColor.primary)
-                    .frame(width: 48, height: 48)
-                    .background(EColor.primaryContainer)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label).font(Typography.font(16, weight: .heavy)).foregroundStyle(EColor.onSurface)
-                    Text(sub).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                }
-                Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
-            }
-            .padding(.vertical, 16)
-            .padding(.horizontal, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct AddMenuView: View {
-    var childName: String
-    var setMode: (ScreenProfile.AddMode) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Add new")
-                .font(Typography.font(18, weight: .heavy))
-                .foregroundStyle(EColor.primary)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 14)
-
-            AddMenuRow(icon: "sf:checklist", label: "Add Task", sub: "New chore or homework for \(childName)") {
-                setMode(.task)
-            }
-            Divider().padding(.leading, 12)
-            AddMenuRow(icon: "sf:shield", label: "Add Rule", sub: "New screen-time or routine rule") {
-                setMode(.rule)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.top, 12)
-        // Bottom breathing room below the last row so it doesn't sit flush
-        // against the sheet's edge — the addMenuHeight constant above is
-        // calibrated to this exact padding value.
-        .padding(.bottom, 28)
-    }
-}
 
 // MARK: - Rule type metadata
 
@@ -1712,87 +1608,6 @@ private struct EditDailyScreenTimeLimitSheet: View {
 
             Text("\(childName)'s daily allowance resets at midnight.")
                 .font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-        }
-    }
-}
-
-// MARK: - Add Rule
-
-// Ported 1:1 from AddRuleForm in index.html:2069 — pick a type first
-// (Downtime / Custom), then fill only the fields that fit it.
-private struct AddRuleSheet: View {
-    var onCreate: (ChildRule) -> Void
-    var onCancel: () -> Void
-
-    @State private var kind: RuleKind = .downtime
-    @State private var title = ""
-    @State private var detail = ""
-    @State private var downtimeFrom = Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date()) ?? Date()
-    @State private var downtimeTo = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
-
-    private var effectiveTitle: String {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? RuleTypeMeta.label(kind) : trimmed
-    }
-
-    private var canSave: Bool {
-        kind == .custom ? !detail.trimmingCharacters(in: .whitespaces).isEmpty : true
-    }
-
-    var body: some View {
-        FormShell(title: "New Rule", onCancel: onCancel, onSave: {
-            switch kind {
-            case .downtime:
-                onCreate(ChildRule(
-                    id: UUID().uuidString, kind: .downtime, icon: RuleTypeMeta.icon(.downtime), title: effectiveTitle,
-                    detail: "\(ChildRule.fmtClock(downtimeFrom)) – \(ChildRule.fmtClock(downtimeTo))", on: true,
-                    downtimeFrom: downtimeFrom, downtimeTo: downtimeTo
-                ))
-            case .custom:
-                onCreate(ChildRule(id: UUID().uuidString, kind: .custom, icon: RuleTypeMeta.icon(.custom), title: effectiveTitle, detail: detail, on: true))
-            case .screenTimeLimit:
-                // Unreachable — the type picker below only offers Downtime
-                // and Custom; Screen Time Limit is a built-in, not something
-                // a parent can create another of.
-                break
-            }
-        }, canSave: canSave, saveLabel: "Save") {
-            FormField(label: "Rule type") {
-                HStack(spacing: 8) {
-                    TypeChip(glyph: .icon(RuleTypeMeta.icon(.downtime)), label: "Downtime", selected: kind == .downtime) { kind = .downtime }
-                    TypeChip(glyph: .icon(RuleTypeMeta.icon(.custom)), label: "Custom", selected: kind == .custom) { kind = .custom }
-                }
-            }
-
-            if kind == .downtime {
-                FormField(label: "Schedule") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            ruleTimeField(label: "From", date: $downtimeFrom)
-                            ruleTimeField(label: "To", date: $downtimeTo)
-                        }
-                        Text(RuleTypeMeta.blurb(.downtime)).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                    }
-                }
-                FormField(label: "Name (optional)") {
-                    FormTextField(placeholder: RuleTypeMeta.label(kind), text: $title)
-                }
-            }
-
-            if kind == .custom {
-                FormField(label: "Describe the rule") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        TextField("e.g. No phones at dinner, 6:00–7:00 PM", text: $detail, axis: .vertical)
-                            .font(Typography.font(15, weight: .regular))
-                            .lineLimit(3...5)
-                            .padding(14)
-                            .background(FormGreen.fieldBg)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                        Text("This becomes a rule you can toggle and edit like any other.")
-                            .font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                    }
-                }
-            }
         }
     }
 }
