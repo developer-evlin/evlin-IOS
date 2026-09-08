@@ -138,26 +138,13 @@ struct ScreenSettings: View {
 
     // Custom title row (system nav bar is hidden on this screen — see
     // body) rather than .navigationTitle, so the title can sit at an exact
-    // 28pt/bold and share a line with the top-right action button, neither
-    // of which the system large-title mechanism gives direct control over.
+    // 28pt/bold the system large-title mechanism doesn't give direct
+    // control over. No trailing button — it had nothing to open.
     private var settingsHeader: some View {
-        HStack {
-            Text("Settings")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(Color.black)
-            Spacer()
-            Button {
-                // Not wired to anything yet — same as this screen's other
-                // stubbed affordances (Replay the tours) until there's an
-                // actual menu of actions to put here.
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 23, weight: .regular))
-                    .foregroundStyle(Color.black)
-            }
-            .accessibilityLabel("More options")
-        }
-        .padding(.bottom, 6)
+        Text("Settings")
+            .font(.system(size: 28, weight: .bold))
+            .foregroundStyle(Color.black)
+            .padding(.bottom, 6)
     }
 
     @ViewBuilder
@@ -169,14 +156,7 @@ struct ScreenSettings: View {
 
             settingsGroup("FAMILY") {
                 ForEach(FamilyStore.children) { child in
-                    Button { openChildId = child.id } label: {
-                        settingsFamilyChildRow(child)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button { editingChild = child } label: { Label("Edit", systemImage: "pencil") }
-                        Button(role: .destructive) { childPendingRemoval = child } label: { Label("Remove", systemImage: "trash") }
-                    }
+                    settingsFamilyChildRow(child)
                     settingsDivider
                 }
 
@@ -307,21 +287,43 @@ struct ScreenSettings: View {
     // solid-color-fill-plus-white-initial rather than the generic mint
     // InitialsAvatar — same reasoning as the parent avatar: matches Home's
     // per-child treatment instead of reading as a placeholder.
+    // Two independent tap targets, not one row wrapped in a single Button:
+    // the avatar/name/count area opens the child's own space, and the
+    // trailing "…" is a visible, discoverable way to manage that child
+    // (edit name/age/photo, or remove them) — the long-press context menu
+    // this replaced worked but had no visible affordance telling a parent
+    // it existed.
     private func settingsFamilyChildRow(_ child: Child) -> some View {
         HStack(spacing: 12) {
-            if let avatar = child.avatar {
-                Image(uiImage: avatar).resizable().scaledToFill()
-                    .frame(width: 32, height: 32).clipShape(Circle())
-            } else {
-                Circle().fill(child.color).frame(width: 32, height: 32)
-                    .overlay(Text(String(child.name.prefix(1))).font(Typography.font(13, weight: .bold)).foregroundStyle(.white))
+            Button { openChildId = child.id } label: {
+                HStack(spacing: 12) {
+                    if let avatar = child.avatar {
+                        Image(uiImage: avatar).resizable().scaledToFill()
+                            .frame(width: 32, height: 32).clipShape(Circle())
+                    } else {
+                        Circle().fill(child.color).frame(width: 32, height: 32)
+                            .overlay(Text(String(child.name.prefix(1))).font(Typography.font(13, weight: .bold)).foregroundStyle(.white))
+                    }
+                    Text(child.name).font(Typography.font(15.5, weight: .regular)).foregroundStyle(Color.black)
+                    Spacer(minLength: 10)
+                    Text("\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
+                        .font(Typography.font(13, weight: .regular))
+                        .foregroundStyle(Color(.secondaryLabel))
+                }
+                .contentShape(Rectangle())
             }
-            Text(child.name).font(Typography.font(15.5, weight: .regular)).foregroundStyle(Color.black)
-            Spacer(minLength: 10)
-            Text("\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
-                .font(Typography.font(13, weight: .regular))
-                .foregroundStyle(Color(.secondaryLabel))
-            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
+            .buttonStyle(.plain)
+
+            Menu {
+                Button { editingChild = child } label: { Label("Edit", systemImage: "pencil") }
+                Button(role: .destructive) { childPendingRemoval = child } label: { Label("Remove", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(.tertiaryLabel))
+                    .frame(width: 28, height: 28)
+            }
+            .accessibilityLabel("Manage \(child.name)")
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
