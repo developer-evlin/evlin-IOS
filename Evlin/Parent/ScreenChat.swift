@@ -814,101 +814,78 @@ struct ScreenChat: View {
     }
 
     // Gemini's proportions, not just its rounded corners: a single-line
-    // pill (~52pt) at rest, not a tall rounded rectangle that reads like a
-    // textarea waiting for an essay — which was also why the bottom
-    // region needed its own background band in the first place. At this
-    // height the pill is light enough to float directly on the chat
-    // background (no band; see body's safeAreaInset).
+    // pill (52pt — 34pt send button + 9pt vertical padding each side) at
+    // rest, not a tall rounded rectangle that reads like a textarea
+    // waiting for an essay — which was also why the bottom region needed
+    // its own background band in the first place. At this height the
+    // pill is light enough to float directly on the chat background (no
+    // band; see body's safeAreaInset). Spans the same 16pt gutter as the
+    // floating tab bar below it so their edges line up — no separate
+    // attach affordance eating into that width, since nothing in this
+    // chat flow takes a file attachment.
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            composerQuickActions
+        HStack(alignment: .center, spacing: 8) {
+            TextField("Help with your child's schedule today", text: $draft, axis: .vertical)
+                .font(Typography.font(16, weight: .regular))
+                // Caps at 4 lines (not 8) — past that it scrolls
+                // internally rather than keep growing toward a
+                // full-screen textarea.
+                .lineLimit(1...4)
+                .focused($inputFocused)
+                .onSubmit(send)
 
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("Message Evlin…", text: $draft, axis: .vertical)
-                    .font(Typography.font(16, weight: .regular))
-                    // Caps at 4 lines (not 8) — past that it scrolls
-                    // internally rather than keep growing toward a
-                    // full-screen textarea.
-                    .lineLimit(1...4)
-                    .focused($inputFocused)
-                    .onSubmit(send)
-
-                Button(action: send) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        // A real filled state either way — quiet grey
-                        // while empty, not a near-white circle that reads
-                        // as broken rather than disabled; solid Evlin
-                        // green the moment there's something to send,
-                        // animating between the two rather than snapping.
-                        .background(canSend ? Brand.greenDeep : EColor.outline)
-                        .clipShape(Circle())
-                        .animation(.easeOut(duration: 0.15), value: canSend)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .accessibilityLabel("Send message")
+            Button(action: send) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(canSend ? .white : EColor.onSurfaceVariant)
+                    .frame(width: 34, height: 34)
+                    // A real filled state either way — quiet grey while
+                    // empty, not a near-white circle that reads as broken
+                    // rather than disabled; solid Evlin green the moment
+                    // there's something to send, animating between the
+                    // two rather than snapping.
+                    .background(canSend ? Brand.greenDeep : EColor.surfaceContainerHigh)
+                    .clipShape(Circle())
+                    .animation(.easeOut(duration: 0.15), value: canSend)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(key: ComposerHeightKey.self, value: geo.size.height)
-                }
-            )
-            .background(EColor.surfaceContainerLowest)
-            .clipShape(RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
-                    .strokeBorder(inputFocused ? EColor.outline : EColor.outlineVariant, lineWidth: 1)
-            )
-            .animation(.easeOut(duration: 0.18), value: composerHeight)
-            .animation(.easeOut(duration: 0.15), value: inputFocused)
+            .buttonStyle(.plain)
+            .disabled(!canSend)
+            .accessibilityLabel("Send message")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: ComposerHeightKey.self, value: geo.size.height)
+            }
+        )
+        .background(EColor.surfaceContainerLowest)
+        .clipShape(RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
+                .strokeBorder(inputFocused ? EColor.outline : EColor.outlineVariant, lineWidth: 1)
+        )
+        .animation(.easeOut(duration: 0.18), value: composerHeight)
+        .animation(.easeOut(duration: 0.15), value: inputFocused)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
         .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
     }
 
     // Fully rounded at rest (radius = half the single-line height, a true
-    // pill), easing down to a fixed 22pt as the text wraps to more lines —
-    // not scaling radius up *with* height, which is what would produce a
-    // stretched capsule instead of an ordinary rounded rect once it's
-    // grown past one line.
+    // pill — 26pt at the 52pt rest height, true semicircle ends), easing
+    // down to a fixed 22pt as the text wraps to more lines — not scaling
+    // radius up *with* height, which is what would produce a stretched
+    // capsule instead of an ordinary rounded rect once it's grown past
+    // one line.
     private var composerCornerRadius: CGFloat {
-        let restHeight: CGFloat = 46
+        let restHeight: CGFloat = 52
         let maxRadius = restHeight / 2
         let minRadius: CGFloat = 22
         let growthRange: CGFloat = 40
         guard composerHeight > restHeight else { return maxRadius }
         let eased = min(1, (composerHeight - restHeight) / growthRange)
         return maxRadius - (maxRadius - minRadius) * eased
-    }
-
-    // The left slot Gemini gives to "+"/attach — this product's equivalent
-    // is jumping straight into the same quick actions the welcome grid
-    // offers, which matter more here than a generic attachment picker.
-    private var composerQuickActions: some View {
-        Menu {
-            ForEach(welcomeSuggestions) { s in
-                Button {
-                    sendSuggestion(s)
-                } label: {
-                    Label(s.title, systemImage: EIcon.sf(s.icon))
-                }
-            }
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(EColor.onSurfaceVariant)
-                .frame(width: 34, height: 34)
-                .background(EColor.surfaceContainerHigh)
-                .clipShape(Circle())
-        }
-        .disabled(isSending)
-        .accessibilityLabel("Quick actions")
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
