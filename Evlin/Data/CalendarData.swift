@@ -7,6 +7,11 @@ struct FamilyPerson: Identifiable {
     var bg: Color
 }
 
+// A task's progress toward the parent's own review, distinct from a plain
+// event which has no completion concept at all — see the three status
+// markers this drives on the day timeline (strikethrough/dot/padlock).
+enum CalTaskState { case pending, submitted, done }
+
 struct CalEvent: Identifiable {
     let id = UUID()
     var personId: String
@@ -18,6 +23,20 @@ struct CalEvent: Identifiable {
     var location: String
     var note: String
     var repeats: String
+    // The following three only mean anything when category == "Task" — an
+    // ordinary event has no anytime/pending-approval/gating concept. Kept
+    // on CalEvent itself (not a parallel CalTask type) so tasks and events
+    // stay in the same eventsByDay store and the whole existing add/edit/
+    // expand/recurrence pipeline works for both without a second copy.
+    //
+    // Whether this belongs to the day as a whole (the ANYTIME row) rather
+    // than a specific moment on the grid.
+    var isAnytime: Bool = false
+    var taskState: CalTaskState = .pending
+    // Whether this is one of the tasks holding the child's apps locked
+    // until a parent approves it — the calendar's actual link to
+    // enforcement, not just a to-do list. Most tasks aren't gating.
+    var gatesUnlock: Bool = false
 }
 
 // A day-in-context view of an event: `day` is which day it's being shown as
@@ -55,9 +74,12 @@ enum CalendarData {
     static let dataDay = 12
     static let daysInDataMonth = 30
 
+    // Days 8-11 used to read Mon/Tue/Wed/Thu — each one day ahead of its
+    // real September 2024 weekday (day 1 is a real Sunday, so day 8 is a
+    // real Sunday too).
     static let dayNames: [Int: String] = [
         1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat",
-        8: "Mon", 9: "Tue", 10: "Wed", 11: "Thu", 12: "Thu", 13: "Fri", 14: "Sat",
+        8: "Sun", 9: "Mon", 10: "Tue", 11: "Wed", 12: "Thu", 13: "Fri", 14: "Sat",
         15: "Sun", 16: "Mon", 17: "Tue", 18: "Wed", 19: "Thu", 20: "Fri", 21: "Sat",
         22: "Sun", 23: "Mon", 24: "Tue", 25: "Wed", 26: "Thu", 27: "Fri", 28: "Sat",
         29: "Sun", 30: "Mon",
@@ -87,6 +109,19 @@ enum CalendarData {
             CalEvent(personId: "liam", title: "Soccer Practice", emoji: "⚽", start: "04:00 PM", end: "05:30 PM", category: "Sport", location: "City Park", note: "Don't forget shin guards.", repeats: "thu"),
             CalEvent(personId: "family", title: "Family Dinner", emoji: "🍴", start: "06:00 PM", end: "07:00 PM", category: "Family", location: "Dining Room", note: "Everyone helps set the table.", repeats: allDayCodes),
             CalEvent(personId: "emma", title: "Story Time", emoji: "🌙", start: "07:30 PM", end: "08:30 PM", category: "Routine", location: "Bedroom", note: "Two stories max.", repeats: allDayCodes),
+
+            // Tasks — same store, category "Task", told apart on the
+            // timeline by isAnytime (ANYTIME row vs a due-time slot on the
+            // grid) and taskState/gatesUnlock (strikethrough/dot/padlock).
+            // start/end on an anytime task is a nominal placeholder — it's
+            // excluded from grid layout entirely, so the value itself is
+            // never shown.
+            CalEvent(personId: "liam", title: "Make your bed", emoji: "🛏️", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done),
+            CalEvent(personId: "liam", title: "Clean your room", emoji: "🧹", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .submitted),
+            CalEvent(personId: "liam", title: "Homework", emoji: "📓", start: "05:00 PM", end: "05:30 PM", category: "Task", location: "", note: "Finish the worksheet.", repeats: "none", taskState: .pending, gatesUnlock: true),
+            CalEvent(personId: "maya", title: "Feed the dog", emoji: "🐶", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done),
+            CalEvent(personId: "maya", title: "Practice piano", emoji: "🎹", start: "07:00 PM", end: "07:30 PM", category: "Task", location: "", note: "15 minutes — scales, then a song.", repeats: "none", taskState: .pending, gatesUnlock: true),
+            CalEvent(personId: "emma", title: "Reading", emoji: "📚", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .pending, gatesUnlock: true),
         ],
     ]
 

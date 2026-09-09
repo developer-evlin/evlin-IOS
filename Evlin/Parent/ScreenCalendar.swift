@@ -45,6 +45,13 @@ private struct LaidOutEvent: Identifiable {
 private func layoutDayEvents(_ events: [CalDayEvent], lanes: [FamilyPerson]) -> [LaidOutEvent] {
     let numCols = max(lanes.count, 1)
     return events.compactMap { de -> LaidOutEvent? in
+        // Anytime tasks belong to the day, not to a moment — they live in
+        // the ANYTIME zone, never on this grid.
+        guard !de.event.isAnytime else { return nil }
+        // Matched by id, never by array position — lanes and the event
+        // list are built from two different filtered views of
+        // CalendarData.people, so an index-based pairing would silently
+        // drift the moment either one dropped or reordered an entry.
         guard let colIndex = lanes.firstIndex(where: { $0.id == de.event.personId }) else { return nil }
         let start = evTop(de.event.start)
         let end = max(evTop(de.event.end), start + 1)
@@ -55,10 +62,16 @@ private func layoutDayEvents(_ events: [CalDayEvent], lanes: [FamilyPerson]) -> 
 struct ScreenCalendar: View {
     @State private var selectedDay = CalendarData.dataDay
     @State private var showDatePicker = false
-    @State private var focusPerson: String?
     @State private var eventsByDay: [Int: [CalEvent]] = CalendarData.eventsByDay
     @State private var activeDayEvent: CalDayEvent?
     @State private var showAddEvent = false
+
+    // Children only — a parent doesn't have chores that gate screen time,
+    // so a "Family" lane sat empty most days while still costing a full
+    // quarter of the grid's width. Family-wide events (still real,
+    // still timed) show as their own compact strip above the lanes
+    // instead of occupying one.
+    private var lanePeople: [FamilyPerson] { CalendarData.people.filter { $0.id != "family" } }
 
     private func expandedEvents(for day: Int) -> [CalDayEvent] {
         CalendarData.expandedEvents(for: day, in: eventsByDay)
@@ -66,15 +79,19 @@ struct ScreenCalendar: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                dateHeader
-                DayTimelineView(selectedDay: selectedDay, focusPerson: $focusPerson, events: expandedEvents(for: selectedDay), onSelect: { activeDayEvent = $0 })
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .background(EColor.surface)
+            DayTimelineView(
+                selectedDay: $selectedDay,
+                visiblePeople: lanePeople,
+                events: expandedEvents(for: selectedDay),
+                onSelect: { activeDayEvent = $0 },
+                onOpenDatePicker: { showDatePicker = true }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white)
             // safeAreaInset reserves real layout space for the FAB, so the
-            // last row of whichever view is showing can never end up
-            // rendered underneath it.
+            // last row of the scrolling grid can never end up rendered
+            // underneath it — the FAB sits just above the tab bar's own
+            // safe-area inset, not floating in the gap above it.
             .safeAreaInset(edge: .bottom) {
                 HStack {
                     Spacer()
@@ -95,15 +112,31 @@ struct ScreenCalendar: View {
             .navigationBarHidden(true)
         }
         .sheet(item: $activeDayEvent) { de in
-            EventDetailSheet(dayEvent: de, onSave: { updated in
-                if let i = eventsByDay[de.originDay]?.firstIndex(where: { $0.id == de.event.id }) {
-                    eventsByDay[de.originDay]?[i] = updated
+            // Two different sheets, not one form that hides fields — a task
+            // opens to an Approve action, an event opens to edit/delete.
+            Group {
+                if de.event.category == "Task" {
+                    TaskDetailSheet(dayEvent: de, onApprove: {
+                        if let i = eventsByDay[de.originDay]?.firstIndex(where: { $0.id == de.event.id }) {
+                            eventsByDay[de.originDay]?[i].taskState = .done
+                        }
+                        activeDayEvent = nil
+                    }, onDelete: {
+                        eventsByDay[de.originDay]?.removeAll { $0.id == de.event.id }
+                        activeDayEvent = nil
+                    }, onClose: { activeDayEvent = nil })
+                } else {
+                    EventDetailSheet(dayEvent: de, onSave: { updated in
+                        if let i = eventsByDay[de.originDay]?.firstIndex(where: { $0.id == de.event.id }) {
+                            eventsByDay[de.originDay]?[i] = updated
+                        }
+                        activeDayEvent = nil
+                    }, onDelete: {
+                        eventsByDay[de.originDay]?.removeAll { $0.id == de.event.id }
+                        activeDayEvent = nil
+                    }, onClose: { activeDayEvent = nil })
                 }
-                activeDayEvent = nil
-            }, onDelete: {
-                eventsByDay[de.originDay]?.removeAll { $0.id == de.event.id }
-                activeDayEvent = nil
-            }, onClose: { activeDayEvent = nil })
+            }
         }
         .sheet(isPresented: $showAddEvent) {
             AddCalendarSheet(onCreate: { ev in
@@ -122,130 +155,124 @@ struct ScreenCalendar: View {
             .presentationDragIndicator(.visible)
         }
     }
-
-    private var dateHeader: some View {
-        HStack {
-            Button { selectedDay = max(1, selectedDay - 1) } label: { navCircle("chevron.left") }
-            Spacer()
-            Button { showDatePicker = true } label: {
-                VStack(spacing: 2) {
-                    Text("\(CalendarData.dayNames[selectedDay] ?? ""), Sep \(selectedDay)")
-                        .font(Typography.font(17, weight: .heavy))
-                        .foregroundStyle(EColor.onSurface)
-                    Text("TAP TO CHANGE DATE")
-                        .font(Typography.font(10, weight: .bold))
-                        .tracking(0.6)
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                }
-            }
-            .buttonStyle(.plain)
-            Spacer()
-            Button { selectedDay = min(CalendarData.daysInDataMonth, selectedDay + 1) } label: { navCircle("chevron.right") }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(EColor.surfaceContainerLowest)
-        .overlay(Divider(), alignment: .bottom)
-    }
-
-    private func navCircle(_ icon: String) -> some View {
-        Image(systemName: icon)
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(EColor.primary)
-            .frame(width: 34, height: 34)
-            .background(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .shadow(color: EShadow.premium, radius: 6, y: 2)
-    }
 }
 
 // MARK: - Day timeline
 
+// A fixed column, not a single scrolling block: the date bar, family-events
+// strip, lane header, and ANYTIME row are ordinary VStack siblings with no
+// ScrollView of their own — they take their natural height and stay put.
+// Only the hour grid scrolls, in the one ScrollView at the bottom, sized to
+// fill whatever height those fixed sections don't use. Wrapping the *whole*
+// column in a GeometryReader (to get one shared width for the grid math)
+// starved that ScrollView of a determinate height and collapsed it to
+// nothing — the GeometryReader here stays scoped to just the grid's own
+// ScrollView content, exactly where the original single-region version had
+// it, so the fixed sections above never depend on it.
 private struct DayTimelineView: View {
-    var selectedDay: Int
-    @Binding var focusPerson: String?
+    @Binding var selectedDay: Int
+    var visiblePeople: [FamilyPerson]
     var events: [CalDayEvent]
     var onSelect: (CalDayEvent) -> Void
-
-    private var visiblePeople: [FamilyPerson] {
-        if let focusPerson { return CalendarData.people.filter { $0.id == focusPerson } }
-        return CalendarData.people
-    }
+    var onOpenDatePicker: () -> Void
 
     private var filteredEvents: [CalDayEvent] {
-        guard let focusPerson else { return events }
-        return events.filter { $0.event.personId == focusPerson }
+        let ids = Set(visiblePeople.map(\.id))
+        return events.filter { ids.contains($0.event.personId) }
     }
 
-    // Skips whatever empty hours sit before the day's first event (an hour
-    // of lead-in ahead of it) instead of always opening at midnight — most
-    // of a family's day has nothing scheduled before mid-morning, and
-    // scrolling past all of it just to reach real content wasted the
-    // screen space between the header and the first thing worth seeing.
-    // Based on the day's full event list, not the person-filtered one, so
-    // toggling a focus avatar doesn't jerk the visible range around.
-    private var renderStartHour: Int {
-        guard let earliestMinutes = events.map({ CalendarData.minutesSinceMidnight($0.event.start) }).min() else { return startHour }
-        return max(startHour, earliestMinutes / 60 - 1)
+    private var familyEvents: [CalDayEvent] {
+        events.filter { $0.event.personId == "family" }.sorted { evTop($0.event.start) < evTop($1.event.start) }
     }
-    private var renderStartY: CGFloat { timeToY(renderStartHour) }
 
-    private var hours: [Int] { Array(renderStartHour...endHour) }
+    // The grid's own timed items — events plus due-time tasks, excluding
+    // anytime tasks (placeholder start time) and family events (their own
+    // strip, not a lane). This same list backs both the default-range
+    // extension below and the actual laid-out blocks, so they can't drift
+    // apart the way a separately-computed condition could.
+    private var timedLaneItems: [CalDayEvent] {
+        filteredEvents.filter { !$0.event.isAnytime && $0.event.personId != "family" }
+    }
+
+    private func anytimeTasks(for personId: String) -> [CalDayEvent] {
+        filteredEvents.filter { $0.event.personId == personId && $0.event.isAnytime }
+    }
+
+    private var hasAnytimeTasks: Bool {
+        visiblePeople.contains { !anytimeTasks(for: $0.id).isEmpty }
+    }
+
+    // 7 AM-9 PM by default, extending only as far as an actual item outside
+    // that window requires — not the full 0-24 range, most of which would
+    // just be empty scrolling for a typical family day.
+    private static let defaultStartHour = 7
+    private static let defaultEndHour = 21
+
+    private var rangeStartHour: Int {
+        let earliest = timedLaneItems.map { CalendarData.minutesSinceMidnight($0.event.start) / 60 }.min() ?? Self.defaultStartHour
+        return max(startHour, min(Self.defaultStartHour, earliest))
+    }
+    private var rangeEndHour: Int {
+        let latestEndMinutes = timedLaneItems.map { CalendarData.minutesSinceMidnight($0.event.end) }.max() ?? (Self.defaultEndHour * 60)
+        let latest = (latestEndMinutes + 59) / 60
+        return min(endHour, max(Self.defaultEndHour, latest))
+    }
+    private var rangeStartY: CGFloat { timeToY(rangeStartHour) }
+    private var hours: [Int] { Array(rangeStartHour...rangeEndHour) }
+
+    // The real clock's hour, not the mock day's — clamped to the rendered
+    // range so scrolling to it never lands outside the grid on a day whose
+    // range doesn't cover the current hour.
+    private var nowHour: Int {
+        min(max(Calendar.current.component(.hour, from: Date()), rangeStartHour), rangeEndHour)
+    }
+
+    private func scrollToNow(_ proxy: ScrollViewProxy) {
+        // One tick's defer — .scrollTo on the same frame the content first
+        // lays out can resolve against the pre-layout geometry and land
+        // short.
+        DispatchQueue.main.async {
+            withAnimation(nil) { proxy.scrollTo("hour-\(nowHour)", anchor: UnitPoint(x: 0, y: 0.33)) }
+        }
+    }
 
     var body: some View {
-        Card(padded: false) {
-            VStack(spacing: 0) {
-                HStack {
-                    Text(selectedDay == CalendarData.dataDay ? "Today's Events" : "Sep \(selectedDay)")
-                        .font(Typography.font(16, weight: .heavy)).foregroundStyle(EColor.onSurface)
-                    Spacer()
-                }
-                .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+        VStack(spacing: 0) {
+            dateBar
+            Divider()
 
-                HStack(spacing: 14) {
-                    if focusPerson != nil {
-                        Button { focusPerson = nil } label: {
-                            Image(systemName: "person.3.fill")
-                                .frame(width: 28, height: 28)
-                                .background(EColor.primaryContainer)
-                                .clipShape(RoundedRectangle(cornerRadius: 9))
-                                .foregroundStyle(EColor.primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    HStack(spacing: 0) {
-                        ForEach(visiblePeople) { p in
-                            Button {
-                                focusPerson = (focusPerson == p.id) ? nil : p.id
-                            } label: {
-                                VStack(spacing: 4) {
-                                    Circle().fill(p.color).frame(width: 36, height: 36)
-                                        .overlay(Text(String(p.name.prefix(1))).font(Typography.font(14, weight: .bold)).foregroundStyle(.white))
-                                    Text(p.name).font(Typography.font(10, weight: .semibold))
-                                        .foregroundStyle(focusPerson == p.id ? p.color : EColor.onSurface)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                }
-                .padding(.horizontal, 16).padding(.bottom, 10)
+            if !familyEvents.isEmpty {
+                familyStrip
                 Divider()
+            }
 
-                // Opens near the day's first event (see renderStartHour)
-                // rather than always at midnight — this crops the empty
-                // leading hours out of the scrollable range entirely
-                // instead of trying to scroll to a computed position after
-                // the fact, which sidesteps SwiftUI's ScrollViewReader:
-                // .scrollTo relies on a view's *layout* position, and the
-                // offset()-based absolute placement used below for the
-                // timeline rows never resolves one reliably.
+            laneHeader
+            Divider()
+
+            if hasAnytimeTasks {
+                anytimeZone
+                Divider()
+            }
+
+            ScrollViewReader { proxy in
                 ScrollView {
                     GeometryReader { geo in
                         let trackWidth = geo.size.width - timeColW
                         let laidOut = layoutDayEvents(filteredEvents, lanes: visiblePeople)
                         ZStack(alignment: .topLeading) {
+                            // A normal-flow ruler, invisible, purely so
+                            // ScrollViewReader has a real *layout* position
+                            // to resolve — everything else in this ZStack is
+                            // placed with .offset(), which moves a view
+                            // visually without moving the layout frame
+                            // .scrollTo actually reads, so none of those
+                            // could ever be a reliable scroll target.
+                            VStack(spacing: 0) {
+                                ForEach(hours, id: \.self) { h in
+                                    Color.clear.frame(height: hourHeight).id("hour-\(h)")
+                                }
+                            }
+
                             ForEach(hours, id: \.self) { h in
                                 HStack(spacing: 0) {
                                     Text(fmtHour(h))
@@ -256,7 +283,7 @@ private struct DayTimelineView: View {
                                     Rectangle().fill(EColor.outlineVariant).frame(maxWidth: .infinity).frame(height: 0.5)
                                 }
                                 .frame(width: geo.size.width, alignment: .leading)
-                                .offset(y: timeToY(h) - 6 - renderStartY)
+                                .offset(y: timeToY(h) - 6 - rangeStartY)
                             }
 
                             ForEach(laidOut) { item in
@@ -264,44 +291,206 @@ private struct DayTimelineView: View {
                             }
                         }
                     }
-                    .frame(height: timeToY(endHour) - renderStartY + 24)
+                    .frame(height: timeToY(rangeEndHour) - rangeStartY + 24)
+                    // Clears the FAB/tab bar on its own too — the outer
+                    // safeAreaInset already keeps content from rendering
+                    // underneath them, but a little extra room past the
+                    // last hour line reads better than stopping flush.
+                    .padding(.bottom, 24)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear { scrollToNow(proxy) }
+                .onChange(of: selectedDay) { _, _ in scrollToNow(proxy) }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(12)
     }
 
+    private var dateBar: some View {
+        HStack {
+            Button { selectedDay = max(1, selectedDay - 1) } label: { navCircle("chevron.left") }
+            Spacer()
+            Button(action: onOpenDatePicker) {
+                VStack(spacing: 2) {
+                    Text("\(CalendarData.dayNames[selectedDay] ?? ""), Sep \(selectedDay)")
+                        .font(Typography.font(17, weight: .heavy))
+                        .foregroundStyle(EColor.onSurface)
+                    Text(selectedDay == CalendarData.dataDay ? "TODAY" : "TAP TO CHANGE DATE")
+                        .font(Typography.font(10, weight: .bold))
+                        .tracking(0.6)
+                        .foregroundStyle(selectedDay == CalendarData.dataDay ? EColor.secondary : EColor.onSurfaceVariant)
+                }
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Button { selectedDay = min(CalendarData.daysInDataMonth, selectedDay + 1) } label: { navCircle("chevron.right") }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func navCircle(_ icon: String) -> some View {
+        Image(systemName: icon)
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(EColor.primary)
+            .frame(width: 34, height: 34)
+            .background(EColor.surfaceContainerLowest)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var familyStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(familyEvents) { de in
+                    Button { onSelect(de) } label: {
+                        HStack(spacing: 6) {
+                            Text(de.event.emoji).font(.system(size: 12))
+                            Text(de.event.title).font(Typography.font(12.5, weight: .bold))
+                            Text(de.event.start).font(Typography.font(11, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                        }
+                        .foregroundStyle(EColor.onSurface)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(CalendarData.person("family").bg)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var laneHeader: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: timeColW)
+            ForEach(visiblePeople) { p in
+                VStack(spacing: 4) {
+                    Circle().fill(p.color).frame(width: 36, height: 36)
+                        .overlay(Text(String(p.name.prefix(1))).font(Typography.font(14, weight: .bold)).foregroundStyle(.white))
+                    Text(p.name).font(Typography.font(10, weight: .semibold)).foregroundStyle(EColor.onSurface)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var anytimeZone: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Text("ANY\nTIME")
+                .font(Typography.font(9, weight: .bold))
+                .tracking(0.4)
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(EColor.onSurfaceVariant)
+                .frame(width: timeColW, alignment: .trailing)
+                .padding(.trailing, 8)
+                .padding(.top, 2)
+            ForEach(visiblePeople) { p in
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(anytimeTasks(for: p.id)) { de in
+                        anytimeChip(de)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+
+    // Strikethrough (done), a filled dot (submitted, waiting on the
+    // parent), or a padlock (gating screen time until approved).
+    private func anytimeChip(_ de: CalDayEvent) -> some View {
+        let ev = de.event
+        let p = CalendarData.person(ev.personId)
+        return Button { onSelect(de) } label: {
+            HStack(spacing: 5) {
+                statusIcon(ev)
+                Text(ev.title)
+                    .font(Typography.font(11.5, weight: .semibold))
+                    .strikethrough(ev.taskState == .done)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(p.color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(p.bg)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func statusIcon(_ ev: CalEvent) -> some View {
+        switch (ev.taskState, ev.gatesUnlock) {
+        case (.done, _):
+            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+        case (.submitted, _):
+            Circle().frame(width: 6, height: 6)
+        case (.pending, true):
+            Image(systemName: "lock.fill").font(.system(size: 9, weight: .bold))
+        case (.pending, false):
+            EmptyView()
+        }
+    }
+
+    // "by 5PM" rather than "by 5:00 PM" — condensed to match the chips'
+    // own compact type instead of spelling out a full clock time.
+    private func shortTime(_ text: String) -> String {
+        let parts = text.split(separator: " ")
+        guard parts.count == 2 else { return text }
+        let hm = parts[0].split(separator: ":")
+        guard hm.count == 2 else { return text }
+        return hm[1] == "00" ? "\(hm[0])\(parts[1])" : "\(hm[0]):\(hm[1])\(parts[1])"
+    }
+
+    // Told apart by shape, not color — a solid fill for an event (it just
+    // happens, at a time), a dashed outline for a task (it's owed, by a
+    // time).
     private func eventBlock(_ item: LaidOutEvent, trackWidth: CGFloat) -> some View {
-        let p = CalendarData.person(item.dayEvent.event.personId)
+        let ev = item.dayEvent.event
+        let p = CalendarData.person(ev.personId)
+        let isTask = ev.category == "Task"
         let widthFrac = 1 / CGFloat(item.numCols)
         let leftFrac = CGFloat(item.col) / CGFloat(item.numCols)
         let w = max(trackWidth * widthFrac - 6, 24)
         return Button { onSelect(item.dayEvent) } label: {
             VStack(alignment: .leading, spacing: 2) {
-                if item.height > 38 {
-                    Text(item.dayEvent.event.emoji).font(.system(size: 11))
+                if !isTask, item.height > 38 {
+                    Text(ev.emoji).font(.system(size: 11))
                 }
                 HStack(spacing: 3) {
-                    if item.dayEvent.event.repeats != "none" {
+                    if isTask {
+                        statusIcon(ev)
+                    } else if ev.repeats != "none" {
                         Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 8)).foregroundStyle(.white.opacity(0.85))
                     }
-                    Text(item.dayEvent.event.title)
+                    Text(ev.title)
                         .font(Typography.font(11, weight: .heavy))
+                        .strikethrough(isTask && ev.taskState == .done)
                         .lineLimit(1)
                 }
+                if isTask {
+                    Text("by \(shortTime(ev.start))")
+                        .font(Typography.font(9.5, weight: .semibold))
+                }
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(isTask ? p.color : .white)
             .padding(.horizontal, 7)
             .padding(.top, item.height > 40 ? 7 : 4)
             .frame(width: w, height: item.height, alignment: .topLeading)
-            .background(p.color)
+            .background(isTask ? Color.clear : p.color)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isTask ? p.color : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+            )
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .offset(x: timeColW + trackWidth * leftFrac + 3, y: item.top - renderStartY)
+        .offset(x: timeColW + trackWidth * leftFrac + 3, y: item.top - rangeStartY)
     }
 }
 
@@ -642,6 +831,131 @@ private struct EventDetailSheet: View {
     }
 }
 
+// MARK: - Task detail
+
+// A task opens to an Approve action, not an edit form — its fields (who,
+// when, what to do) are the same ones set when it was created and aren't
+// meant to change from here; the thing a parent actually does with a task
+// on the calendar is review and clear it.
+private struct TaskDetailSheet: View {
+    var dayEvent: CalDayEvent
+    var onApprove: () -> Void
+    var onDelete: () -> Void
+    var onClose: () -> Void
+
+    @State private var showDeleteConfirm = false
+
+    private var event: CalEvent { dayEvent.event }
+    private var person: FamilyPerson { CalendarData.person(event.personId) }
+
+    private var dateLabel: String {
+        let name = CalendarData.dayNames[dayEvent.day] ?? ""
+        let full = CalendarData.fullDayNames[name] ?? name
+        return "\(full), September \(dayEvent.day)"
+    }
+
+    private var whenLabel: String {
+        event.isAnytime ? "Anytime today" : "Due \(event.start)"
+    }
+
+    private var statusLabel: (text: String, color: Color) {
+        switch event.taskState {
+        case .done: return ("Approved", EColor.secondary)
+        case .submitted: return ("Waiting on you", Color(hex: "B26A00"))
+        case .pending: return (event.gatesUnlock ? "Not done — locking apps" : "Not done yet", EColor.onSurfaceVariant)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            topBar
+            Divider()
+            ScrollView { content }
+        }
+        .background(EColor.surface)
+        .alert("Delete \"\(event.title)\"?", isPresented: $showDeleteConfirm) {
+            Button("Delete", role: .destructive) { onDelete() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
+        }
+    }
+
+    private var topBar: some View {
+        HStack {
+            Button(action: onClose) {
+                Image(systemName: "xmark").foregroundStyle(EColor.onSurface).frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Button { showDeleteConfirm = true } label: {
+                Image(systemName: "trash").foregroundStyle(EColor.onSurface).frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8).padding(.top, 8)
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 14) {
+                RoundedRectangle(cornerRadius: 4).fill(person.color).frame(width: 14, height: 14).padding(.top, 6)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("\(event.emoji) \(event.title)")
+                        .font(Typography.font(22, weight: .heavy)).foregroundStyle(EColor.primary)
+                    Text(dateLabel).font(Typography.font(14, weight: .semibold)).foregroundStyle(EColor.onSurface)
+                    Text(whenLabel).font(Typography.font(14, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                }
+            }
+            .padding(.vertical, 16)
+
+            infoRow(icon: "person.fill") {
+                HStack(spacing: 9) {
+                    Circle().fill(person.color).frame(width: 24, height: 24)
+                        .overlay(Text(String(person.name.prefix(1))).font(Typography.font(11, weight: .bold)).foregroundStyle(.white))
+                    Text(person.name).font(Typography.font(14, weight: .semibold))
+                }
+            }
+            infoRow(icon: statusIconName) {
+                Text(statusLabel.text).font(Typography.font(14, weight: .semibold)).foregroundStyle(statusLabel.color)
+            }
+            if event.gatesUnlock {
+                infoRow(icon: "lock.fill") {
+                    Text("Holds \(person.name)'s apps locked until approved.").font(Typography.font(13, weight: .regular))
+                }
+            }
+            if !event.note.isEmpty {
+                infoRow(icon: "note.text", last: event.taskState == .done) { Text(event.note).font(Typography.font(14, weight: .regular)) }
+            }
+
+            if event.taskState != .done {
+                PrimaryButton(title: "Approve", systemIcon: "checkmark") { onApprove() }
+                    .padding(.top, 20)
+            }
+        }
+        .padding(.horizontal, 20).padding(.bottom, 24)
+    }
+
+    private var statusIconName: String {
+        switch event.taskState {
+        case .done: return "checkmark.circle.fill"
+        case .submitted: return "circle.fill"
+        case .pending: return event.gatesUnlock ? "lock.fill" : "circle"
+        }
+    }
+
+    @ViewBuilder
+    private func infoRow<Content: View>(icon: String, last: Bool = false, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: icon).font(.system(size: 16)).foregroundStyle(EColor.onSurfaceVariant).frame(width: 22)
+            content().foregroundStyle(EColor.onSurface)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 13)
+        .overlay(alignment: .bottom) { if !last { Divider() } }
+    }
+}
+
 // MARK: - Add event
 
 // A parent adding something to the calendar means two different things —
@@ -812,6 +1126,10 @@ private struct AddCalendarTaskForm: View {
     @State private var personId = CalendarData.people.first { $0.id != "family" }?.id ?? CalendarData.people[0].id
     @State private var title = ""
     @State private var whatToDo = ""
+    // The choice that decides which zone this lands in — the ANYTIME row
+    // (no deadline) or a due-time slot on the grid — so it's asked up
+    // front rather than inferred from whether a time got picked.
+    @State private var isAnytime = true
     @State private var dueTime: Date = AddCalendarTaskForm.roundedToNextHalfHour(Date())
     @State private var repeatDays: Set<String> = []
 
@@ -829,9 +1147,11 @@ private struct AddCalendarTaskForm: View {
             let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
             onCreate(CalEvent(
                 personId: personId, title: title, emoji: emojiForCalendarCategory("Task"),
-                start: ChildRule.fmtClock(dueTime), end: ChildRule.fmtClock(dueTime.addingTimeInterval(1800)),
+                start: isAnytime ? "12:00 AM" : ChildRule.fmtClock(dueTime),
+                end: isAnytime ? "12:00 AM" : ChildRule.fmtClock(dueTime.addingTimeInterval(1800)),
                 category: "Task", location: "", note: whatToDo.trimmingCharacters(in: .whitespaces),
-                repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
+                repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ","),
+                isAnytime: isAnytime
             ))
         }, canSave: canSave, saveLabel: "Add task") {
             FormField(label: "Title") {
@@ -844,8 +1164,16 @@ private struct AddCalendarTaskForm: View {
                     }
                 }
             }
-            FormField(label: "Due") {
-                FormTimeField(date: $dueTime)
+            FormField(label: "When") {
+                FlowChips {
+                    DotChip(label: "Anytime today", color: nil, selected: isAnytime) { isAnytime = true }
+                    DotChip(label: "By a set time", color: nil, selected: !isAnytime) { isAnytime = false }
+                }
+            }
+            if !isAnytime {
+                FormField(label: "Due") {
+                    FormTimeField(date: $dueTime)
+                }
             }
             FormField(label: "What to do") {
                 TextField("Instructions…", text: $whatToDo, axis: .vertical)
