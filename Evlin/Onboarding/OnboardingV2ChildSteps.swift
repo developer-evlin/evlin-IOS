@@ -38,6 +38,9 @@ struct ChildProfileStep: View {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
+
     var body: some View {
         OnboardingV2ScreenContainer(
             embeddedRole: .child,
@@ -55,8 +58,8 @@ struct ChildProfileStep: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("NAME").onboardingV2FieldLabel()
                         OnboardingV2FieldBox {
-                            TextField("Your name", text: $name)
-                                .font(Evlin.Typography.font(16, weight: .semibold))
+                            TextField("Your child's name", text: $name)
+                                .font(Evlin.Typography.font(isRegular ? 19 : 16, weight: .semibold))
                                 .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
                                 .tint(kidGreen)
                                 .textInputAutocapitalization(.words)
@@ -221,7 +224,7 @@ struct ChildScreenTimeStep: View {
 
     private enum Stage: Equatable { case initial, requesting, granted, denied(String) }
     @State private var stage: Stage = .initial
-    @StateObject private var authCenter = AuthorizationCenter.shared
+    @State private var authStatus: AuthorizationStatus = AuthorizationCenter.shared.authorizationStatus
 
     var body: some View {
         OnboardingV2ScreenContainer(
@@ -245,7 +248,7 @@ struct ChildScreenTimeStep: View {
         )
         .animation(.easeOut(duration: 0.2), value: stage)
         .onAppear {
-            if authCenter.authorizationStatus == .approved {
+            if authStatus == .approved {
                 stage = .granted
             }
         }
@@ -528,17 +531,27 @@ struct ChildFamilySharingAskStep: View {
 
 struct ChildOnboardingReadyStep: View {
     let onEnter: () -> Void
+    // Same reasoning as ParentOnboardingDoneStep: this doesn't route
+    // through OnboardingV2ScreenContainer, so it needs its own iPad cap to
+    // avoid stretching the CTA edge to edge across the tablet's width.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
 
     var body: some View {
         VStack(spacing: Spacing.section) {
-            Spacer()
+            // See ParentOnboardingDoneStep's identical comment — flexible
+            // Spacers here would absorb an iPad's whole extra height
+            // instead of just the leftover sliver an iPhone screen has,
+            // stranding this content in a tiny cluster at the top with a
+            // huge empty gap before the button.
+            if !isRegular { Spacer() }
 
             Circle()
                 .fill(OnboardingV2Theme.Palette.secondaryContainer)
-                .frame(width: 64, height: 64)
+                .frame(width: isRegular ? 84 : 64, height: isRegular ? 84 : 64)
                 .overlay(
                     Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 28, weight: .bold))
+                        .font(.system(size: isRegular ? 36 : 28, weight: .bold))
                         .foregroundStyle(kidGreen)
                 )
 
@@ -550,12 +563,14 @@ struct ChildOnboardingReadyStep: View {
                     .padding(.horizontal, Spacing.xl)
             }
 
-            Spacer()
+            if !isRegular { Spacer() }
 
             OnboardingV2PrimaryButton("Enter Evlin", role: .child, action: onEnter)
                 .padding(.horizontal, Spacing.xl)
+                .padding(.top, isRegular ? Spacing.section : 0)
         }
         .padding(Spacing.xl)
+        .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(OnboardingV2Theme.Palette.surface)
     }

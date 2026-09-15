@@ -10,12 +10,18 @@ import UIKit
 
 // MARK: - Field label ("NAME", "BIRTHDAY", …)
 
-extension Text {
-    func onboardingV2FieldLabel() -> some View {
-        self.font(OnboardingV2Theme.Typography.bodyXS)
+private struct OnboardingV2FieldLabelModifier: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    func body(content: Content) -> some View {
+        content
+            .font(Evlin.Typography.font(hSizeClass == .regular ? 13 : 11, weight: .regular))
             .tracking(0.4)
             .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
     }
+}
+
+extension Text {
+    func onboardingV2FieldLabel() -> some View { modifier(OnboardingV2FieldLabelModifier()) }
 }
 
 // MARK: - Editable `.field` row
@@ -26,6 +32,8 @@ struct OnboardingV2EditableField: View {
     var placeholder: String = ""
     var keyboardType: UIKeyboardType = .default
     var isSecure: Bool = false
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -39,11 +47,11 @@ struct OnboardingV2EditableField: View {
                         .textInputAutocapitalization(keyboardType == .emailAddress ? .never : .sentences)
                 }
             }
-            .font(Evlin.Typography.font(16, weight: .semibold))
+            .font(Evlin.Typography.font(isRegular ? 19 : 16, weight: .semibold))
             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
             .tint(OnboardingV2Theme.Palette.primary)
             .autocorrectionDisabled()
-            .padding(.vertical, OnboardingV2Theme.Metrics.fieldPaddingVertical)
+            .padding(.vertical, isRegular ? OnboardingV2Theme.Metrics.fieldPaddingVertical + 8 : OnboardingV2Theme.Metrics.fieldPaddingVertical)
             .padding(.horizontal, OnboardingV2Theme.Metrics.fieldPaddingHorizontal)
             .background(
                 RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.fieldCornerRadius,
@@ -63,9 +71,11 @@ struct OnboardingV2EditableField: View {
 /// matches the static field rows visually.
 struct OnboardingV2FieldBox<Content: View>: View {
     @ViewBuilder var content: () -> Content
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+
     var body: some View {
         content()
-            .padding(.vertical, OnboardingV2Theme.Metrics.fieldPaddingVertical)
+            .padding(.vertical, hSizeClass == .regular ? OnboardingV2Theme.Metrics.fieldPaddingVertical + 8 : OnboardingV2Theme.Metrics.fieldPaddingVertical)
             .padding(.horizontal, OnboardingV2Theme.Metrics.fieldPaddingHorizontal)
             .background(
                 RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.fieldCornerRadius,
@@ -132,8 +142,9 @@ struct OnboardingV2CodeField: View {
 struct OnboardingV2Segmented: View {
     let options: [String]
     @Binding var selectedIndex: Int
+    @Environment(\.horizontalSizeClass) private var hSizeClass
 
-    private let trackHeight: CGFloat = 54
+    private var trackHeight: CGFloat { hSizeClass == .regular ? 70 : 54 }
     private let pillInset: CGFloat = 4
 
     var body: some View {
@@ -153,7 +164,7 @@ struct OnboardingV2Segmented: View {
                 HStack(spacing: 0) {
                     ForEach(Array(options.enumerated()), id: \.offset) { i, label in
                         Text(label)
-                            .font(OnboardingV2Theme.Typography.cta)
+                            .font(OnboardingV2Theme.Typography.cta(hSizeClass == .regular))
                             .foregroundStyle(selectedIndex == i ? OnboardingV2Theme.Palette.onSurface
                                                                  : OnboardingV2Theme.Palette.onSurfaceVariant)
                             .frame(width: segmentWidth, height: trackHeight)
@@ -280,6 +291,7 @@ struct OnboardingV2WaitingSpinner: View {
 struct OnboardingV2WaitingPill: View {
     let title: String
     @State private var spin = false
+    @Environment(\.horizontalSizeClass) private var hSizeClass
 
     init(_ title: String) {
         self.title = title
@@ -297,10 +309,10 @@ struct OnboardingV2WaitingPill: View {
                 .onAppear { spin = true }
             Text(title)
         }
-        .font(OnboardingV2Theme.Typography.cta)
+        .font(OnboardingV2Theme.Typography.cta(hSizeClass == .regular))
         .foregroundStyle(OnboardingV2Theme.Palette.onPrimary)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, OnboardingV2Theme.Metrics.ctaPaddingVertical)
+        .padding(.vertical, hSizeClass == .regular ? OnboardingV2Theme.Metrics.ctaPaddingVertical + 14 : OnboardingV2Theme.Metrics.ctaPaddingVertical)
         .padding(.horizontal, OnboardingV2Theme.Metrics.ctaPaddingHorizontal)
         .background(
             RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.ctaCornerRadius,
@@ -344,6 +356,7 @@ struct OnboardingV2ChatBubble: View {
     let speaker: Speaker
     private let plain: String?
     private let rich: AttributedString?
+    @Environment(\.horizontalSizeClass) private var hSizeClass
 
     init(_ speaker: Speaker, text: String) {
         self.speaker = speaker
@@ -365,7 +378,7 @@ struct OnboardingV2ChatBubble: View {
             Group {
                 if let rich { Text(rich) } else { Text(plain ?? "") }
             }
-            .font(OnboardingV2Theme.Typography.body)
+            .font(OnboardingV2Theme.Typography.body(hSizeClass == .regular))
             .foregroundStyle(isMe ? OnboardingV2Theme.Palette.onPrimary
                                   : OnboardingV2Theme.Palette.onSurface)
             .padding(.vertical, 11)
@@ -583,8 +596,14 @@ struct OnboardingV2InitialsAvatar: View {
 struct OnboardingV2PhotoAvatarPicker: View {
     let name: String
     @Binding var pickedImage: UIImage?
-    var size: CGFloat = 66
+    // nil (the default every call site but ChildProfileStep uses) means
+    // "pick the size for me" — explicit overrides still win, but leaving
+    // this at its default now automatically scales up on iPad instead of
+    // every call site needing to know about horizontalSizeClass itself.
+    var size: CGFloat? = nil
     var accent: Color = OnboardingV2Theme.Palette.primary
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var effectiveSize: CGFloat { size ?? (hSizeClass == .regular ? 92 : 66) }
 
     @State private var showDialog = false
     @State private var libraryItem: PhotosPickerItem?
@@ -596,15 +615,15 @@ struct OnboardingV2PhotoAvatarPicker: View {
                     Image(uiImage: pickedImage)
                         .resizable()
                         .scaledToFill()
-                        .frame(width: size, height: size)
+                        .frame(width: effectiveSize, height: effectiveSize)
                         .clipShape(Circle())
                 } else {
-                    OnboardingV2InitialsAvatar(name: name, size: size, accent: accent)
+                    OnboardingV2InitialsAvatar(name: name, size: effectiveSize, accent: accent)
                 }
                 Image(systemName: "plus")
-                    .font(.system(size: size * 0.18, weight: .bold))
+                    .font(.system(size: effectiveSize * 0.18, weight: .bold))
                     .foregroundStyle(OnboardingV2Theme.Palette.onPrimary)
-                    .frame(width: size * 0.36, height: size * 0.36)
+                    .frame(width: effectiveSize * 0.36, height: effectiveSize * 0.36)
                     .background(Circle().fill(accent))
                     .overlay(Circle().stroke(OnboardingV2Theme.Palette.surface, lineWidth: 2))
             }

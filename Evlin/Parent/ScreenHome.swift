@@ -4,9 +4,21 @@ struct ScreenHome: View {
     @Binding var taskTutorialDone: Bool
     @State private var showNotifs = false
     @State private var openChildId: String?
-    // Set alongside openChildId when a notification about a specific task
-    // was tapped — see NotificationPanel's onOpenChild.
-    @State private var openTaskId: Int?
+    // A notification naming a specific task used to only ever get there via
+    // openChildId + openTaskId together, which opened ScreenProfile first
+    // and had *it* immediately push TaskReviewDeckView on top — two stacked
+    // slide-up transitions back to back, reading as "profile, then task"
+    // instead of landing on the task directly. This presents the review
+    // deck straight from Home instead; Profile still opens once it's
+    // dismissed (see the fullScreenCover below), so backing out of the task
+    // still lands the parent on that child's profile same as before.
+    @State private var directReview: DirectReviewTarget?
+
+    private struct DirectReviewTarget: Identifiable {
+        var childId: String
+        var taskId: Int
+        var id: String { "\(childId)-\(taskId)" }
+    }
     // Fires once per Home appearance (not tied to taskTutorialDone) so
     // parents land straight on their first child's profile by default,
     // without permanently trapping them there — after this first auto-open,
@@ -16,34 +28,77 @@ struct ScreenHome: View {
     // this on appear is what makes Home pick up a child added/removed from
     // Settings instead of showing a stale grid from its last render.
     @State private var familyRefreshTick = 0
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var adaptive: ParentAdaptive { ParentAdaptive(hSizeClass) }
 
     private var unreadCount: Int { NotificationsData.notifs.filter(\.unread).count }
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                EColor.surface.ignoresSafeArea()
+            Group {
+                // Demo-only preview: with exactly one child there's nothing
+                // to actually choose between, so tapping a single bubble
+                // just to get where you're already headed is a pointless
+                // extra step. Home becomes that child's own space directly
+                // instead — and because this still lives inline in Home's
+                // own NavigationStack rather than behind the usual
+                // fullScreenCover (see openChildId below), the app's
+                // persistent tab bar stays visible under it, unlike the
+                // normal multi-child flow where the covering profile hides
+                // the tab bar entirely.
+                if FamilyStore.children.count == 1, let onlyChild = FamilyStore.children.first {
+                    ScreenProfile(
+                        childId: onlyChild.id,
+                        onBack: {},
+                        hideBackButton: true,
+                        startInTutorial: !taskTutorialDone,
+                        onTutorialCompleted: { taskTutorialDone = true }
+                    )
+                } else {
+                    ZStack {
+                        EColor.surface.ignoresSafeArea()
 
-                VStack {
-                    Spacer()
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96, maximum: 108), spacing: 18)], spacing: 18) {
-                        ForEach(FamilyStore.children) { child in
-                            ProfileBubble(child: child) { openChildId = child.id }
+                        VStack {
+                            // A single Spacer above only, not one on both sides —
+                            // two flexible Spacers around a short, fixed-size grid
+                            // read fine on an iPhone's short screen (grid sits a
+                            // beat above true center) but on an iPad's much taller
+                            // canvas both absorb all the extra height and strand a
+                            // handful of small circles adrift in a sea of blank
+                            // space with no visual anchor. Pinning the grid nearer
+                            // the top instead reads as a deliberate page of
+                            // profiles, not a phone screen floating in the middle
+                            // of a bigger one.
+                            if !adaptive.isRegular { Spacer() }
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: adaptive.of(96, 132), maximum: adaptive.of(108, 150)), spacing: adaptive.of(18, 28))],
+                                spacing: adaptive.of(18, 28)
+                            ) {
+                                ForEach(FamilyStore.children) { child in
+                                    ProfileBubble(child: child, adaptive: adaptive) { openChildId = child.id }
+                                }
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.top, adaptive.isRegular ? 32 : 0)
+                            .parentContentColumn(adaptive.isRegular ? 960 : nil)
+                            if !adaptive.isRegular { Spacer(); Spacer() }
                         }
                     }
-                    .padding(.horizontal, 24)
-                    Spacer()
-                    Spacer()
                 }
             }
+            // Same bug as ScreenSettings' own familyRefreshTick: bumping it
+            // here did nothing on its own — nothing in this Group's content
+            // actually read it, so SwiftUI had no reason to think the
+            // FamilyStore.children-derived grid/single-child branch above
+            // had gone stale. Keying the whole Group on it forces a fresh
+            // rebuild (and a fresh read of FamilyStore.children) every time
+            // Home reappears, instead of only catching up whenever some
+            // other unrelated state change happened to force a re-render.
+            .id(familyRefreshTick)
             .onAppear { familyRefreshTick += 1 }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: 8) {
-                        RoundedRectangle(cornerRadius: 9).fill(EColor.primary).frame(width: 30, height: 30)
-                            .overlay(Image(systemName: "flame.fill").font(.system(size: 14)).foregroundStyle(Color(hex: "8CE6A8")))
-                        Text("Evlin").font(Typography.font(16, weight: .heavy)).foregroundStyle(EColor.onSurface)
-                    }
+                    homeBrandMark
                 }
                 // Just notifications now — this used to also carry a gear
                 // icon that, despite looking like Settings, actually
@@ -68,10 +123,28 @@ struct ScreenHome: View {
             NotificationPanel(onOpenChild: { id, taskId in
                 showNotifs = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    openTaskId = taskId
-                    openChildId = id
+                    // A real task to jump to goes straight to the review
+                    // deck; a notification with no task behind it (e.g. a
+                    // plain reminder) still falls back to opening the
+                    // profile the same way it always did.
+                    if let taskId {
+                        directReview = DirectReviewTarget(childId: id, taskId: taskId)
+                    } else {
+                        openChildId = id
+                    }
                 }
             })
+        }
+        .fullScreenCover(item: $directReview) { target in
+            TaskReviewDeckView(
+                tasks: TaskStore.binding(for: target.childId),
+                childName: FamilyStore.child(target.childId).name,
+                startIndex: TaskStore.tasks(for: target.childId).firstIndex(where: { $0.id == target.taskId }) ?? 0,
+                onDismiss: {
+                    directReview = nil
+                    openChildId = target.childId
+                }
+            )
         }
         // fullScreenCover, not .sheet — on iPad a .sheet presents as a small
         // centered card by default; this is a real screen, not a modal.
@@ -79,17 +152,35 @@ struct ScreenHome: View {
             NavigationStack {
                 ScreenProfile(
                     childId: wrapped.value,
-                    onBack: { openChildId = nil; openTaskId = nil },
+                    onBack: { openChildId = nil },
                     startInTutorial: !taskTutorialDone && wrapped.value == FamilyStore.children.first?.id,
-                    onTutorialCompleted: { taskTutorialDone = true },
-                    openTaskId: openTaskId
+                    onTutorialCompleted: { taskTutorialDone = true }
                 )
             }
         }
         .task {
+            // The single-child demo path above already shows that child's
+            // profile inline — auto-opening it a second time here as a
+            // fullScreenCover on top of itself would just be a pointless
+            // covering duplicate.
+            guard FamilyStore.children.count != 1 else { return }
             guard !didAutoOpen, let first = FamilyStore.children.first else { return }
             didAutoOpen = true
+            // Same beat NotificationPanel's onOpenChild already uses below —
+            // setting openChildId in the same transaction as this view's
+            // first appearance gives fullScreenCover no "before" frame to
+            // animate from, so it just pops in instantly instead of
+            // sliding up like every other profile open.
+            try? await Task.sleep(nanoseconds: 100_000_000)
             openChildId = first.id
+        }
+    }
+
+    private var homeBrandMark: some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 9).fill(EColor.primary).frame(width: 30, height: 30)
+                .overlay(Image(systemName: "flame.fill").font(.system(size: 14)).foregroundStyle(Color(hex: "8CE6A8")))
+            Text("Evlin").font(Typography.font(16, weight: .heavy)).foregroundStyle(EColor.onSurface)
         }
     }
 }
@@ -99,6 +190,7 @@ struct IdentifiedString: Identifiable { var value: String; var id: String { valu
 // Netflix-style profile "bubble" — big circular avatar + name.
 private struct ProfileBubble: View {
     @ObservedObject var child: Child
+    var adaptive: ParentAdaptive
     var onTap: () -> Void
 
     private var statusText: String {
@@ -148,22 +240,22 @@ private struct ProfileBubble: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(spacing: 10) {
+            VStack(spacing: adaptive.of(10, 14)) {
                 ZStack(alignment: .bottomTrailing) {
                     Circle()
                         .fill(child.color)
-                        .frame(width: 92, height: 92)
-                        .overlay(Text(String(child.name.prefix(1))).font(Typography.font(36, weight: .heavy)).foregroundStyle(.white))
+                        .frame(width: adaptive.of(92, 128), height: adaptive.of(92, 128))
+                        .overlay(Text(String(child.name.prefix(1))).font(Typography.font(adaptive.of(36, 50), weight: .heavy)).foregroundStyle(.white))
                         .shadow(color: .black.opacity(0.14), radius: 8, y: 4)
                     if child.status != .unlocked {
-                        Circle().fill(.white).frame(width: 26, height: 26)
-                            .overlay(Image(systemName: badgeIcon).font(.system(size: 13)).foregroundStyle(statusColor))
+                        Circle().fill(.white).frame(width: adaptive.of(26, 34), height: adaptive.of(26, 34))
+                            .overlay(Image(systemName: badgeIcon).font(.system(size: adaptive.of(13, 17))).foregroundStyle(statusColor))
                             .shadow(color: .black.opacity(0.18), radius: 3)
                     }
                 }
                 VStack(spacing: 1) {
-                    Text(child.name).font(Typography.font(15, weight: .heavy)).foregroundStyle(child.color)
-                    Text(statusText.uppercased()).font(Typography.font(10, weight: .bold)).tracking(0.6).foregroundStyle(statusColor)
+                    Text(child.name).font(Typography.font(adaptive.of(15, 19), weight: .heavy)).foregroundStyle(child.color)
+                    Text(statusText.uppercased()).font(Typography.font(adaptive.of(10, 12), weight: .bold)).tracking(0.6).foregroundStyle(statusColor)
                 }
             }
         }

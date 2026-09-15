@@ -15,30 +15,29 @@ struct ScreenTabletHome: View {
     // This screen used to render identically on iPhone and iPad — same
     // fixed sizing just stretched across whatever width it landed on, which
     // read as an oversized phone layout with a lot of dead margin rather
-    // than an iPad-appropriate one. `isRegular` (iPad, and iPhone landscape
-    // on the larger Plus/Max/Pro Max models) caps the content column's
-    // width instead of letting it run edge-to-edge, and scales up the task
-    // cards specifically — bigger tap targets and text read better for a
-    // kid audience regardless of device, so the phone gets a smaller bump
-    // too rather than staying untouched.
+    // than an iPad-appropriate one. `kid.isRegular` (iPad, and iPhone
+    // landscape on the larger Plus/Max/Pro Max models) caps the content
+    // column's width instead of letting it run edge-to-edge, and scales up
+    // the task cards specifically — bigger tap targets and text read better
+    // for a kid audience regardless of device, so the phone gets a smaller
+    // bump too rather than staying untouched. See KidAdaptive.swift.
     @Environment(\.horizontalSizeClass) private var hSizeClass
-    private var isRegular: Bool { hSizeClass == .regular }
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
     // The first pass at this only bumped these a few points over the phone
     // values, which on an actual iPad still read as a stretched phone list
     // floating in a wide margin rather than a layout actually sized for
     // the bigger canvas — these are now a real step up, not a nudge.
-    private var contentMaxWidth: CGFloat? { isRegular ? 760 : nil }
-    private var taskIconSize: CGFloat { isRegular ? 72 : 54 }
-    private var taskIconFont: CGFloat { isRegular ? 28 : 22 }
-    private var taskTitleFont: CGFloat { isRegular ? 21 : 17 }
-    private var taskMetaFont: CGFloat { isRegular ? 15 : 13 }
-    private var taskCheckSize: CGFloat { isRegular ? 38 : 30 }
-    private var taskCardPadding: CGFloat { isRegular ? 22 : 16 }
-    private var taskCardSpacing: CGFloat { isRegular ? 18 : 12 }
-    private var greetingFont: CGFloat { isRegular ? 16 : 14 }
-    private var nameFont: CGFloat { isRegular ? 36 : 30 }
-    private var sectionTitleFont: CGFloat { isRegular ? 24 : 20 }
-    private var sectionCountFont: CGFloat { isRegular ? 15 : 13.5 }
+    private var taskIconSize: CGFloat { kid.of(54, 72) }
+    private var taskIconFont: CGFloat { kid.of(22, 28) }
+    private var taskTitleFont: CGFloat { kid.of(17, 21) }
+    private var taskMetaFont: CGFloat { kid.of(13, 15) }
+    private var taskCheckSize: CGFloat { kid.of(30, 38) }
+    private var taskCardPadding: CGFloat { kid.of(16, 22) }
+    private var taskCardSpacing: CGFloat { kid.of(12, 18) }
+    private var greetingFont: CGFloat { kid.of(14, 16) }
+    private var nameFont: CGFloat { kid.of(30, 36) }
+    private var sectionTitleFont: CGFloat { kid.of(20, 24) }
+    private var sectionCountFont: CGFloat { kid.of(13.5, 15) }
     private var nextTaskId: String? { tasks.first { !$0.done }?.id }
     private var doneCount: Int { tasks.filter(\.done).count }
 
@@ -76,8 +75,7 @@ struct ScreenTabletHome: View {
                 .padding(.horizontal, 22)
                 .padding(.top, 4)
                 .padding(.bottom, 100)
-                .frame(maxWidth: contentMaxWidth ?? .infinity)
-                .frame(maxWidth: .infinity)
+                .kidContentColumn(kid.contentMaxWidth)
             }
             .background(KidTheme.background)
             .toolbar {

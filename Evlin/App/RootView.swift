@@ -125,24 +125,40 @@ struct SplashScreenView: View {
 // one native binary, choose which experience to enter.
 struct ModePickerView: View {
     @Binding var mode: AppMode?
+    // Same fix as OnboardingV2ScreenContainer (see its own comment): this
+    // screen comes before onboarding even starts, in this file rather than
+    // Onboarding/, so it didn't pick up that container's cap and was still
+    // stretching its Parent/Child buttons edge to edge on iPad. Reuses that
+    // same centered-column constant rather than a second magic number.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
 
     var body: some View {
         VStack(spacing: 28) {
-            Spacer()
+            // Flexible Spacers here read fine on an iPhone's short screen
+            // (the logo sits a beat above center, buttons pinned near the
+            // bottom) but on an iPad's much taller canvas they absorb all
+            // of the extra height instead, stranding the logo near the top
+            // and the buttons at the very bottom with a huge empty gap
+            // between — so on regular width this drops them for fixed
+            // spacing and lets the outer frame center the whole compact
+            // block instead. See OnboardingV2ScreenContainer's identical
+            // fix for the reasoning in full.
+            if !isRegular { Spacer() }
             RoundedRectangle(cornerRadius: 30, style: .continuous)
                 .fill(EColor.primary)
-                .frame(width: 96, height: 96)
+                .frame(width: isRegular ? 140 : 96, height: isRegular ? 140 : 96)
                 .overlay(
                     Image(systemName: "flame.fill")
-                        .font(.system(size: 44))
+                        .font(.system(size: isRegular ? 62 : 44))
                         .foregroundStyle(Color(hex: "8CE6A8"))
                 )
                 .shadow(color: EColor.primary.opacity(0.35), radius: 24, y: 10)
 
             Text("Evlin")
-                .font(Typography.font(34, weight: .heavy))
+                .font(Typography.font(isRegular ? 46 : 34, weight: .heavy))
 
-            Spacer()
+            if !isRegular { Spacer() }
 
             VStack(spacing: 12) {
                 ForEach(AppMode.allCases) { m in
@@ -151,17 +167,18 @@ struct ModePickerView: View {
                     } label: {
                         HStack {
                             Text(m.label)
-                                .font(Typography.font(16, weight: .bold))
+                                .font(Typography.font(isRegular ? 21 : 16, weight: .bold))
                             Spacer()
                             Image(systemName: "arrow.right")
+                                .font(.system(size: isRegular ? 18 : 15, weight: .semibold))
                         }
                         .foregroundStyle(m == .parent ? .white : EColor.onSurface)
-                        .padding(.horizontal, 22)
-                        .frame(height: 58)
+                        .padding(.horizontal, isRegular ? 28 : 22)
+                        .frame(height: isRegular ? 78 : 58)
                         .background(m == .parent ? EColor.primary : EColor.surfaceContainerLowest)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: isRegular ? 24 : 18, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            RoundedRectangle(cornerRadius: isRegular ? 24 : 18, style: .continuous)
                                 .strokeBorder(EColor.outlineVariant, lineWidth: m == .parent ? 0 : 1)
                         )
                     }
@@ -170,6 +187,8 @@ struct ModePickerView: View {
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 40)
+            .padding(.top, isRegular ? Spacing.section : 0)
+            .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(EColor.surface)

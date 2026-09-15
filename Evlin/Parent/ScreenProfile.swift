@@ -4,20 +4,26 @@ import UIKit
 struct ScreenProfile: View {
     var childId: String
     var onBack: () -> Void
+    // Set when this profile IS the screen it's shown on (ScreenHome's
+    // single-child demo flow — see its own comment) rather than something
+    // pushed over another screen — there's nowhere for the chevron to go
+    // back to, so it's hidden instead of sitting there doing nothing.
+    var hideBackButton: Bool = false
     // Spotlight walkthrough shown the first time a parent reaches their
     // (default) first child's profile after onboarding — see
     // AddTaskTutorialOverlay below. Session-only, same convention as
     // RootView's `onboarded`/`taskTutorialDone`.
     var startInTutorial: Bool = false
     var onTutorialCompleted: (() -> Void)? = nil
-    // Set when this profile was opened by tapping a notification about a
-    // specific task (e.g. "Liam finished homework") — jumps straight into
-    // TaskReviewDeckView at that task instead of landing on the plain
-    // profile and making the parent find it themselves.
-    var openTaskId: Int? = nil
 
     @ObservedObject private var child: Child
-    @State private var tasks: [ChildTask]
+    // A real Binding into TaskStore's cache, not a local copy — so an
+    // approval made here is still there if a notification tap opens
+    // TaskReviewDeckView directly (see ScreenHome), and vice versa. Used to
+    // be @State seeded once from TaskStore.tasks(for:), which meant each
+    // fresh ScreenProfile (or a separately-opened review deck) got its own
+    // disconnected copy and silently lost whatever the other one changed.
+    @Binding private var tasks: [ChildTask]
     @State private var rulesExpanded = true
     // Which task the parent tapped — opens TaskReviewDeckView starting there
     // (a Tinder-style swipeable queue over `tasks`, not a single-task sheet).
@@ -48,21 +54,20 @@ struct ScreenProfile: View {
     // immediately reappear from some other body re-evaluation.
     @State private var showTrialPopup = false
     @State private var showProtectionSetupPopup = false
+    @State private var backPending = false
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var adaptive: ParentAdaptive { ParentAdaptive(hSizeClass) }
 
-    init(childId: String, onBack: @escaping () -> Void, startInTutorial: Bool = false, onTutorialCompleted: (() -> Void)? = nil, openTaskId: Int? = nil) {
+    init(childId: String, onBack: @escaping () -> Void, hideBackButton: Bool = false, startInTutorial: Bool = false, onTutorialCompleted: (() -> Void)? = nil) {
         self.childId = childId
         self.onBack = onBack
+        self.hideBackButton = hideBackButton
         self.startInTutorial = startInTutorial
         self.onTutorialCompleted = onTutorialCompleted
-        self.openTaskId = openTaskId
         let c = FamilyStore.child(childId)
         _child = ObservedObject(wrappedValue: c)
-        let taskList = TaskStore.tasks(for: childId)
-        _tasks = State(initialValue: taskList)
+        _tasks = TaskStore.binding(for: childId)
         _tutorialActive = State(initialValue: startInTutorial)
-        if let openTaskId, let index = taskList.firstIndex(where: { $0.id == openTaskId }) {
-            _reviewStartIndex = State(initialValue: index)
-        }
     }
 
     // A task due on some other day (tomorrow, via the New Task date
@@ -76,6 +81,37 @@ struct ScreenProfile: View {
     private var todaysTasks: [ChildTask] { tasks.filter(isDueToday) }
     private var doneCount: Int { todaysTasks.filter { $0.state == .done }.count }
     private var activeRulesCount: Int { child.rules.filter(\.on).count }
+
+    // True once there's nothing left for the kid to actually do — every
+    // task still needing action has already been submitted for review or
+    // is asking to bypass, none outstanding or overdue. Screen time stays
+    // locked while this holds (there's no "unlock" decision to make, just
+    // an approval one), so headerCard swaps the manual lock/unlock slider
+    // for a single Approve All button — one tap resolves every review and
+    // bypass at once instead of stepping through each task individually.
+    private var allTasksAwaitingReview: Bool {
+        let outstanding = todaysTasks.contains { $0.state == .pending || $0.state == .overdue }
+        let awaiting = todaysTasks.contains { $0.state == .review || $0.state == .bypass }
+        return !outstanding && awaiting
+    }
+
+    // Mirrors TaskReviewDeckView's own per-task Approve action (.review ->
+    // .done, .bypass -> .bypassed) plus the same unlock reset
+    // UnlockConfirmCard's onUnlock uses — approving everything is what
+    // earns the unlock here, not a separate manual slide.
+    private func approveAllPendingReview() {
+        for i in tasks.indices where isDueToday(tasks[i]) {
+            switch tasks[i].state {
+            case .review: tasks[i].state = .done
+            case .bypass: tasks[i].state = .bypassed
+            default: break
+            }
+        }
+        child.tasksDone = child.tasksTotal
+        child.status = .unlocked
+        child.timeLeft = formatMinutes(child.dailyLimitMin)
+        child.timePct = 100
+    }
 
     // Drives headerCard's "Unlimited screen time today" state — the daily
     // cap only stops applying once this built-in rule is switched off (see
@@ -113,6 +149,7 @@ struct ScreenProfile: View {
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 24)
+            .parentContentColumn(adaptive.contentMaxWidth)
         }
         .background(EColor.surface)
         // A safeAreaInset (not a ZStack + guessed bottom padding) reserves
@@ -149,9 +186,9 @@ struct ScreenProfile: View {
                         child.status = .unlocked
                         child.timeLeft = formatMinutes(child.dailyLimitMin)
                         child.timePct = 100
-                        showUnlockConfirm = false
+                        withAnimation(.easeOut(duration: 0.2)) { showUnlockConfirm = false }
                     },
-                    onCancel: { showUnlockConfirm = false }
+                    onCancel: { withAnimation(.easeOut(duration: 0.2)) { showUnlockConfirm = false } }
                 )
             }
         }
@@ -169,9 +206,9 @@ struct ScreenProfile: View {
                         child.status = .unlocked
                         child.timeLeft = formatMinutes(minutes)
                         child.timePct = min(100, Int(Double(minutes) / Double(max(child.dailyLimitMin, 1)) * 100))
-                        showGrantTimeSheet = false
+                        withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = false }
                     },
-                    onCancel: { showGrantTimeSheet = false }
+                    onCancel: { withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = false } }
                 )
             }
         }
@@ -190,8 +227,10 @@ struct ScreenProfile: View {
         .overlay {
             if showApprovalVerify {
                 ParentApprovalVerifyingOverlay {
-                    child.parentApprovalStatus = .approved
-                    showApprovalVerify = false
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        child.parentApprovalStatus = .approved
+                        showApprovalVerify = false
+                    }
                 }
             }
         }
@@ -212,9 +251,9 @@ struct ScreenProfile: View {
                         if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
                             child.rules[i].on = false
                         }
-                        showScreenTimeOffConfirm = false
+                        withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = false }
                     },
-                    onCancel: { showScreenTimeOffConfirm = false }
+                    onCancel: { withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = false } }
                 )
             }
         }
@@ -231,7 +270,7 @@ struct ScreenProfile: View {
                             withAnimation { billing.isPlus = true; showTrialPopup = false }
                         }
                     },
-                    onDismiss: { showTrialPopup = false }
+                    onDismiss: { withAnimation(.easeOut(duration: 0.2)) { showTrialPopup = false } }
                 )
             }
         }
@@ -243,31 +282,37 @@ struct ScreenProfile: View {
                         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                         UIApplication.shared.open(url)
                     },
-                    onDismiss: { showProtectionSetupPopup = false }
+                    onDismiss: { withAnimation(.easeOut(duration: 0.2)) { showProtectionSetupPopup = false } }
                 )
             }
         }
         .task {
-            if child.trialExhausted { showTrialPopup = true }
-            if child.needsProtectionSetup { showProtectionSetupPopup = true }
+            if child.trialExhausted { withAnimation(.easeOut(duration: 0.2)) { showTrialPopup = true } }
+            if child.needsProtectionSetup { withAnimation(.easeOut(duration: 0.2)) { showProtectionSetupPopup = true } }
         }
-        .animation(.easeOut(duration: 0.2), value: showUnlockConfirm)
-        .animation(.easeOut(duration: 0.2), value: showGrantTimeSheet)
-        .animation(.easeOut(duration: 0.2), value: showScreenTimeOffConfirm)
-        .animation(.easeOut(duration: 0.2), value: showApprovalVerify)
-        .animation(.easeOut(duration: 0.25), value: tutorialActive)
-        .animation(.easeOut(duration: 0.2), value: showTrialPopup)
-        .animation(.easeOut(duration: 0.2), value: showProtectionSetupPopup)
-        .animation(.easeOut(duration: 0.2), value: child.parentApprovalStatus)
         .navigationTitle("\(child.name)'s Space")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                // Locked out along with everything else until the first
-                // task is created — leaving would defeat the walkthrough.
-                Button { onBack() } label: { Image(systemName: "chevron.left") }
-                    .disabled(tutorialActive)
-                    .opacity(tutorialActive ? 0.3 : 1)
+            if !hideBackButton {
+                ToolbarItem(placement: .topBarLeading) {
+                    // Locked out along with everything else until the first
+                    // task is created — leaving would defeat the walkthrough.
+                    Button {
+                        // onBack() dismisses the fullScreenCover this whole
+                        // screen lives in (see ScreenHome's openChildId) — a
+                        // second tap landing before that animation finishes
+                        // would otherwise re-fire onBack() into a screen that's
+                        // already mid-teardown, which reads as the button
+                        // needing repeated taps to register.
+                        guard !backPending else { return }
+                        backPending = true
+                        onBack()
+                    } label: { Image(systemName: "chevron.left") }
+                        .disabled(tutorialActive)
+                        .opacity(tutorialActive ? 0.3 : 1)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
             }
         }
         .fullScreenCover(isPresented: Binding(get: { reviewStartIndex != nil }, set: { if !$0 { reviewStartIndex = nil } })) {
@@ -281,7 +326,7 @@ struct ScreenProfile: View {
                 tasks.append(t)
                 showAddTask = false
                 if tutorialActive {
-                    tutorialActive = false
+                    withAnimation(.easeOut(duration: 0.25)) { tutorialActive = false }
                     onTutorialCompleted?()
                 }
             }, onCancel: { showAddTask = false })
@@ -304,7 +349,8 @@ struct ScreenProfile: View {
         ZStack {
             Color.black.opacity(0.32)
                 .ignoresSafeArea()
-                .onTapGesture { child.parentApprovalStatus = .none }
+                .onTapGesture { withAnimation(.easeOut(duration: 0.2)) { child.parentApprovalStatus = .none } }
+                .transition(.opacity)
 
             VStack(spacing: 0) {
                 Spacer()
@@ -327,8 +373,12 @@ struct ScreenProfile: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     VStack(spacing: 10) {
-                        cardButton("Approve", tint: Brand.greenDeep, filled: true) { showApprovalVerify = true }
-                        cardButton("Not now", tint: EColor.onSurfaceVariant, filled: false) { child.parentApprovalStatus = .none }
+                        cardButton("Approve", tint: Brand.greenDeep, filled: true) {
+                            withAnimation(.easeOut(duration: 0.2)) { showApprovalVerify = true }
+                        }
+                        cardButton("Not now", tint: EColor.onSurfaceVariant, filled: false) {
+                            withAnimation(.easeOut(duration: 0.2)) { child.parentApprovalStatus = .none }
+                        }
                     }
                     .padding(.top, 4)
                 }
@@ -342,9 +392,9 @@ struct ScreenProfile: View {
                 // square edge instead of floating clear of it.
                 .padding(.horizontal, 28)
                 .padding(.bottom, 30)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     private func cardButton(_ label: String, tint: Color, filled: Bool, action: @escaping () -> Void) -> some View {
@@ -364,11 +414,11 @@ struct ScreenProfile: View {
     private var headerCard: some View {
         Card {
             VStack(spacing: 0) {
-                HStack(spacing: 18) {
-                    Circle().fill(child.color).frame(width: 64, height: 64)
-                        .overlay(Text(String(child.name.prefix(1))).font(Typography.font(24, weight: .heavy)).foregroundStyle(.white))
+                HStack(spacing: adaptive.of(18, 24)) {
+                    Circle().fill(child.color).frame(width: adaptive.of(64, 84), height: adaptive.of(64, 84))
+                        .overlay(Text(String(child.name.prefix(1))).font(Typography.font(adaptive.of(24, 32), weight: .heavy)).foregroundStyle(.white))
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(child.name).font(Typography.font(22, weight: .heavy)).foregroundStyle(EColor.primary)
+                        Text(child.name).font(Typography.font(adaptive.of(22, 28), weight: .heavy)).foregroundStyle(EColor.primary)
                         if let r = child.reflection {
                             Label("Under Reflection", systemImage: "figure.mind.and.body")
                                 .font(Typography.font(10, weight: .bold))
@@ -411,8 +461,21 @@ struct ScreenProfile: View {
                     Spacer()
                 }
 
-                if child.status != .downtime, child.reflection == nil {
-                    Button {
+                if child.status != .downtime, child.reflection == nil, allTasksAwaitingReview {
+                    // Nothing to lock or unlock manually right now — the
+                    // kid already did their part, so the one action left
+                    // is approving it. A plain tap is fine here (unlike
+                    // the slider below): approving is the safe, expected
+                    // direction, not the "instantly cut a kid off" one
+                    // that gesture guards against.
+                    PrimaryButton(title: "Approve All", systemIcon: "checkmark.circle.fill", action: approveAllPendingReview)
+                        .padding(.top, 16)
+                } else if child.status != .downtime, child.reflection == nil {
+                    LockActionButton(
+                        label: child.status == .unlocked ? "Tap to lock phone" : "Tap to unlock phone",
+                        systemImage: child.status == .unlocked ? "lock.fill" : "lock.open.fill",
+                        tint: child.status == .unlocked ? Brand.greenDeep : EColor.danger
+                    ) {
                         if child.status == .unlocked {
                             // Doesn't touch timeLeft/timePct — a manual lock
                             // is a pause, not the allowance being spent, so
@@ -427,7 +490,7 @@ struct ScreenProfile: View {
                             // the easy-to-regret direction, especially with
                             // chores still open, so don't apply it on the
                             // first tap.
-                            showUnlockConfirm = true
+                            withAnimation(.easeOut(duration: 0.2)) { showUnlockConfirm = true }
                         } else if child.timePct > 0 {
                             // Tasks are done and there's still real banked
                             // time (e.g. a one-off manual lock, not the
@@ -441,19 +504,9 @@ struct ScreenProfile: View {
                             // genuinely used up — the question here isn't
                             // "unlock or not," it's "how much," so ask for
                             // an amount instead of a bare confirm.
-                            showGrantTimeSheet = true
+                            withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = true }
                         }
-                    } label: {
-                        Label(child.status == .unlocked ? "Lock \(child.name)'s devices" : "Unlock \(child.name)'s devices",
-                              systemImage: child.status == .unlocked ? "lock.fill" : "lock.open.fill")
-                            .font(Typography.font(14, weight: .heavy))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                            .background(child.status == .unlocked ? Brand.greenDeep : EColor.danger)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
-                    .buttonStyle(.plain)
                     .padding(.top, 16)
                 }
             }
@@ -613,7 +666,7 @@ struct ScreenProfile: View {
                                     // beat to confirm rather than flipping
                                     // instantly like every other toggle.
                                     if rule.kind == .screenTimeLimit && !newValue {
-                                        showScreenTimeOffConfirm = true
+                                        withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = true }
                                         return
                                     }
                                     rule.on = newValue
@@ -667,6 +720,42 @@ struct ScreenProfile: View {
 
 }
 
+// MARK: - Slide-to-confirm lock/unlock control
+
+// A real drag, not a tap — matching iOS's own "slide to power off," this
+// makes the single most consequential action on the profile (instantly
+// locking or unlocking a kid's devices) something a parent has to commit
+// to, not something a stray tap can trigger the same as any other row.
+// `action` fires once the thumb crosses the completion threshold; the
+// thumb then eases back to the start so the control is ready to use again
+// rather than staying stuck "completed."
+// A plain tap button — this used to be a slide-to-confirm gesture (the
+// reasoning was that this is the single most consequential control on the
+// profile, so it deserved a deliberate gesture instead of an easy-to-misfire
+// tap, mirroring iOS's own power-off slider). Reverted back to a button:
+// a slide gesture is unfamiliar friction for what parents expect to be a
+// one-tap action, and the wording alone ("Tap to lock/unlock phone") already
+// tells a parent plainly what tapping it does.
+private struct LockActionButton: View {
+    var label: String
+    var systemImage: String
+    var tint: Color
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage).font(.system(size: 16, weight: .bold))
+                Text(label).font(Typography.font(14, weight: .heavy)).lineLimit(1)
+            }
+            .foregroundStyle(.white)
+            .frame(width: 260, height: 48)
+            .background(Capsule().fill(tint))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Protection setup nudge (Leo's "PIN not set" prompt)
 
 // Mirrors the tamper-proofing step from onboarding (ParentSetPasscodeV2Step)
@@ -683,6 +772,7 @@ private struct ProtectionSetupNeededCard: View {
             Color.black.opacity(0.32)
                 .ignoresSafeArea()
                 .onTapGesture { onDismiss() }
+                .transition(.opacity)
 
             VStack(spacing: 0) {
                 Spacer()
@@ -720,10 +810,10 @@ private struct ProtectionSetupNeededCard: View {
                 // rounded corner read as cramped against the screen's
                 // square edge instead of floating clear of it.
                 .padding(.horizontal, 28)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 Spacer()
             }
         }
-        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 }
 
@@ -747,6 +837,7 @@ private struct TrialExhaustedPopupCard: View {
             Color.black.opacity(0.32)
                 .ignoresSafeArea()
                 .onTapGesture { onDismiss() }
+                .transition(.opacity)
 
             VStack(spacing: 0) {
                 Spacer()
@@ -791,9 +882,9 @@ private struct TrialExhaustedPopupCard: View {
                 // square edge instead of floating clear of it.
                 .padding(.horizontal, 28)
                 .padding(.bottom, 30)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 }
 
@@ -899,6 +990,7 @@ private struct GrantExtraTimeSheet: View {
             Color.black.opacity(0.32)
                 .ignoresSafeArea()
                 .onTapGesture { onCancel() }
+                .transition(.opacity)
 
             VStack(spacing: 0) {
                 Spacer()
@@ -1005,10 +1097,10 @@ private struct GrantExtraTimeSheet: View {
                 // rounded corner read as cramped against the screen's
                 // square edge instead of floating clear of it.
                 .padding(.horizontal, 28)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 Spacer()
             }
         }
-        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
     // Matches UnlockConfirmCard's own (private, so not shared directly) —
@@ -1111,9 +1203,17 @@ private struct UnlockConfirmCard: View {
 
     var body: some View {
         ZStack {
+            // Its own plain-opacity transition, separate from the card's
+            // below — the two used to share one .transition(scale+opacity)
+            // on this whole ZStack, which scaled the full-bleed scrim down
+            // right along with the card. A scrim that shrinks reveals real
+            // background at its edges mid-animation, reading as the
+            // background itself glitching/sliding rather than a clean
+            // spotlight-style dim.
             Color.black.opacity(0.32)
                 .ignoresSafeArea()
                 .onTapGesture { onCancel() }
+                .transition(.opacity)
 
             VStack(spacing: 0) {
                 Spacer()
@@ -1153,10 +1253,10 @@ private struct UnlockConfirmCard: View {
                 // rounded corner read as cramped against the screen's
                 // square edge instead of floating clear of it.
                 .padding(.horizontal, 28)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 Spacer()
             }
         }
-        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
     private func cardButton(_ label: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -1188,6 +1288,7 @@ private struct ScreenTimeOffConfirmCard: View {
             Color.black.opacity(0.32)
                 .ignoresSafeArea()
                 .onTapGesture { onCancel() }
+                .transition(.opacity)
 
             VStack(spacing: 0) {
                 Spacer()
@@ -1227,10 +1328,10 @@ private struct ScreenTimeOffConfirmCard: View {
                 // rounded corner read as cramped against the screen's
                 // square edge instead of floating clear of it.
                 .padding(.horizontal, 28)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 Spacer()
             }
         }
-        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 
     private func cardButton(_ label: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -1628,9 +1729,17 @@ private struct TaskRowView: View {
 
     // Each task is its own floating card (ported 1:1 from the real app's
     // Components/TaskRow.swift) — not rows sharing one card with dividers.
+    // .review used to get the same full-wash treatment as overdue/bypass
+    // (a saturated orange background + a matching icon + a matching "Needs
+    // review" pill, three cues all saying the same thing). That's fine for
+    // one row, but a parent with several submissions waiting sees a wall of
+    // identical orange cards that's hard to tell apart and that buries the
+    // genuinely urgent state (overdue, in red) in the noise. Review is a
+    // routine, positive state — the kid did the work — so it now sits on
+    // the same plain card as a done/pending task and leans on the orange
+    // icon badge alone as its one cue, instead of three.
     private var cardBackground: Color {
         switch task.state {
-        case .review: return Color(hex: "FFF9ED")
         case .overdue: return Color(hex: "FFF5F3")
         case .bypass: return Color(hex: "F7F2FF")
         default: return EColor.surfaceContainerLowest
@@ -1681,7 +1790,11 @@ private struct TaskRowView: View {
         case .done:
             pill("Done", fg: Color(hex: "25924A"), bg: Color(hex: "E4F8E9"))
         case .review:
-            pill("Needs review", fg: Color(hex: "B26A00"), bg: Color(hex: "FFF3E0"))
+            // No pill — the orange camera-icon badge (see statusIcon) is
+            // already the state's one cue; repeating "Needs review" in text
+            // next to it on every row is what made a short list of
+            // submissions read as noise instead of a few distinct tasks.
+            EmptyView()
         case .pending:
             pill("Pending", fg: EColor.outline, bg: EColor.surfaceContainerHigh)
         case .overdue:
@@ -1715,9 +1828,15 @@ private struct TaskRowView: View {
             }
             .frame(width: 36, height: 36)
         case .review:
+            // Hourglass, not a camera — a camera reads as "take a photo,"
+            // which is the kid's action, not what a parent glancing at this
+            // row needs to know. Matches ScreenTabletHome's own task chip
+            // for the exact same state from the kid's side ("Waiting for
+            // your parent to check it"), so the same underlying state reads
+            // consistently as "something's pending" on both ends.
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(hex: "EF6C00"))
-                Image(systemName: EIcon.sf("photo_camera")).font(.system(size: 15, weight: .heavy)).foregroundStyle(.white)
+                Image(systemName: "hourglass").font(.system(size: 15, weight: .heavy)).foregroundStyle(.white)
             }
             .frame(width: 36, height: 36)
         case .pending:
@@ -1759,81 +1878,36 @@ private struct AddTaskSheet: View {
     @State private var dueDate = Date()
     @State private var hasDueDate = false
     @State private var repeatDays: Set<String> = []
+    // AddTaskFormFields is shared with Calendar's own Add Task, which
+    // isn't scoped to one child and needs a real personId binding — this
+    // sheet is already scoped via `child`, so it's seeded once and never
+    // surfaced (fixedChild hides the For picker that would otherwise show it).
+    @State private var personId: String
 
     init(child: Child, onCreate: @escaping (ChildTask) -> Void, onCancel: @escaping () -> Void) {
         self.child = child
         self.onCreate = onCreate
         self.onCancel = onCancel
+        _personId = State(initialValue: child.id)
     }
 
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
-        FormShell(title: "New task", onCancel: onCancel, onSave: {
-            let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
-            onCreate(ChildTask(
-                id: 0, title: title, state: .pending, category: category,
-                description: description, note: nil, submittedAt: nil,
-                dueLabel: hasDueDate ? formatted(dueDate) : nil, dueDate: hasDueDate ? dueDate : nil, photoCount: 0,
-                repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
-            ))
-        }, canSave: canSave, saveLabel: "Create task") {
-            FormField(label: "Task name") {
-                FormTextField(placeholder: "e.g. Make your bed", text: $title)
+        AddTaskFormFields(
+            title: "New task", saveLabel: "Create task", fixedChild: child,
+            taskTitle: $title, personId: $personId, whatToDo: $description, repeatDays: $repeatDays,
+            canSave: canSave, onCancel: onCancel, onSave: {
+                let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
+                onCreate(ChildTask(
+                    id: 0, title: title, state: .pending, category: category,
+                    description: description, note: nil, submittedAt: nil,
+                    dueLabel: hasDueDate ? formatted(dueDate) : nil, dueDate: hasDueDate ? dueDate : nil, photoCount: 0,
+                    repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
+                ))
             }
-            RepeatPicker(selectedDays: $repeatDays)
-            MoreOptions {
-                whenField
-                FormField(label: "What to do") {
-                    TextField("Instructions for the student…", text: $description, axis: .vertical)
-                        .font(Typography.font(15, weight: .regular))
-                        .lineLimit(3...5)
-                        .padding(14)
-                        .background(FormGreen.fieldBg)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-            }
-        }
-    }
-
-    // Collapsed under More Options rather than sitting out with the rest —
-    // and, until a parent actually taps in, there's no date/time box to
-    // read at all, just a button to add one. Two always-visible pickers
-    // pre-filled to right-now read as a value that's already set even when
-    // nothing's been chosen yet.
-    @ViewBuilder
-    private var whenField: some View {
-        if hasDueDate {
-            VStack(alignment: .leading, spacing: 10) {
-                FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
-                Button("Remove date") { hasDueDate = false }
-                    .buttonStyle(.plain)
-                    .font(Typography.font(14, weight: .bold))
-                    .foregroundStyle(EColor.danger)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(FormGreen.fieldBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-        } else {
-            FormField(label: "When") {
-                Button {
-                    dueDate = Date()
-                    hasDueDate = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus.circle.fill").font(.system(size: 16))
-                        Text("Add a date & time").font(Typography.font(14, weight: .semibold))
-                    }
-                    .foregroundStyle(FormGreen.accent)
-                    .padding(.horizontal, 14)
-                    .frame(height: 48)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(FormGreen.fieldBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .buttonStyle(.plain)
-            }
+        ) {
+            TaskWhenField(hasDueDate: $hasDueDate, dueDate: $dueDate)
         }
     }
 

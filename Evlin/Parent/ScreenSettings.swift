@@ -1,129 +1,106 @@
 import SwiftUI
+import PhotosUI
 
-// Exact structural port of the real app's HomeSettingsSheet.swift: same
-// Form/Section grouped-list layout, same row anatomy (icon chip + title +
-// subtitle + value/chevron), same SF Symbol icons, same section order and
-// copy. Every APIClient/FamilyStore network round-trip is replaced with
-// local @State / the shared FamilyStore mock — this is a local-only
-// prototype, nothing here persists past a relaunch unless noted. Sections
-// that exist in HomeSettingsSheet's state machine but aren't reachable from
-// any row in production (Locked Apps & Lists, AI Behavior / Smart Mode,
-// Memory, Replay tours) are intentionally omitted to match what's actually
-// visible in the real app today.
-enum SettingsRoute: Hashable {
-    case parentProfile
-    case signOut
-    case privacyTerms
-    case billing
-}
-
+// Structured to the "Settings — build spec" doc: account header (no card,
+// opens a sheet) → Plan (removed entirely on Pro) → Family (capped list,
+// each row opening the Child sheet) → Alerts → Support → a muted text
+// footer. Every row is exactly one of chevron/toggle/read-only-value —
+// never mixed — and every edit happens live inside the sheet a row opens,
+// with a "Done" dismiss rather than Save/Cancel. Destructive actions never
+// use an inline alert; they open DestructiveConfirmSheet instead.
 struct ScreenSettings: View {
     var onSwitchMode: () -> Void
-    @State private var path = NavigationPath()
-    @State private var openChildId: String?
 
-    // Root notification toggle — mirrors the source's `notifyPushEnabled`.
-    // Nothing else to configure — this is the only notification setting.
+    // Root notification toggle — the only notification setting there is.
     @State private var pushOn = true
 
-    // Parent profile — source's parentName/selectedParentAccentHex.
+    // Parent identity — shown in the account header and edited in the
+    // account sheet (parentProfilePage).
     @State private var parentName = "Alex Carter"
-    @State private var selectedAccentHex = SettingsPresentation.accentHexOptions[0]
+    @State private var parentAvatar: UIImage?
+    @State private var showChangeParentPicture = false
+    @State private var parentLibraryItem: PhotosPickerItem?
 
-    // Add child — source's `showAddChildPairing`. No real pairing flow exists
-    // here (no FamilyControls/device pairing), so this is a name/age form
-    // that closes without touching `FamilyStore.children` (that list is a
-    // shared static mock read by several other screens).
-    @State private var showAddChild = false
-    @State private var showDeleteAccountConfirm = false
-    // No @Published/ObservableObject wiring on FamilyStore (it's a static
-    // mock namespace) — bumping this after a mutation is what makes
-    // SwiftUI re-evaluate body and pick up the change, same trick used
-    // elsewhere in this file for local-only mock state.
+    // Family list — capped at 5 rows with a "Show all N" / "Show fewer"
+    // toggle, and the child a tap should open the Child sheet for.
+    @State private var showAllChildren = false
+    @State private var settingsChild: Child?
+    // "Add a child" creates a placeholder profile immediately and goes
+    // straight to the QR pairing screen — no name/colour form first, and
+    // no follow-up sheet once pairing closes either. The parent renames/
+    // recolours/re-times the child later the same way as any other row:
+    // tapping it opens settingsChild (ChildSettingsSheet) directly.
+    @State private var newlyAddedChild: Child?
+    // FamilyStore isn't itself observable — bumping this after a mutation
+    // (add/remove a child) is what makes SwiftUI re-evaluate body and pick
+    // up the change. Not needed for in-place edits inside the Child sheet
+    // (name/colour/limit/device) since those mutate an @Published property
+    // on the same Child instance the sheet already observes, and dismissing
+    // that sheet re-renders this screen's body anyway.
     @State private var familyRefreshTick = 0
-    @State private var childPendingRemoval: Child?
-    @State private var editingChild: Child?
 
-    // Billing — no equivalent in HomeSettingsSheet to port (the real app has
-    // no StoreKit integration wired into settings yet), so this is built
-    // fresh rather than ported: mocked plan/cycle state, Task.sleep-based
-    // fake upgrade, matching this file's established local-only mocking.
-    // Shared (BillingState.shared, not local @State) so ScreenProfile's
-    // plan row reflects whatever's actually set here.
+    // Account/plan/legal sheets — chevron rows on the root list, each
+    // opening a sheet rather than pushing.
+    @State private var showParentProfile = false
+    @State private var showBilling = false
+    @State private var showPrivacyTerms = false
+
+    // Destructive confirmations — always a sheet, never an inline alert.
+    @State private var showSignOutConfirm = false
+    @State private var showDeleteAccountConfirm = false
+    @State private var showCancelPlanConfirm = false
+
+    // Billing — mocked plan/cycle state, Task.sleep-based fake upgrade.
+    // Shared (BillingState.shared, not local @State) so the account
+    // header's "Free plan"/"Pro" subtitle reflects whatever's set here.
     @ObservedObject private var billing = BillingState.shared
     @State private var isProcessingUpgrade = false
-    @State private var showCancelConfirm = false
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack {
             ScrollView {
                 settingsRootContent
             }
             .background(Color.white)
             // Custom header (see settingsHeader) replaces the system nav
-            // bar on this root screen only — pushed destinations below
-            // keep their own .navigationTitle/back button untouched, since
-            // toolbar visibility is per-screen, not stack-wide.
+            // bar on this root screen — every destination below now opens
+            // as its own sheet instead of pushing, so this stack never
+            // actually navigates anywhere itself.
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: SettingsRoute.self) { route in
-                switch route {
-                case .parentProfile: parentProfilePage
-                case .signOut: signOutPage
-                case .privacyTerms: privacyTermsPage
-                case .billing: billingPage
-                }
-            }
         }
-        .fullScreenCover(item: Binding(get: { openChildId.map { IdentifiedString(value: $0) } }, set: { openChildId = $0?.value })) { wrapped in
-            NavigationStack { ScreenProfile(childId: wrapped.value, onBack: { openChildId = nil }) }
+        .sheet(item: $settingsChild) { child in
+            ChildSettingsSheet(child: child, onRemoved: { familyRefreshTick += 1 })
         }
-        .sheet(isPresented: $showAddChild) {
-            SettingsAddChildSheet(
-                onAdd: { name, age in
-                    FamilyStore.children.append(Child(
-                        id: UUID().uuidString, name: name, age: age, dailyLimitMin: 60,
-                        color: FamilyStore.nextChildColor(), status: .unlocked,
-                        timeLeft: "1h 0m", timePct: 100, usageTodayMin: 0,
-                        tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet"
-                    ))
-                    familyRefreshTick += 1
-                    showAddChild = false
+        // Straight into pairing the moment "Add a child" is tapped — see
+        // addChildCard's action. The child this holds is only ever in
+        // memory, not FamilyStore, until pairing actually succeeds (see
+        // onPaired below) — so a child that's never paired never shows up
+        // in the Family list or on Home. Closing this is the end of the
+        // flow either way; naming/colouring happens later from the child's
+        // own row, whenever the parent gets to it.
+        .sheet(item: $newlyAddedChild) { child in
+            PairingSheet(child: child, onPaired: {
+                FamilyStore.children.append(child)
+                familyRefreshTick += 1
+            })
+        }
+        .sheet(isPresented: $showParentProfile) { parentProfilePage }
+        .sheet(isPresented: $showBilling) { NavigationStack { billingPage } }
+        .sheet(isPresented: $showPrivacyTerms) { NavigationStack { privacyTermsPage } }
+        .sheet(isPresented: $showCancelPlanConfirm) {
+            DestructiveConfirmSheet(
+                title: "Cancel Evlin Plus?",
+                consequences: [
+                    "You'll lose unlimited rules, AI strategies, and insights.",
+                    "Pro access continues until the end of the current billing period.",
+                ],
+                destructiveLabel: "Cancel Subscription",
+                onConfirm: {
+                    billing.isPlus = false
+                    showCancelPlanConfirm = false
                 },
-                onCancel: { showAddChild = false }
+                onCancel: { showCancelPlanConfirm = false }
             )
-        }
-        // Used to live on the (now-removed) "Children and devices" list
-        // page, reachable there by swipe — the root Family rows are plain
-        // VStack rows, not a List, so swipeActions has no host here. A
-        // long-press context menu is the nearest equivalent that doesn't
-        // require rebuilding the section as a List.
-        .sheet(item: $editingChild) { child in
-            EditChildProfileSheet(
-                child: child,
-                onSave: { name, age, avatar in
-                    child.name = name
-                    child.age = age
-                    child.avatar = avatar
-                    familyRefreshTick += 1
-                    editingChild = nil
-                },
-                onCancel: { editingChild = nil }
-            )
-        }
-        .alert(
-            "Remove \(childPendingRemoval?.name ?? "this child")'s profile?",
-            isPresented: Binding(get: { childPendingRemoval != nil }, set: { if !$0 { childPendingRemoval = nil } })
-        ) {
-            Button("Cancel", role: .cancel) { childPendingRemoval = nil }
-            Button("Remove", role: .destructive) {
-                if let id = childPendingRemoval?.id {
-                    FamilyStore.removeChild(id)
-                    familyRefreshTick += 1
-                }
-                childPendingRemoval = nil
-            }
-        } message: {
-            Text("This removes their profile, tasks, rules, and paired devices. This can't be undone.")
         }
         .preferredColorScheme(.light)
     }
@@ -147,62 +124,121 @@ struct ScreenSettings: View {
             .padding(.bottom, 6)
     }
 
+    private var visibleChildren: [Child] {
+        showAllChildren ? FamilyStore.children : Array(FamilyStore.children.prefix(5))
+    }
+
+    // Four rules govern everything below:
+    // 1. Cards separate by cardinality, not topic — a list of entities
+    //    (Family) gets one card per entity; a set of facets about one
+    //    subject (Account+Plan, Alerts, Support) gets one card with
+    //    hairlines inside.
+    // 2. A card is a tap target or a container, never both — an
+    //    entity card (a child, "Add a child") is entirely tappable;
+    //    a facet card's rows are tappable, the card itself does nothing.
+    // 3. Gap size encodes relationship — 8pt between cards in a group,
+    //    24pt between groups, so the grouping is visible from spacing
+    //    alone.
+    // 4. Section headings (SectionHead — 20pt heavy black, same weight
+    //    as Home's "Current Tasks") sit outside the cards. Small grey
+    //    uppercase is reserved for form-field labels inside sheets.
     @ViewBuilder
     private var settingsRootContent: some View {
-        VStack(alignment: .leading, spacing: settingsGroupGap) {
+        VStack(alignment: .leading, spacing: 24) {
             settingsHeader
 
+            // Account + Plan are one subject (who you are, what you're
+            // paying) — one card, not two.
             settingsAccountCard
 
-            settingsGroup("FAMILY") {
-                ForEach(FamilyStore.children) { child in
-                    settingsFamilyChildRow(child)
-                    settingsDivider
-                }
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHead("Family")
+                VStack(spacing: 8) {
+                    ForEach(visibleChildren) { child in
+                        settingsFamilyChildCard(child)
+                    }
 
-                Button { showAddChild = true } label: {
-                    addChildRow
+                    if FamilyStore.children.count > 5 {
+                        showAllChildrenRow(total: FamilyStore.children.count)
+                    }
+
+                    Button {
+                        // Not added to FamilyStore here — only held in
+                        // memory until pairing succeeds (see the
+                        // newlyAddedChild sheet's onPaired), so a child
+                        // that's never paired never appears on Home or in
+                        // this list.
+                        newlyAddedChild = Child(
+                            id: UUID().uuidString, name: "New Child", age: 8, dailyLimitMin: 60,
+                            color: FamilyStore.nextChildColor(), status: .unlocked, timeLeft: formatMinutes(60), timePct: 100,
+                            usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet"
+                        )
+                    } label: { addChildCard }
+                        .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                // familyRefreshTick was being bumped on add/remove (see its
+                // declaration above) but never actually read anywhere, so
+                // SwiftUI had no reason to think this section's body-derived
+                // content (visibleChildren, the FamilyStore.children.count
+                // check above) had changed — bumping it was a complete
+                // no-op. This list only ever caught up whenever some
+                // *unrelated* state change happened to re-render the screen
+                // afterward (backgrounding, navigating away and back, …),
+                // which is what read as "it took too long." Keying this
+                // subtree on the tick forces SwiftUI to discard and rebuild
+                // it — and re-read FamilyStore.children fresh — the instant
+                // a child is actually added or removed.
+                .id(familyRefreshTick)
             }
 
-            settingsGroup("ALERTS") {
-                settingsCompactRow(icon: "bell", title: "Push notifications", showChevron: false) {
-                    Toggle("", isOn: $pushOn).labelsHidden().tint(EColor.secondary)
-                }
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHead("Alerts")
+                Card(padded: false) {
+                    VStack(spacing: 0) {
+                        settingsCompactRow(icon: "bell", title: "Push notifications", showChevron: false) {
+                            Toggle("", isOn: $pushOn).labelsHidden().tint(EColor.secondary)
+                        }
 
-                settingsDivider
+                        settingsDivider
 
-                NavigationLink(value: SettingsRoute.billing) {
-                    settingsCompactRow(icon: "creditcard", title: "Billing and receipts")
+                        Button { showBilling = true } label: {
+                            settingsCompactRow(icon: "creditcard", title: "Billing and receipts")
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .buttonStyle(.plain)
             }
 
-            settingsGroup("SUPPORT") {
-                // Honest about what this actually is — a mailbox, not a
-                // help center — and the prefilled metadata is what turns
-                // "it's not working" into something traceable.
-                Button {
-                    if let url = reportProblemURL { UIApplication.shared.open(url) }
-                } label: {
-                    settingsCompactRow(icon: "exclamationmark.bubble", title: "Report a problem")
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHead("Support")
+                Card(padded: false) {
+                    VStack(spacing: 0) {
+                        ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
+                            settingsCompactRow(icon: "square.and.arrow.up", title: "Share Evlin")
+                        }
+                        .buttonStyle(.plain)
+
+                        settingsDivider
+
+                        // Honest about what this actually is — a mailbox,
+                        // not a help center — and the prefilled metadata
+                        // is what turns "it's not working" into something
+                        // traceable.
+                        Button {
+                            if let url = reportProblemURL { UIApplication.shared.open(url) }
+                        } label: {
+                            settingsCompactRow(icon: "exclamationmark.bubble", title: "Report a problem")
+                        }
+                        .buttonStyle(.plain)
+
+                        settingsDivider
+
+                        // Not wired to anything yet, but still tappable in
+                        // principle — gets the same chevron as every other
+                        // row instead of being the odd one out.
+                        settingsCompactRow(icon: "sparkles", title: "Replay the tours")
+                    }
                 }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                // Not wired to anything yet, but still tappable in
-                // principle — gets the same chevron as every other row
-                // instead of being the odd one out.
-                settingsCompactRow(icon: "sparkles", title: "Replay the tours")
-
-                settingsDivider
-
-                ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
-                    settingsCompactRow(icon: "square.and.arrow.up", title: "Share Evlin")
-                }
-                .buttonStyle(.plain)
             }
 
             settingsFooter
@@ -212,61 +248,70 @@ struct ScreenSettings: View {
         .padding(.bottom, 16)
     }
 
-    // No card fill — the profile block sits directly on the white page,
-    // Instagram-profile-style. Avatar/name/subtitle is its own tap target
-    // into Parent Profile; the upgrade pill below is a second, independent
-    // tap target — nesting a Button inside the NavigationLink's own label
-    // would break hit-testing, so they're siblings, not one wrapping the
-    // other.
+    // One card, one subject: who you are and what you're paying. On Pro
+    // it's a single row (nothing left to upsell); on Free, a hairline
+    // separates identity from the plan row — same facet-card pattern as
+    // Alerts/Support, not two cards for one subject.
     private var settingsAccountCard: some View {
         let personColor = CalendarData.person("family").color
-        return VStack(alignment: .leading, spacing: 16) {
-            NavigationLink(value: SettingsRoute.parentProfile) {
-                HStack(spacing: 16) {
-                    storyRingAvatar(color: personColor, initial: String(parentName.prefix(1)))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(parentName).font(Typography.font(19, weight: .bold)).foregroundStyle(Color.black)
-                        Text("My Family · \(billing.isPlus ? "Pro" : "Free plan")")
-                            .font(Typography.font(13, weight: .regular))
-                            .foregroundStyle(Color(.secondaryLabel))
-                    }
-                    Spacer(minLength: 10)
-                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            // Removed entirely once on Pro — nothing left to upsell.
-            if !billing.isPlus {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Repeating tasks, downtime, and bedtime are locked on the free plan.")
-                        .font(Typography.font(13, weight: .regular))
-                        .foregroundStyle(Color(.secondaryLabel))
-
-                    Button { path.append(SettingsRoute.billing) } label: {
-                        HStack(spacing: 4) {
-                            Spacer(minLength: 0)
-                            Text("Upgrade to Pro")
-                                .font(Typography.font(15, weight: .bold))
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .bold))
+        return Card(padded: false) {
+            VStack(spacing: 0) {
+                Button { showParentProfile = true } label: {
+                    HStack(spacing: 16) {
+                        storyRingAvatar(color: personColor, initial: String(parentName.prefix(1)))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(parentName).font(Typography.font(19, weight: .bold)).foregroundStyle(Color.black)
+                            Text(billing.isPlus ? "Pro" : "Free plan")
+                                .font(Typography.font(13, weight: .regular))
+                                .foregroundStyle(Color(.secondaryLabel))
                         }
-                        .foregroundStyle(Color.black)
+                        Spacer(minLength: 10)
+                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
                 }
-                .padding(14)
-                .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .buttonStyle(.plain)
+
+                // Removed entirely once on Pro — a paying customer should
+                // never see an upsell.
+                if !billing.isPlus {
+                    settingsDivider
+                    upgradeToProRow
+                }
             }
         }
     }
 
+    // Same content wherever it appears (this card and the Profile sheet)
+    // — one subject's plan status shouldn't read differently depending on
+    // which screen asked. Vanishes entirely once on Pro at every call
+    // site, since that check lives with the caller, not in here.
+    private var upgradeToProRow: some View {
+        Button { showBilling = true } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Upgrade to Pro").font(Typography.font(15, weight: .bold)).foregroundStyle(Color.black)
+                    Text("Repeating tasks, downtime, and bedtime are locked on the free plan.")
+                        .font(Typography.font(12.5, weight: .regular))
+                        .foregroundStyle(Color(.secondaryLabel))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     // The Instagram story-highlight look: a gradient ring, a thin white
-    // gap, then the avatar itself — not the gradient stroked directly onto
-    // the avatar's own edge, which reads as a flat colored border instead
-    // of a separate ring floating around it.
+    // gap, then the 62px avatar itself — not the gradient stroked directly
+    // onto the avatar's own edge, which reads as a flat colored border
+    // instead of a separate ring floating around it.
     private func storyRingAvatar(color: Color, initial: String) -> some View {
         ZStack {
             Circle()
@@ -276,73 +321,77 @@ struct ScreenSettings: View {
                         center: .center
                     )
                 )
-                .frame(width: 76, height: 76)
-            Circle().fill(Color.white).frame(width: 72, height: 72)
-            Circle().fill(color).frame(width: 66, height: 66)
-                .overlay(Text(initial).font(Typography.font(25, weight: .bold)).foregroundStyle(.white))
+                .frame(width: 72, height: 72)
+            Circle().fill(Color.white).frame(width: 68, height: 68)
+            Circle().fill(color).frame(width: 62, height: 62)
+                .overlay(Text(initial).font(Typography.font(23, weight: .bold)).foregroundStyle(.white))
         }
     }
 
-    // Same 32px-avatar/name/device-count/chevron row every child gets, but
-    // solid-color-fill-plus-white-initial rather than the generic mint
-    // InitialsAvatar — same reasoning as the parent avatar: matches Home's
-    // per-child treatment instead of reading as a placeholder.
-    // Two independent tap targets, not one row wrapped in a single Button:
-    // the avatar/name/count area opens the child's own space, and the
-    // trailing "…" is a visible, discoverable way to manage that child
-    // (edit name/age/photo, or remove them) — the long-press context menu
-    // this replaced worked but had no visible affordance telling a parent
-    // it existed.
-    private func settingsFamilyChildRow(_ child: Child) -> some View {
-        HStack(spacing: 12) {
-            Button { openChildId = child.id } label: {
+    // Family is a list of entities, not facets of one subject — every
+    // child is their own card, entirely tappable (no internal hairline;
+    // there's nothing else in this card to separate). Opens the Child
+    // sheet, where all of that child's editing (picture/name/colour/
+    // screen time/device) actually happens.
+    private func settingsFamilyChildCard(_ child: Child) -> some View {
+        Button { settingsChild = child } label: {
+            Card(padded: false) {
                 HStack(spacing: 12) {
                     if let avatar = child.avatar {
                         Image(uiImage: avatar).resizable().scaledToFill()
-                            .frame(width: 32, height: 32).clipShape(Circle())
+                            .frame(width: 40, height: 40).clipShape(Circle())
                     } else {
-                        Circle().fill(child.color).frame(width: 32, height: 32)
-                            .overlay(Text(String(child.name.prefix(1))).font(Typography.font(13, weight: .bold)).foregroundStyle(.white))
+                        Circle().fill(child.color).frame(width: 40, height: 40)
+                            .overlay(Text(String(child.name.prefix(1))).font(Typography.font(15, weight: .bold)).foregroundStyle(.white))
                     }
-                    Text(child.name).font(Typography.font(15.5, weight: .regular)).foregroundStyle(Color.black)
+                    Text(child.name).font(Typography.font(16, weight: .semibold)).foregroundStyle(Color.black)
                     Spacer(minLength: 10)
-                    Text("\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
+                    Text(child.devices.isEmpty ? "not paired" : "\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
                         .font(Typography.font(13, weight: .regular))
-                        .foregroundStyle(Color(.secondaryLabel))
+                        .foregroundStyle(child.devices.isEmpty ? EColor.danger : Color(.secondaryLabel))
+                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
                 }
+                .padding(.horizontal, 16)
+                .frame(height: 64)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-
-            Menu {
-                Button { editingChild = child } label: { Label("Edit", systemImage: "pencil") }
-                Button(role: .destructive) { childPendingRemoval = child } label: { Label("Remove", systemImage: "trash") }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color(.tertiaryLabel))
-                    .frame(width: 28, height: 28)
-            }
-            .accessibilityLabel("Manage \(child.name)")
         }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
+        .buttonStyle(.plain)
     }
 
-    // Plain "+" next to the label, no circle/box around it — the dashed
-    // stroke-circle container this used to have was exactly the kind of
-    // extra chrome this pass is meant to strip out.
-    private var addChildRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "plus")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color.black)
-                .frame(width: 32, alignment: .center)
-            Text("Add a child").font(Typography.font(15.5, weight: .bold)).foregroundStyle(Color.black)
-            Spacer(minLength: 10)
+    // A utility control, not an entity or a subject — it doesn't get a
+    // card. Plain and centered so it doesn't compete with the cards
+    // around it.
+    private func showAllChildrenRow(total: Int) -> some View {
+        Button { showAllChildren.toggle() } label: {
+            Text(showAllChildren ? "Show fewer" : "Show all \(total)")
+                .font(Typography.font(15, weight: .semibold))
+                .foregroundStyle(EColor.secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+                .contentShape(Rectangle())
         }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
+        .buttonStyle(.plain)
+    }
+
+    // A dashed plus circle in accent colour — part of the same list of
+    // entities as the child cards above it (same card shell, same 8pt
+    // gap), visually distinct only by the dashed ring so it never reads
+    // as just another child.
+    private var addChildCard: some View {
+        Card(padded: false) {
+            HStack(spacing: 12) {
+                Circle()
+                    .strokeBorder(EColor.secondary, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                    .frame(width: 40, height: 40)
+                    .overlay(Image(systemName: "plus").font(.system(size: 15, weight: .bold)).foregroundStyle(EColor.secondary))
+                Text("Add a child").font(Typography.font(16, weight: .bold)).foregroundStyle(EColor.secondary)
+                Spacer(minLength: 10)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 64)
+            .contentShape(Rectangle())
+        }
     }
 
     // mailto: with the diagnostic context a beta parent's "it's not
@@ -378,12 +427,13 @@ struct ScreenSettings: View {
         return "\(version) (\(build))"
     }
 
-    // Small muted centered text, not rows — these are looked-at-once
-    // legal/version info, not settings a parent configures.
+    // Small muted centered text, not rows — these are once-ever taps
+    // (legal/version info), so they shouldn't compete with things people
+    // actually use week to week.
     private var settingsFooter: some View {
         VStack(spacing: 4) {
             HStack(spacing: 6) {
-                NavigationLink(value: SettingsRoute.privacyTerms) {
+                Button { showPrivacyTerms = true } label: {
                     Text("Privacy and terms")
                 }
                 .buttonStyle(.plain)
@@ -405,28 +455,6 @@ struct ScreenSettings: View {
             .fill(Color(.systemGray6))
             .frame(height: 1)
             .padding(.leading, 46)
-    }
-
-    // Total whitespace from one group's last row to the next header's top
-    // (outer spacing + the header's own line height) works out to ~22pt
-    // once combined with settingsGroup's 6pt header-to-rows gap below.
-    private var settingsGroupGap: CGFloat { 3 }
-
-    // No card fill behind the group — rows sit directly on the white page,
-    // separated only by settingsDivider, Instagram-list-style. The label
-    // sits right on top of its group (6pt) with the real separation
-    // (settingsGroupGap, set by the outer VStack's own spacing) coming
-    // *before* the label, not after — that's what makes it read as
-    // "attached to the group below," not floating between two groups.
-    private func settingsGroup<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(Typography.font(11, weight: .bold))
-                .tracking(0.6)
-                .foregroundStyle(Color(.secondaryLabel))
-                .padding(.leading, 4)
-            VStack(spacing: 0, content: content)
-        }
     }
 
     // One line — icon, title, an optional trailing value or control, and a
@@ -459,10 +487,17 @@ struct ScreenSettings: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
+        // Without this, only the icon/text/chevron glyphs themselves were
+        // tappable — the Spacer-filled middle of the row (most of its
+        // width) rendered nothing, so it didn't count as part of the
+        // button's hit area at all. That's what made rows like "Share
+        // Evlin" and "Billing and receipts" feel like they needed a
+        // precise tap right on the text instead of anywhere on the row.
+        .contentShape(Rectangle())
     }
 
-    // MARK: - Billing (net-new — see the state block above for why this
-    // isn't a port like the rest of the file)
+    // MARK: - Billing (net-new — no StoreKit integration exists in this
+    // prototype, so this is mocked plan/cycle state rather than a port)
 
     private let plusFeatures = [
         "Unlimited custom rules & app-time limits",
@@ -531,7 +566,7 @@ struct ScreenSettings: View {
                     }
 
                     Button(role: .destructive) {
-                        showCancelConfirm = true
+                        showCancelPlanConfirm = true
                     } label: {
                         settingsRow(title: "Cancel Subscription", subtitle: "You'll keep Plus until the period ends", systemImage: "xmark.circle", accent: EColor.danger, danger: true)
                     }
@@ -540,11 +575,8 @@ struct ScreenSettings: View {
         }
         .navigationTitle("Evlin Plan")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Cancel Evlin Plus?", isPresented: $showCancelConfirm) {
-            Button("Keep Plus", role: .cancel) {}
-            Button("Cancel Subscription", role: .destructive) { billing.isPlus = false }
-        } message: {
-            Text("You'll lose unlimited rules, AI strategies, and insights at the end of the current billing period.")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) { Button("Done") { showBilling = false } }
         }
     }
 
@@ -625,220 +657,166 @@ struct ScreenSettings: View {
         withAnimation { billing.isPlus = true }
     }
 
-    // MARK: - Parent Profile (ported from HomeSettingsSheet's parentProfileMenu)
-
+    // MARK: - Parent Profile — a flat sheet, same chrome as Add Event/Add
+    // to Calendar exactly: green "Cancel" top-left, bold title, labelled
+    // pale fields, one primary action pinned at the bottom (here, Sign
+    // Out — there's no Save because these fields edit live, same as the
+    // Child sheet). No cards, no icons in rows, no placeholder rows for
+    // things this prototype doesn't actually do.
     private var parentProfilePage: some View {
-        Form {
-            Section {
-                parentProfileHero
-            }
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
+        VStack(alignment: .leading, spacing: 0) {
+            // Same top-bar placement as every other destructive delete in
+            // this file (ChildSettingsSheet, EventDetailSheet) — a trash
+            // icon beside Cancel, not a text link buried near the bottom.
+            HStack {
+                Button("Cancel") { showParentProfile = false }
+                    .buttonStyle(.plain)
+                    .font(Typography.font(17, weight: .semibold))
+                    .foregroundStyle(FormGreen.accent)
+                    .frame(minHeight: 48, alignment: .leading)
+                    .contentShape(Rectangle())
 
-            Section("Profile") {
-                HStack(spacing: 12) {
-                    settingsIconChip("pencil", accent: EColor.primary)
-                    Text("Display Name")
-                        .font(Typography.font(15, weight: .semibold))
-                        .foregroundStyle(EColor.onSurface)
-                    Spacer()
-                    TextField("Parent name", text: $parentName)
-                        .font(Typography.font(13, weight: .medium))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                        .multilineTextAlignment(.trailing)
-                        .textFieldStyle(.plain)
-                }
-                .padding(.vertical, 4)
+                Spacer(minLength: 12)
 
-                settingsRow(
-                    title: "Email",
-                    subtitle: "Not exposed in this prototype",
-                    systemImage: "at",
-                    value: "Not wired",
-                    accent: EColor.primary
-                )
-            }
-
-            Section("Session") {
-                NavigationLink(value: SettingsRoute.signOut) {
-                    settingsRow(
-                        title: "Sign Out",
-                        subtitle: "Remove this parent session from this device",
-                        systemImage: "rectangle.portrait.and.arrow.right",
-                        accent: EColor.danger,
-                        danger: true
-                    )
-                }
-            }
-
-            Section("Danger Zone") {
-                Button(role: .destructive) { showDeleteAccountConfirm = true } label: {
-                    settingsRow(
-                        title: "Delete Account",
-                        subtitle: "Permanently delete your account and all family data",
-                        systemImage: "trash",
-                        accent: EColor.danger,
-                        danger: true
-                    )
+                Button { showDeleteAccountConfirm = true } label: {
+                    Image(systemName: "trash.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(EColor.danger)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Delete account")
             }
-        }
-        .navigationTitle("Parent Profile")
-        .navigationBarTitleDisplayMode(.inline)
-        .dismissKeyboardOnTap()
-        .alert("Delete your account?", isPresented: $showDeleteAccountConfirm) {
-            Button("Delete", role: .destructive) { onSwitchMode() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently deletes your account, family data, and every child's profile. This can't be undone.")
-        }
-    }
-
-    private var parentProfileHero: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 12) {
-                Circle().fill(accentColor).frame(width: 88, height: 88)
-                    .overlay(Text(initials(from: parentName)).font(Typography.font(28, weight: .heavy)).foregroundStyle(.white))
-                    // A thin gold ring on top of the avatar is the same "you can
-                    // tell at a glance" signal Opal/similar apps use for a paid
-                    // member — nothing extra to read, just present or not.
-                    .overlay(
-                        Circle()
-                            .strokeBorder(
-                                billing.isPlus
-                                    ? AnyShapeStyle(LinearGradient(colors: [Color(hex: "FFD972"), Color(hex: "F5A623")], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                    : AnyShapeStyle(Color.clear),
-                                lineWidth: 3
-                            )
-                            .padding(-4)
-                    )
-
-                VStack(spacing: 8) {
-                    Text(parentName)
-                        .font(Typography.font(18, weight: .bold))
-                        .foregroundStyle(EColor.onSurface)
-                    planBadge
-                    Text("Email not exposed in this prototype")
-                        .font(Typography.font(12, weight: .regular))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                }
-            }
-
-            Divider()
-                .background(EColor.outlineVariant.opacity(0.7))
-                .padding(.top, 14)
-                .padding(.bottom, 14)
-
-            accentColorPicker
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-        .padding(.horizontal, 16)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(EColor.surfaceContainerLowest))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(EColor.outlineVariant.opacity(0.7), lineWidth: 1))
-    }
-
-    // A status pill under the name, the way Opal and similar apps mark a
-    // profile as paid/free right on the profile itself rather than only
-    // inside a separate billing screen — tapping it (free or Plus) opens
-    // the same billing page the root Settings list's "Evlin Plan" row does.
-    private var planBadge: some View {
-        Button { path.append(SettingsRoute.billing) } label: {
-            HStack(spacing: 5) {
-                Image(systemName: billing.isPlus ? "crown.fill" : "lock.fill")
-                    .font(.system(size: 10, weight: .bold))
-                Text(billing.isPlus ? "Evlin Plus" : "Free Plan")
-                    .font(Typography.font(12, weight: .bold))
-                if !billing.isPlus {
-                    Text("· Upgrade")
-                        .font(Typography.font(12, weight: .bold))
-                        .foregroundStyle(EColor.primary)
-                }
-            }
-            .foregroundStyle(billing.isPlus ? Color(hex: "8A5A00") : EColor.onSurfaceVariant)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 20)
             .padding(.vertical, 6)
-            .background(
-                Capsule().fill(
-                    billing.isPlus
-                        ? AnyShapeStyle(LinearGradient(colors: [Color(hex: "FFEBB0"), Color(hex: "FFD972")], startPoint: .leading, endPoint: .trailing))
-                        : AnyShapeStyle(EColor.surfaceContainerHigh)
-                )
-            )
-            .overlay(
-                Capsule().strokeBorder(billing.isPlus ? Color(hex: "F5A623").opacity(0.5) : EColor.outlineVariant, lineWidth: 1)
-            )
+
+            Text("Profile")
+                .font(Typography.font(26, weight: .heavy))
+                .foregroundStyle(FormGreen.title)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 18)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    VStack(spacing: 10) {
+                        parentAvatarView
+                        Button("Change picture") { showChangeParentPicture = true }
+                            .font(Typography.font(14, weight: .semibold))
+                            .foregroundStyle(FormGreen.accent)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
+                    .padding(.bottom, 28)
+
+                    FormField(label: "Your name") {
+                        FormTextField(placeholder: "Your name", text: $parentName)
+                    }
+
+                    // Same block as the root Settings list's account card
+                    // — gone entirely once on Pro, same as there.
+                    if !billing.isPlus {
+                        upgradeToProRow
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            .dismissKeyboardOnTap()
+            .scrollDismissesKeyboard(.interactively)
+
+            // Solid fill, not a soft tint — the same weight every other
+            // destructive primary action in this file already uses
+            // (DestructiveConfirmSheet's own button, ChildSettingsSheet's
+            // Unpair), so this reads as the one real pinned action here,
+            // not a muted secondary option.
+            Button { showSignOutConfirm = true } label: {
+                Text("Sign Out")
+                    .font(Typography.font(15, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(EColor.danger)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .shadow(color: EColor.danger.opacity(0.3), radius: 12, y: 6)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
         }
-        .buttonStyle(.plain)
-    }
-
-    private var accentColor: Color { Color(hex: selectedAccentHex) }
-
-    private var accentColorPicker: some View {
-        VStack(spacing: 9) {
-            Text("Accent Color")
-                .font(Typography.font(12, weight: .semibold))
-                .foregroundStyle(EColor.outline)
-            HStack(spacing: 7) {
-                ForEach(SettingsPresentation.accentHexOptions, id: \.self) { hex in
-                    Button { selectedAccentHex = hex } label: { accentSwatch(hex) }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Choose accent color \(hex)")
+        .background(Color.white)
+        .photosPicker(isPresented: $showChangeParentPicture, selection: $parentLibraryItem, matching: .images)
+        .onChange(of: parentLibraryItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let img = UIImage(data: data) {
+                    await MainActor.run { parentAvatar = img }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .center)
         }
-    }
-
-    private func accentSwatch(_ hex: String) -> some View {
-        let selected = hex.caseInsensitiveCompare(selectedAccentHex) == .orderedSame
-        return ZStack {
-            Circle().fill(Color(hex: hex)).frame(width: 24, height: 24)
-            if selected {
-                Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.white)
-            }
-        }
-        .frame(width: 28, height: 28)
-        .overlay(Circle().stroke(selected ? EColor.onSurface : EColor.outlineVariant, lineWidth: selected ? 2 : 1))
-    }
-
-    private func initials(from name: String) -> String {
-        let parts = name.split(whereSeparator: { $0.isWhitespace || $0 == "-" }).compactMap { $0.first }.prefix(2)
-        let value = parts.map(String.init).joined().uppercased()
-        return value.isEmpty ? "P" : value
-    }
-
-    // MARK: - Sign out (ported from HomeSettingsSheet's signOutMenu)
-
-    private var signOutPage: some View {
-        Form {
-            settingsHeroNote(
+        // Declared here, not on the Settings root — a second .sheet on the
+        // presenting view doesn't stack on top of this already-presented
+        // one, it replaces it, which read as "the Sign Out button and its
+        // confirmation are two disconnected screens." Attaching it to this
+        // sheet's own view instead is what makes it appear on top of
+        // Profile, the same way ChildSettingsSheet's own confirm sheets do.
+        .sheet(isPresented: $showSignOutConfirm) {
+            DestructiveConfirmSheet(
                 title: "Sign out of this parent phone?",
-                message: "Family data stays in the account. This device stops receiving parent notifications until signed in again."
-            )
-
-            Section("Confirm") {
-                Button(role: .destructive) {
-                    path.removeLast(path.count)
+                consequences: [
+                    "Family data stays in the account.",
+                    "This device stops receiving parent notifications until signed in again.",
+                ],
+                destructiveLabel: "Sign Out",
+                onConfirm: {
+                    showSignOutConfirm = false
+                    showParentProfile = false
                     onSwitchMode()
-                } label: {
-                    settingsRow(
-                        title: "Sign Out",
-                        subtitle: "Return this device to onboarding",
-                        systemImage: "rectangle.portrait.and.arrow.right",
-                        accent: EColor.danger,
-                        danger: true
-                    )
-                }
-                .buttonStyle(.plain)
-            }
+                },
+                onCancel: { showSignOutConfirm = false }
+            )
         }
-        .navigationTitle("Sign Out")
-        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showDeleteAccountConfirm) {
+            DestructiveConfirmSheet(
+                title: "Delete your account?",
+                consequences: [
+                    "Every child is signed out of their device immediately.",
+                    "All screen time locks and rules stop being enforced.",
+                    "Every child's profile, tasks, and history are permanently deleted.",
+                    "This can't be undone.",
+                ],
+                destructiveLabel: "Delete Account",
+                onConfirm: {
+                    showDeleteAccountConfirm = false
+                    showParentProfile = false
+                    onSwitchMode()
+                },
+                onCancel: { showDeleteAccountConfirm = false }
+            )
+        }
     }
 
-    // MARK: - Privacy & Terms (ported from HomeSettingsSheet's privacyTermsMenu)
+    // Plain filled circle in the account's own colour (the same one the
+    // Settings list's avatar uses, via CalendarData.person("family")) with
+    // a single initial — no gradient ring, no separate "accent colour,"
+    // matching how every other avatar in Settings (the Family list, the
+    // Child sheet) is drawn.
+    private var parentAvatarView: some View {
+        Group {
+            if let parentAvatar {
+                Image(uiImage: parentAvatar).resizable().scaledToFill()
+            } else {
+                Circle().fill(CalendarData.person("family").color)
+                    .overlay(Text(String(parentName.prefix(1))).font(Typography.font(38, weight: .bold)).foregroundStyle(.white))
+            }
+        }
+        .frame(width: 104, height: 104)
+        .clipShape(Circle())
+    }
+
+    // MARK: - Privacy & Terms
 
     private var privacyTermsPage: some View {
         Form {
@@ -857,6 +835,9 @@ struct ScreenSettings: View {
         }
         .navigationTitle("Privacy & Terms")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) { Button("Done") { showPrivacyTerms = false } }
+        }
     }
 
     private func placeholderPage(title: String, message: String) -> some View {
@@ -867,7 +848,7 @@ struct ScreenSettings: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    // MARK: - Row primitives (ported 1:1 from HomeSettingsSheet's row builders)
+    // MARK: - Row primitives
 
     private enum SettingsPillTone {
         case success, neutral, warning
@@ -942,22 +923,6 @@ struct ScreenSettings: View {
         }
     }
 
-    private func settingsProfileCard(title: String, subtitle: String, initials: String, accent: Color = EColor.primary) -> some View {
-        HStack(spacing: 12) {
-            Text(initials)
-                .font(Typography.font(16, weight: .bold))
-                .foregroundStyle(EColor.onPrimary)
-                .frame(width: 46, height: 46)
-                .background(Circle().fill(accentColor))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(Typography.font(16, weight: .bold)).foregroundStyle(EColor.onSurface)
-                Text(subtitle).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant).lineLimit(2)
-            }
-            Spacer(minLength: 12)
-        }
-        .padding(.vertical, 6)
-    }
-
     private func settingsHeroNote(title: String, message: String) -> some View {
         Section {
             VStack(alignment: .leading, spacing: 6) {
@@ -969,201 +934,371 @@ struct ScreenSettings: View {
     }
 }
 
-enum SettingsPresentation {
-    static let accentHexOptions = [
-        "#24324A", "#2E7D32", "#7C6FF7", "#EF6C00", "#0F766E", "#BE185D", "#2563EB", "#6B7280",
-    ]
-}
+// MARK: - Destructive confirmation (the "second sheet" every destructive
+// action in this file opens instead of an inline alert — states exactly
+// what happens, destructive button on top, safe escape below it).
 
-// MARK: - Add Child (mocked pairing — any 6-digit code "pairs" after a short
-// delay, same convention as OnboardingV2ParentSteps' ParentPairScanStep,
-// whose faux-QR/camera-preview and code-field components this reuses so the
-// two pairing screens in the app look and behave the same way).
-
-// Edit an existing child's name, age, and picture — Add Child (below) only
-// ever creates a new profile, there was previously no way to fix a typo'd
-// name or set a photo after the fact.
-private struct EditChildProfileSheet: View {
-    @ObservedObject var child: Child
-    var onSave: (_ name: String, _ age: Int, _ avatar: UIImage?) -> Void
+private struct DestructiveConfirmSheet: View {
+    var title: String
+    var consequences: [String]
+    var destructiveLabel: String
+    var cancelLabel: String = "Cancel"
+    var onConfirm: () -> Void
     var onCancel: () -> Void
 
-    @State private var name: String
-    @State private var age: Int
-    @State private var avatar: UIImage?
-
-    init(child: Child, onSave: @escaping (_ name: String, _ age: Int, _ avatar: UIImage?) -> Void, onCancel: @escaping () -> Void) {
-        self.child = child
-        self.onSave = onSave
-        self.onCancel = onCancel
-        _name = State(initialValue: child.name)
-        _age = State(initialValue: child.age)
-        _avatar = State(initialValue: child.avatar)
-    }
-
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    HStack {
-                        Spacer()
-                        // Same picker onboarding uses for the parent/child
-                        // avatar step, so picking a photo here looks and
-                        // behaves identically to picking one there.
-                        OnboardingV2PhotoAvatarPicker(name: name, pickedImage: $avatar, size: 84)
-                        Spacer()
+        VStack(alignment: .leading, spacing: 22) {
+            Text(title)
+                .font(Typography.font(20, weight: .bold))
+                .foregroundStyle(EColor.onSurface)
+                .padding(.top, 8)
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(consequences, id: \.self) { line in
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle().fill(EColor.onSurfaceVariant).frame(width: 4, height: 4).padding(.top, 7)
+                        Text(line).font(Typography.font(14, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
                     }
-                    .padding(.vertical, 8)
-                }
-                .listRowBackground(Color.clear)
-
-                Section("Name") {
-                    TextField("Child's name", text: $name)
-                        .font(Typography.font(15, weight: .regular))
-                }
-                Section("Age") {
-                    Stepper("Age: \(age)", value: $age, in: 1...18)
-                        .font(Typography.font(15, weight: .regular))
-                }
-            }
-            .navigationTitle("Edit Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .dismissKeyboardOnTap()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { onSave(name.trimmingCharacters(in: .whitespaces), age, avatar) }
-                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-        }
-    }
-}
-
-private struct SettingsAddChildSheet: View {
-    var onAdd: (String, Int) -> Void
-    var onCancel: () -> Void
-
-    private enum Step { case scan, name }
-    @State private var step: Step = .scan
-    @State private var code = ""
-    @State private var busy = false
-    @State private var name = ""
-    @State private var age = 8
-    // A real, decodable QR now (not OnboardingV2FauxQR's decorative noise)
-    // — same encode(code:) payload ChildShowCodeStep writes on the kid
-    // side, so this actually round-trips through a real QR scanner if
-    // someone points one at it, standing in for the child device's own
-    // generated code in this single-device prototype.
-    @State private var demoChildCode = String(format: "%06d", Int.random(in: 0...999999))
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                switch step {
-                case .scan: scanStep
-                case .name: nameStep
-                }
-            }
-            .navigationTitle("Add Child")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
-            }
-            .dismissKeyboardOnTap()
-        }
-    }
-
-    private var scanStep: some View {
-        VStack(spacing: 22) {
-            VStack(spacing: 8) {
-                Text("Pair Your Child's Device")
-                    .font(Typography.font(20, weight: .heavy))
-                    .foregroundStyle(EColor.onSurface)
-                Text("Scan the QR code shown on the child's app, or enter the 6-digit code manually below.")
-                    .font(Typography.font(13, weight: .medium))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-            }
-            .padding(.top, 24)
-
-            ZStack {
-                OnboardingV2QRImage(string: OnboardingV2PairPayload.encode(code: demoChildCode), side: 168)
-                OnboardingV2ScanLine(size: 200)
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.9), lineWidth: 3)
-                    .padding(18)
-            }
-            .frame(width: 240, height: 240)
-            .background(Color(hex: "1B1F24"))
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(alignment: .bottom) {
-                Text("Camera preview (demo)")
-                    .font(Typography.font(11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .padding(.bottom, 10)
-            }
-
-            OnboardingV2CodeField(code: $code)
-                .onChange(of: code) { _, newValue in
-                    // Rewriting a TextField's own bound text synchronously
-                    // from inside its own onChange, while the keyboard's
-                    // input session for that keystroke is still live, is a
-                    // known crash trigger (RTIInputSystemClient /
-                    // NSTaggedPointerString on-device). Defer the rewrite
-                    // to the next run loop tick so that transaction
-                    // finishes first.
-                    let digits = String(newValue.filter(\.isNumber).prefix(6))
-                    if digits != newValue {
-                        DispatchQueue.main.async { code = digits }
-                    }
-                    if digits.count == 6 && !busy { pair() }
-                }
-                .padding(.horizontal, 24)
-
-            if busy {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Pairing…").font(Typography.font(13, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
                 }
             }
 
             Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(EColor.surface)
-    }
 
-    private func pair() {
-        busy = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            busy = false
-            withAnimation(.easeOut(duration: 0.2)) { step = .name }
-        }
-    }
-
-    private var nameStep: some View {
-        Form {
-            Section {
-                Text("Device paired. What's your child's name?")
-                    .font(Typography.font(12, weight: .regular))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-            }
-            Section {
-                TextField("Child's name", text: $name).font(Typography.font(15, weight: .regular))
-                Stepper("Age: \(age)", value: $age, in: 1...18).font(Typography.font(15, weight: .regular))
-            }
-            Section {
-                Button {
-                    onAdd(name.trimmingCharacters(in: .whitespaces), age)
-                } label: {
-                    Text("Add Child")
-                        .font(Typography.font(15, weight: .bold))
+            VStack(spacing: 10) {
+                Button { onConfirm() } label: {
+                    Text(destructiveLabel)
+                        .font(Typography.font(16, weight: .bold))
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(EColor.danger)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                .buttonStyle(.plain)
+
+                Button { onCancel() } label: {
+                    Text(cancelLabel)
+                        .font(Typography.font(16, weight: .semibold))
+                        .foregroundStyle(EColor.onSurface)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(EColor.surfaceContainerHigh)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
         }
+        .padding(24)
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+// MARK: - Child sheet — everything that belongs to a child's own identity
+// and device: picture, name, and the device row. Colour and daily screen
+// time aren't parent-editable here any more — a sensible default is set
+// silently at creation. Nothing here is an enforcement rule (downtime/
+// bedtime/app picker live on that child's own screen elsewhere) — this is
+// account settings for one child. Edits apply immediately; dismissing is
+// "Done," never
+// "Cancel," because nothing is ever pending. Same chrome/palette as
+// FormShell (green "Done" link, big bold title, mint fields) so this reads
+// as the same family of sheet as Add a Child/Add Task, just without a
+// bottom Save pill — there's nothing queued up to save.
+private struct ChildSettingsSheet: View {
+    @ObservedObject var child: Child
+    var onRemoved: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var libraryItem: PhotosPickerItem?
+    @State private var showChangePicture = false
+    @State private var showUnpairConfirm = false
+    @State private var showRemoveConfirm = false
+    @State private var showPairing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button("Done") { dismiss() }
+                    .buttonStyle(.plain)
+                    .font(Typography.font(17, weight: .semibold))
+                    .foregroundStyle(FormGreen.accent)
+                    .frame(minHeight: 48, alignment: .leading)
+                    .contentShape(Rectangle())
+
+                Spacer(minLength: 12)
+
+                Button { showRemoveConfirm = true } label: {
+                    Image(systemName: "trash.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(EColor.danger)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove child")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+
+            VStack(spacing: 14) {
+                childAvatar
+                Text(child.name)
+                    .font(Typography.font(28, weight: .heavy))
+                    .foregroundStyle(FormGreen.title)
+                Button("Change picture") { showChangePicture = true }
+                    .font(Typography.font(14, weight: .semibold))
+                    .foregroundStyle(FormGreen.accent)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 32)
+            .padding(.bottom, 44)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    FormField(label: "Name") {
+                        FormTextField(placeholder: "Child's name", text: $child.name)
+                    }
+
+                    FormField(label: "Device") {
+                        deviceRow
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            .dismissKeyboardOnTap()
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .background(Color.white)
+        .photosPicker(isPresented: $showChangePicture, selection: $libraryItem, matching: .images)
+        .onChange(of: libraryItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let img = UIImage(data: data) {
+                    await MainActor.run { child.avatar = img }
+                }
+            }
+        }
+        .sheet(isPresented: $showUnpairConfirm) {
+            DestructiveConfirmSheet(
+                title: "Unpair \(child.name)'s device?",
+                consequences: [
+                    "Apps unlock immediately.",
+                    "Nothing is enforced until a device is paired again.",
+                    "Tasks and history are kept.",
+                ],
+                destructiveLabel: "Unpair Device",
+                onConfirm: {
+                    if let id = child.devices.first?.id {
+                        FamilyStore.removeDevice(id, from: child.id)
+                    }
+                    showUnpairConfirm = false
+                },
+                onCancel: { showUnpairConfirm = false }
+            )
+        }
+        .sheet(isPresented: $showRemoveConfirm) {
+            DestructiveConfirmSheet(
+                title: "Remove \(child.name)'s profile?",
+                consequences: [
+                    "Tasks, history, and settings are deleted.",
+                    "The device is unpaired and apps unlock.",
+                    "This can't be undone.",
+                ],
+                destructiveLabel: "Remove Child",
+                onConfirm: {
+                    FamilyStore.removeChild(child.id)
+                    showRemoveConfirm = false
+                    dismiss()
+                    onRemoved()
+                },
+                onCancel: { showRemoveConfirm = false }
+            )
+        }
+        .sheet(isPresented: $showPairing) {
+            PairingSheet(child: child)
+        }
+    }
+
+    private var childAvatar: some View {
+        Group {
+            if let avatar = child.avatar {
+                Image(uiImage: avatar).resizable().scaledToFill()
+            } else {
+                Circle().fill(child.color)
+                    .overlay(Text(String(child.name.prefix(1))).font(Typography.font(38, weight: .bold)).foregroundStyle(.white))
+            }
+        }
+        .frame(width: 104, height: 104)
+        .clipShape(Circle())
+    }
+
+    // Switches on device state — paired shows the device and a red
+    // Unpair; unpaired shows "No device" and a green Pair, which is what
+    // actually opens the QR/code pairing sheet.
+    @ViewBuilder
+    private var deviceRow: some View {
+        if let device = child.devices.first {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    deviceIconChip("iphone")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(device.name).font(Typography.font(15, weight: .semibold)).foregroundStyle(FormGreen.title)
+                        Text("Paired \(device.pairedOn)").font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                    Spacer(minLength: 0)
+                }
+                Button(role: .destructive) { showUnpairConfirm = true } label: {
+                    Text("Unpair")
+                        .font(Typography.font(14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(EColor.danger)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(16)
+            .background(FormGreen.fieldBg)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    deviceIconChip("iphone.slash")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("No device").font(Typography.font(15, weight: .semibold)).foregroundStyle(FormGreen.title)
+                        Text("Nothing is enforced until a device is paired").font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                    Spacer(minLength: 0)
+                }
+                Button { showPairing = true } label: {
+                    Text("Pair")
+                        .font(Typography.font(14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(FormGreen.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(16)
+            .background(FormGreen.fieldBg)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+    }
+
+    private func deviceIconChip(_ systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(FormGreen.accent)
+            .frame(width: 34, height: 34)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(FormGreen.accentBg))
+    }
+}
+
+// MARK: - Pairing sheet — the parent is the one scanning, same as the real
+// sign-up flow (ParentPairScanStep scans a code the CHILD's device shows;
+// see ChildShowCodeStep's "Waiting for parent to scan…"). This screen
+// stands in for that: it renders the code the child's device would be
+// showing, inside the same dark camera-preview frame + scan line
+// ParentPairScanStep uses — the parent points their camera at it and
+// pairing completes on its own. No code to read aloud, nothing to type,
+// nothing to configure: just the scan.
+//
+// This prototype has no live camera or second device, so "detecting" the
+// code is a short timed stand-in for the real scan rather than an actual
+// decode.
+
+private struct PairingSheet: View {
+    @ObservedObject var child: Child
+    // Only set for a brand-new, not-yet-stored child (Settings' "Add a
+    // child" flow) — see that call site. Fires once pairing completes, so
+    // the caller can add the child to FamilyStore at the moment it's
+    // actually real instead of the moment this sheet opened.
+    var onPaired: (() -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
+
+    private static func todayString() -> String {
+        let f = DateFormatter(); f.dateStyle = .medium
+        return f.string(from: Date())
+    }
+
+    @State private var code = String(UUID().uuidString.prefix(6))
+    @State private var redeemed = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 28) {
+                if redeemed {
+                    redeemedView
+                } else {
+                    Text("Scan \(child.name)'s QR Code")
+                        .font(Typography.font(20, weight: .heavy))
+                        .foregroundStyle(EColor.onSurface)
+                        .multilineTextAlignment(.center)
+                    scanPreview
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+            .navigationTitle("Pair a Device")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(redeemed ? "Done" : "Cancel") { dismiss() } }
+            }
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard !Task.isCancelled, !redeemed else { return }
+            redeem()
+        }
+    }
+
+    private func redeem() {
+        redeemed = true
+        child.devices.append(RegisteredDevice(
+            name: "\(child.name)'s device", model: "iPhone", osVersion: "iOS 17",
+            pairedOn: Self.todayString(), lastActive: "Active now"
+        ))
+        onPaired?()
+    }
+
+    // Same dark camera-preview frame + scan line as the real sign-up
+    // flow's ParentPairScanStep.
+    private var scanPreview: some View {
+        ZStack {
+            OnboardingV2QRImage(string: OnboardingV2PairPayload.encode(code: code), side: 168)
+            OnboardingV2ScanLine(size: 200)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.9), lineWidth: 3)
+                .padding(18)
+        }
+        .frame(width: 240, height: 240)
+        .background(OnboardingV2Theme.Palette.darkScreen)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(alignment: .bottom) {
+            Text("Scanning…")
+                .font(OnboardingV2Theme.Typography.bodyXS)
+                .foregroundStyle(.white.opacity(0.9))
+                .padding(.bottom, 10)
+        }
+    }
+
+    private var redeemedView: some View {
+        VStack(spacing: 14) {
+            Circle().fill(EColor.secondary).frame(width: 64, height: 64)
+                .overlay(Image(systemName: "checkmark").font(.system(size: 26, weight: .bold)).foregroundStyle(.white))
+            Text("\(child.name)'s device is paired")
+                .font(Typography.font(18, weight: .bold))
+                .foregroundStyle(EColor.onSurface)
+            Text("Screen time is now enforced on this device.")
+                .font(Typography.font(13, weight: .regular))
+                .foregroundStyle(EColor.onSurfaceVariant)
+        }
+        .padding(.top, 20)
     }
 }

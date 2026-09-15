@@ -36,6 +36,7 @@ struct ChildReflection {
     var review: String // "pending" | "approved" | "redo"
 }
 
+@MainActor
 final class Child: Identifiable, ObservableObject {
     let id: String
     @Published var name: String
@@ -88,53 +89,65 @@ final class Child: Identifiable, ObservableObject {
         self.needsProtectionSetup = needsProtectionSetup
         self.avatar = avatar
         self.rules = rules.isEmpty ? TaskStore.rules(dailyLimitMin: dailyLimitMin) : rules
-        // Every kid has at least one paired device in real usage — synthesize
-        // a plausible default (their own device, on the app's current min
-        // supported iOS) rather than leaving this empty when a specific
-        // model isn't worth hand-authoring per child.
-        self.devices = devices.isEmpty
-            ? [RegisteredDevice(name: "\(name)'s iPhone", model: "iPhone 14", osVersion: "iOS 17.4.1", pairedOn: "Sep 12, 2025", lastActive: "Active now")]
-            : devices
+        // No auto-synthesized device: an empty array is the honest "not
+        // paired yet" state Settings' Family list and Child sheet need to
+        // be able to show (see ScreenSettings' AddChildSheet, which creates
+        // a profile with no device on purpose — pairing is a separate,
+        // later step). Every seeded demo child below passes its own
+        // `devices:` explicitly to read as already paired.
+        self.devices = devices
     }
 }
 
+@MainActor
 enum FamilyStore {
+    // Same shape the old init()-level fallback used to synthesize —
+    // pulled out here so every seeded demo child below can pass it
+    // explicitly and still read as already paired.
+    private static func demoDevice(_ childName: String) -> [RegisteredDevice] {
+        [RegisteredDevice(name: "\(childName)'s iPhone", model: "iPhone 14", osVersion: "iOS 17.4.1", pairedOn: "Sep 12, 2025", lastActive: "Active now")]
+    }
+
     static var children: [Child] = [
-        Child(id: "liam", name: "Liam", age: 12, dailyLimitMin: 120, color: Color(hex: "2563EB"), status: .unlocked, timeLeft: "1h 30m", timePct: 75, usageTodayMin: 96, subtitle: "Focused today · 3 of 5 tasks done"),
-        Child(id: "maya", name: "Maya", age: 8, dailyLimitMin: 60, color: Color(hex: "3DAA5C"), status: .unlocked, timeLeft: "45m", timePct: 75, usageTodayMin: 22, subtitle: "On bedtime wind-down in 2h"),
-        Child(id: "emma", name: "Emma", age: 6, dailyLimitMin: 30, color: Color(hex: "F97316"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 30, subtitle: "Quiet time · unlocks at 4:00 PM"),
-        Child(id: "noah", name: "Noah", age: 9, dailyLimitMin: 45, color: Color(hex: "7C3AED"), status: .lockedTasks, timeLeft: "0m", timePct: 0, usageTodayMin: 0, tasksDone: 1, tasksTotal: 5, subtitle: "Locked · finish today's tasks to earn screen time"),
+        Child(id: "liam", name: "Liam", age: 12, dailyLimitMin: 120, color: Color(hex: "2563EB"), status: .unlocked, timeLeft: "1h 30m", timePct: 75, usageTodayMin: 96, subtitle: "Focused today · 3 of 5 tasks done", devices: demoDevice("Liam")),
+        Child(id: "maya", name: "Maya", age: 8, dailyLimitMin: 60, color: Color(hex: "3DAA5C"), status: .unlocked, timeLeft: "45m", timePct: 75, usageTodayMin: 22, subtitle: "On bedtime wind-down in 2h", devices: demoDevice("Maya")),
+        Child(id: "emma", name: "Emma", age: 6, dailyLimitMin: 30, color: Color(hex: "F97316"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 30, subtitle: "Quiet time · unlocks at 4:00 PM", devices: demoDevice("Emma")),
+        Child(id: "noah", name: "Noah", age: 9, dailyLimitMin: 45, color: Color(hex: "7C3AED"), status: .lockedTasks, timeLeft: "0m", timePct: 0, usageTodayMin: 0, tasksDone: 1, tasksTotal: 5, subtitle: "Locked · finish today's tasks to earn screen time", devices: demoDevice("Noah")),
         Child(id: "sam", name: "Sam", age: 11, dailyLimitMin: 90, color: Color(hex: "0EA5E9"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 41, subtitle: "Reflection time in progress",
-              reflection: ChildReflection(minutes: 15, writtenText: "I felt frustrated when my time ran out — I was almost done with my level. Tomorrow I'll set a timer 10 minutes early so I can save first.", review: "pending")),
+              reflection: ChildReflection(minutes: 15, writtenText: "I felt frustrated when my time ran out — I was almost done with my level. Tomorrow I'll set a timer 10 minutes early so I can save first.", review: "pending"), devices: demoDevice("Sam")),
         Child(id: "ava", name: "Ava", age: 10, dailyLimitMin: 90, color: downtimeIndigo, status: .downtime, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 0, subtitle: "Downtime · until 7:00 AM",
-              downtimeUntil: "7:00 AM"),
+              downtimeUntil: "7:00 AM", devices: demoDevice("Ava")),
         // All tasks done, but the daily allowance ran out — distinct from
         // Noah (locked, tasks still open) and Emma (locked, schedule-based).
         // Unlocking here should be a deliberate "how much extra time" grant,
         // not a plain confirm — see ScreenProfile's grantTimeSheet.
-        Child(id: "zoe", name: "Zoe", age: 9, dailyLimitMin: 75, color: Color(hex: "EC4899"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 75, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · screen time used up for today"),
+        Child(id: "zoe", name: "Zoe", age: 9, dailyLimitMin: 75, color: Color(hex: "EC4899"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 75, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · screen time used up for today", devices: demoDevice("Zoe")),
         // Seeded already .pending so opening this profile shows
         // approvalBanner (ScreenProfile) immediately — a way to see the
         // parent-approval popup without first switching to Kid mode and
         // tapping "Parent controls" there to generate a real request.
-        Child(id: "jake", name: "Jake", age: 13, dailyLimitMin: 90, color: Color(hex: "0891B2"), status: .unlocked, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 36, subtitle: "Requested Parent Controls access", parentApprovalStatus: .pending),
+        Child(id: "jake", name: "Jake", age: 13, dailyLimitMin: 90, color: Color(hex: "0891B2"), status: .unlocked, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 36, subtitle: "Requested Parent Controls access", parentApprovalStatus: .pending, devices: demoDevice("Jake")),
         // Empty profile — no tasks assigned yet, for seeing what a brand-new
         // kid's profile looks like before a parent adds anything.
-        Child(id: "alex", name: "Alex", age: 7, dailyLimitMin: 60, color: Color(hex: "6366F1"), status: .unlocked, timeLeft: "1h 0m", timePct: 100, usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet"),
+        Child(id: "alex", name: "Alex", age: 7, dailyLimitMin: 60, color: Color(hex: "6366F1"), status: .unlocked, timeLeft: "1h 0m", timePct: 100, usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet", devices: demoDevice("Alex")),
         // Empty profile — for previewing the "free trial exhausted" upgrade
         // nudge in place of the normal tasks section.
-        Child(id: "mia", name: "Mia", age: 6, dailyLimitMin: 45, color: Color(hex: "14B8A6"), status: .unlocked, timeLeft: "45m", timePct: 100, usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "Free trial ended", trialExhausted: true),
+        Child(id: "mia", name: "Mia", age: 6, dailyLimitMin: 45, color: Color(hex: "14B8A6"), status: .unlocked, timeLeft: "45m", timePct: 100, usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "Free trial ended", devices: demoDevice("Mia"), trialExhausted: true),
         // Unlocked with time still left and every task done — unlike Zoe
         // (same task state, but already locked with the allowance used up),
         // this one starts in the "everything's fine" state so both
         // directions of the Lock/Unlock button are easy to try: Lock locks
         // instantly, then Unlock (tasks already done) opens the Grant Time
         // sheet rather than the plain "unlock anyway" confirm.
-        Child(id: "ben", name: "Ben", age: 10, dailyLimitMin: 90, color: Color(hex: "D97706"), status: .unlocked, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 20, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · 1h 15m left today"),
+        Child(id: "ben", name: "Ben", age: 10, dailyLimitMin: 90, color: Color(hex: "D97706"), status: .unlocked, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 20, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · 1h 15m left today", devices: demoDevice("Ben")),
         // Never finished the tamper-proofing step from onboarding — for
         // previewing the "set a Screen Time PIN or enroll in Family
         // Sharing" nudge (see ScreenProfile's ProtectionSetupNeededCard).
-        Child(id: "leo", name: "Leo", age: 11, dailyLimitMin: 90, color: Color(hex: "059669"), status: .unlocked, timeLeft: "1h 30m", timePct: 100, usageTodayMin: 9, tasksDone: 2, tasksTotal: 4, subtitle: "Screen Time PIN not set up yet", needsProtectionSetup: true),
+        // Also the demo for "every task is submitted, nothing outstanding" —
+        // status .lockedTasks with tasksDone == tasksTotal (see
+        // TaskStore.generate's "leo" branch) previews headerCard's Approve
+        // All button in place of the manual lock/unlock slider.
+        Child(id: "leo", name: "Leo", age: 11, dailyLimitMin: 90, color: Color(hex: "059669"), status: .lockedTasks, timeLeft: "1h 30m", timePct: 100, usageTodayMin: 9, tasksDone: 6, tasksTotal: 6, subtitle: "Locked · waiting for your review", devices: demoDevice("Leo"), needsProtectionSetup: true),
     ]
 
     static func child(_ id: String) -> Child { children.first { $0.id == id } ?? children[0] }
@@ -147,7 +160,9 @@ enum FamilyStore {
         child(childId).devices.removeAll { $0.id == deviceId }
     }
 
-    private static let childColorPalette: [Color] = [
+    // Not private any more — Settings' Child sheet needs the same palette
+    // for its colour-swatch row (current colour ringed, tap to change).
+    static let childColorPalette: [Color] = [
         Color(hex: "2563EB"), Color(hex: "3DAA5C"), Color(hex: "F97316"), Color(hex: "7C3AED"),
         Color(hex: "0EA5E9"), Color(hex: "EC4899"), Color(hex: "0891B2"), Color(hex: "6366F1"),
     ]

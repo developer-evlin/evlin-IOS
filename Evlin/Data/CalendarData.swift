@@ -37,6 +37,16 @@ struct CalEvent: Identifiable {
     // until a parent approves it — the calendar's actual link to
     // enforcement, not just a to-do list. Most tasks aren't gating.
     var gatesUnlock: Bool = false
+    // The real ChildTask (TaskStore.tasks(for:)) this calendar entry
+    // stands for, when one exists — the calendar's own task list and the
+    // profile's task list are two separate mock stores in this prototype,
+    // so title-matching between them is a guess; this is the actual,
+    // deterministic link. Tapping a task with this set jumps straight into
+    // TaskReviewDeckView at that exact task (see ScreenCalendar's
+    // onSelect) instead of landing on the plain profile. Only the seeded
+    // demo tasks below set it — a task a parent adds through the "+" flow
+    // has no real counterpart to jump to, so it falls back to the profile.
+    var linkedTaskId: Int? = nil
 }
 
 // A day-in-context view of an event: `day` is which day it's being shown as
@@ -54,17 +64,24 @@ struct CalDayEvent: Identifiable {
 }
 
 enum CalendarData {
-    // No abstract "Family" entity on this calendar — every event belongs to
-    // an actual person's own profile, the parent's included. The id stays
-    // "family" (existing events reference it as personId) but it now
-    // displays as the parent's own profile, same name ScreenSettings' demo
-    // parent profile uses, rather than a group label nobody's an instance of.
+    // Every real lane is an actual person's own profile, the parent's
+    // included — "family" is the parent's own id (same "Alex Carter"
+    // identity ScreenSettings' account header uses), not a group label.
+    // A day-timeline lane exists for each of these, in this order.
     static let people: [FamilyPerson] = [
         FamilyPerson(id: "family", name: "Alex Carter", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE")),
         FamilyPerson(id: "liam", name: "Liam", color: Color(hex: "2563EB"), bg: Color(hex: "DBEAFE")),
         FamilyPerson(id: "maya", name: "Maya", color: Color(hex: "16A34A"), bg: Color(hex: "DCFCE7")),
         FamilyPerson(id: "emma", name: "Emma", color: Color(hex: "F97316"), bg: Color(hex: "FFEDD5")),
     ]
+
+    // The one abstract, non-lane entity: "everyone." An event tagged with
+    // this id (Family Lunch, Family Dinner) isn't any single person's —
+    // it renders as its own full-width block on the grid instead of
+    // competing for a lane, and it's never a column a parent can dim.
+    // Kept out of `people` on purpose so it can never leak into a lane
+    // list; still offered as a "For" option when creating an event.
+    static let everyone = FamilyPerson(id: "everyone", name: "Family", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))
 
     // Mock "data day" — matches Evlin_Parent_view/index.html's DATA_MONTH/
     // DATA_YEAR/TODAY_DAY: the demo events all live on this one fixed day,
@@ -100,14 +117,15 @@ enum CalendarData {
 
     static let eventsByDay: [Int: [CalEvent]] = [
         12: [
+            CalEvent(personId: "family", title: "Work call", emoji: "💻", start: "09:00 AM", end: "10:00 AM", category: "Activity", location: "", note: "", repeats: weekdayCodes),
             CalEvent(personId: "liam", title: "Clean Table", emoji: "🧹", start: "08:00 AM", end: "08:30 AM", category: "Chore", location: "Kitchen", note: "Wipe down the kitchen table.", repeats: allDayCodes),
             CalEvent(personId: "maya", title: "Piano Practice", emoji: "🎹", start: "10:00 AM", end: "11:30 AM", category: "Lesson", location: "Living Room", note: "Work on the new piece.", repeats: "thu"),
-            CalEvent(personId: "family", title: "Family Lunch", emoji: "🍽️", start: "12:00 PM", end: "01:00 PM", category: "Family", location: "Dining Room", note: "No devices at the table.", repeats: "none"),
+            CalEvent(personId: "everyone", title: "Family Lunch", emoji: "🍽️", start: "12:00 PM", end: "01:00 PM", category: "Family", location: "Dining Room", note: "No devices at the table.", repeats: "none"),
             CalEvent(personId: "liam", title: "Math Practice", emoji: "📐", start: "01:30 PM", end: "02:30 PM", category: "Study", location: "Study Room", note: "Chapter 7 exercises.", repeats: weekdayCodes),
             CalEvent(personId: "emma", title: "Reading Time", emoji: "📚", start: "02:00 PM", end: "03:00 PM", category: "Study", location: "Bedroom", note: "Choose one book.", repeats: allDayCodes),
             CalEvent(personId: "maya", title: "Art Class", emoji: "🎨", start: "03:30 PM", end: "05:00 PM", category: "Lesson", location: "Art Studio", note: "Bring watercolor set.", repeats: "thu"),
             CalEvent(personId: "liam", title: "Soccer Practice", emoji: "⚽", start: "04:00 PM", end: "05:30 PM", category: "Sport", location: "City Park", note: "Don't forget shin guards.", repeats: "thu"),
-            CalEvent(personId: "family", title: "Family Dinner", emoji: "🍴", start: "06:00 PM", end: "07:00 PM", category: "Family", location: "Dining Room", note: "Everyone helps set the table.", repeats: allDayCodes),
+            CalEvent(personId: "everyone", title: "Family Dinner", emoji: "🍴", start: "06:00 PM", end: "07:00 PM", category: "Family", location: "Dining Room", note: "Everyone helps set the table.", repeats: allDayCodes),
             CalEvent(personId: "emma", title: "Story Time", emoji: "🌙", start: "07:30 PM", end: "08:30 PM", category: "Routine", location: "Bedroom", note: "Two stories max.", repeats: allDayCodes),
 
             // Tasks — same store, category "Task", told apart on the
@@ -116,12 +134,12 @@ enum CalendarData {
             // start/end on an anytime task is a nominal placeholder — it's
             // excluded from grid layout entirely, so the value itself is
             // never shown.
-            CalEvent(personId: "liam", title: "Make your bed", emoji: "🛏️", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done),
-            CalEvent(personId: "liam", title: "Clean your room", emoji: "🧹", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .submitted),
-            CalEvent(personId: "liam", title: "Homework", emoji: "📓", start: "05:00 PM", end: "05:30 PM", category: "Task", location: "", note: "Finish the worksheet.", repeats: "none", taskState: .pending, gatesUnlock: true),
-            CalEvent(personId: "maya", title: "Feed the dog", emoji: "🐶", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done),
-            CalEvent(personId: "maya", title: "Practice piano", emoji: "🎹", start: "07:00 PM", end: "07:30 PM", category: "Task", location: "", note: "15 minutes — scales, then a song.", repeats: "none", taskState: .pending, gatesUnlock: true),
-            CalEvent(personId: "emma", title: "Reading", emoji: "📚", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .pending, gatesUnlock: true),
+            CalEvent(personId: "liam", title: "Make your bed", emoji: "🛏️", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done, linkedTaskId: 1),
+            CalEvent(personId: "liam", title: "Clean your room", emoji: "🧹", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .submitted, linkedTaskId: 2),
+            CalEvent(personId: "liam", title: "Homework", emoji: "📓", start: "05:00 PM", end: "05:30 PM", category: "Task", location: "", note: "Finish the worksheet.", repeats: "none", taskState: .pending, gatesUnlock: true, linkedTaskId: 3),
+            CalEvent(personId: "maya", title: "Feed the dog", emoji: "🐶", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done, linkedTaskId: 1),
+            CalEvent(personId: "maya", title: "Practice piano", emoji: "🎹", start: "07:00 PM", end: "07:30 PM", category: "Task", location: "", note: "15 minutes — scales, then a song.", repeats: "none", taskState: .pending, gatesUnlock: true, linkedTaskId: 3),
+            CalEvent(personId: "emma", title: "Reading", emoji: "📚", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .pending, gatesUnlock: true, linkedTaskId: 5),
         ],
     ]
 
@@ -130,7 +148,8 @@ enum CalendarData {
     ]
 
     static func person(_ id: String) -> FamilyPerson {
-        people.first { $0.id == id } ?? people[0]
+        if id == everyone.id { return everyone }
+        return people.first { $0.id == id } ?? people[0]
     }
 
     static func minutesSinceMidnight(_ str: String) -> Int {

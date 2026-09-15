@@ -43,7 +43,10 @@ struct ScreenLibrary: View {
                 .padding(.top, 8)
                 .padding(.bottom, 100)
             }
-            .background(EColor.surface)
+            // Plain white — matches Home/Calendar/Chat/Settings' root
+            // ground; EColor.surface's faint off-white cast was the one
+            // tab reading as a slightly different shade.
+            .background(Color.white)
             .navigationTitle("Library")
             .navigationBarTitleDisplayMode(.large)
         }

@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		075C5A2B413254BC2F9B2728 /* DataSecurity.json in Resources */ = {isa = PBXBuildFile; fileRef = E372C2D464BC26D17E9DD43E /* DataSecurity.json */; };
 		07856DCD11AE81A41F73CFC4 /* AppCatalogData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06EDC45D88CB9E54104E5E80 /* AppCatalogData.swift */; };
-		13CD2755EC5AFCAB33830836 /* ComicViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44B83D7E8795D19DE2A8EC42 /* ComicViewerView.swift */; };
 		16524B858CD13115286832FF /* BillingData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 315F7E412521D00D78CFF094 /* BillingData.swift */; };
 		1CAC7371C19EB0230B7CCB3A /* ScreenCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFF0CA102C1CCA42653C334 /* ScreenCalendar.swift */; };
 		1F33184BFBCF1E8D9D149BC8 /* ParentApprovalWaitingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818BC70482046C9B2A75F3A3 /* ParentApprovalWaitingView.swift */; };
@@ -18,6 +17,7 @@
 		2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8069A78F21788AAE2D1285B1 /* FamilyData.swift */; };
 		3EF322A41505C157414E37A0 /* Baloo2-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3C1EA5CA2EF749300A9511A0 /* Baloo2-Bold.ttf */; };
 		3FEF485A64930BED9F97B5C7 /* ScreenHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 752627A3153FA4BAC917E81A /* ScreenHome.swift */; };
+		0A10E6705A75938779DE3624 /* ParentAdaptive.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3DC0153E016AB0A78A53A8 /* ParentAdaptive.swift */; };
 		47E5A82E81FB42FAF0817531 /* OnboardingV2ChildSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818AC7F90F32DFC21EF0ABCD /* OnboardingV2ChildSteps.swift */; };
 		4AACFAADF8DEB0286BD9011F /* ScreenTabletSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */; };
 		4B4DA3E1DA59F8F34BCE4DDF /* SettingsMemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4C498EADEBE897F3057604C /* SettingsMemoryView.swift */; };
@@ -29,8 +29,9 @@
 		604D927F992238271CCDAF57 /* ScreenSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EAE71E90939074687633EC /* ScreenSettings.swift */; };
 		63EC9119F6DAA91C32857517 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFDCFF95587B9B1C93392CB9 /* Theme.swift */; };
 		678A0CABA7ED8CC1E3DCB472 /* PlusJakartaSans-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = E412DA621462B4F83B57FF73 /* PlusJakartaSans-Medium.ttf */; };
+		6CAFFCB67D6230D6E89D3E1B /* ScreenTabletCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08CD3A0227B34A839CB70D91 /* ScreenTabletCalendar.swift */; };
+		F73DCAA9E92717E6FF1FC1BD /* KidAdaptive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E7DDE4618BB0755EDC5810A /* KidAdaptive.swift */; };
 		6EC57528204E0DBB3F3CBA5D /* AddFormComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52A3A4F008D897EF73D1585D /* AddFormComponents.swift */; };
-		747A3974B9EC1F202ED70584 /* ScreenSkillMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40B3B23D94D1FAA164BB97AB /* ScreenSkillMap.swift */; };
 		772ABBF2DA791D6E54546BC6 /* ScreenTabletLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */; };
 		77B012F945BCE8A13D70F9EC /* TabletData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CDCCC05BBAE584A4035390 /* TabletData.swift */; };
 		7B2C1B749F7F3D3AAF4887F8 /* Baloo2-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B6AD197EC03506109DFC3815 /* Baloo2-Medium.ttf */; };
@@ -70,6 +71,8 @@
 /* Begin PBXFileReference section */
 		01B8F0802B5C16AE690C7954 /* Alerts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Alerts.json; sourceTree = "<group>"; };
 		06EDC45D88CB9E54104E5E80 /* AppCatalogData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCatalogData.swift; sourceTree = "<group>"; };
+		08CD3A0227B34A839CB70D91 /* ScreenTabletCalendar.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScreenTabletCalendar.swift; sourceTree = "<group>"; };
+		2E7DDE4618BB0755EDC5810A /* KidAdaptive.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KidAdaptive.swift; sourceTree = "<group>"; };
 		09012159A0D8B7D4F8CCDF34 /* TaskData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskData.swift; sourceTree = "<group>"; };
 		1231BBF6CB90F4A9ABFC7634 /* OnboardingV2Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Components.swift; sourceTree = "<group>"; };
 		15DFC08E5C865CAB8A51C20F /* OnboardingV2Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Theme.swift; sourceTree = "<group>"; };
@@ -80,15 +83,14 @@
 		315F7E412521D00D78CFF094 /* BillingData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillingData.swift; sourceTree = "<group>"; };
 		35BFBEFD1BE687497AFA1F11 /* NotificationsData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsData.swift; sourceTree = "<group>"; };
 		3C1EA5CA2EF749300A9511A0 /* Baloo2-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Baloo2-Bold.ttf"; sourceTree = "<group>"; };
-		40B3B23D94D1FAA164BB97AB /* ScreenSkillMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenSkillMap.swift; sourceTree = "<group>"; };
 		44311D15F27B98B2B7978988 /* Evlin.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Evlin.entitlements; sourceTree = "<group>"; };
-		44B83D7E8795D19DE2A8EC42 /* ComicViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComicViewerView.swift; sourceTree = "<group>"; };
 		49E21D3FF95D075AF53A0C55 /* OnboardingV2Coordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Coordinator.swift; sourceTree = "<group>"; };
 		4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LessonReaderView.swift; sourceTree = "<group>"; };
 		52A3A4F008D897EF73D1585D /* AddFormComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddFormComponents.swift; sourceTree = "<group>"; };
 		68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletLibrary.swift; sourceTree = "<group>"; };
 		7235C9F06F3B36BEC827AACB /* ScreenTimePINVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimePINVideoView.swift; sourceTree = "<group>"; };
 		752627A3153FA4BAC917E81A /* ScreenHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenHome.swift; sourceTree = "<group>"; };
+		CA3DC0153E016AB0A78A53A8 /* ParentAdaptive.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ParentAdaptive.swift; sourceTree = "<group>"; };
 		7794A43F9156EA4254043CA3 /* CalendarData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarData.swift; sourceTree = "<group>"; };
 		8069A78F21788AAE2D1285B1 /* FamilyData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FamilyData.swift; sourceTree = "<group>"; };
 		818AC7F90F32DFC21EF0ABCD /* OnboardingV2ChildSteps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2ChildSteps.swift; sourceTree = "<group>"; };
@@ -272,14 +274,14 @@
 		AECF209188E4A9CA00140CDC /* Tablet */ = {
 			isa = PBXGroup;
 			children = (
-				44B83D7E8795D19DE2A8EC42 /* ComicViewerView.swift */,
 				818BC70482046C9B2A75F3A3 /* ParentApprovalWaitingView.swift */,
-				40B3B23D94D1FAA164BB97AB /* ScreenSkillMap.swift */,
 				EA6BD1B156CBB84E08FAA023 /* ScreenTabletHome.swift */,
 				68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */,
 				EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */,
 				EEB765EA0B6A70CD8AC83D0E /* TabletRootView.swift */,
 				90FD88DD9F5911F37061E2AB /* TaskDetailView.swift */,
+				08CD3A0227B34A839CB70D91 /* ScreenTabletCalendar.swift */,
+				2E7DDE4618BB0755EDC5810A /* KidAdaptive.swift */,
 			);
 			path = Tablet;
 			sourceTree = "<group>";
@@ -294,6 +296,7 @@
 				EFFF0CA102C1CCA42653C334 /* ScreenCalendar.swift */,
 				B126EFB0851C847E22CA77C7 /* ScreenChat.swift */,
 				752627A3153FA4BAC917E81A /* ScreenHome.swift */,
+				CA3DC0153E016AB0A78A53A8 /* ParentAdaptive.swift */,
 				E2550BFA96ADB16E4610FB30 /* ScreenLibrary.swift */,
 				96621E11FF6F30CF0A987182 /* ScreenProfile.swift */,
 				B1EAE71E90939074687633EC /* ScreenSettings.swift */,
@@ -402,7 +405,6 @@
 				16524B858CD13115286832FF /* BillingData.swift in Sources */,
 				55D8223509D4076490266270 /* CalendarData.swift in Sources */,
 				EA589D35A0A1922B5AE85ED2 /* ComicReaderView.swift in Sources */,
-				13CD2755EC5AFCAB33830836 /* ComicViewerView.swift in Sources */,
 				93DD2562F31193DC22691A81 /* Components.swift in Sources */,
 				8981DFDD4250E877E419BE29 /* EvlinApp.swift in Sources */,
 				2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */,
@@ -421,10 +423,10 @@
 				1CAC7371C19EB0230B7CCB3A /* ScreenCalendar.swift in Sources */,
 				5B274B0071D8E0E721100258 /* ScreenChat.swift in Sources */,
 				3FEF485A64930BED9F97B5C7 /* ScreenHome.swift in Sources */,
+				0A10E6705A75938779DE3624 /* ParentAdaptive.swift in Sources */,
 				DF3F65290A9265772F1A46B0 /* ScreenLibrary.swift in Sources */,
 				5A0B892A3BA07780A2C41BBD /* ScreenProfile.swift in Sources */,
 				604D927F992238271CCDAF57 /* ScreenSettings.swift in Sources */,
-				747A3974B9EC1F202ED70584 /* ScreenSkillMap.swift in Sources */,
 				BD538B4E14DDD3CB0BF7C6D3 /* ScreenTabletHome.swift in Sources */,
 				772ABBF2DA791D6E54546BC6 /* ScreenTabletLibrary.swift in Sources */,
 				4AACFAADF8DEB0286BD9011F /* ScreenTabletSettings.swift in Sources */,
@@ -438,6 +440,8 @@
 				AE9953D62A105427AFE39AF9 /* TaskDetailView.swift in Sources */,
 				9C9190CC48E4BD8845C27F9E /* TaskReviewDeck.swift in Sources */,
 				63EC9119F6DAA91C32857517 /* Theme.swift in Sources */,
+				6CAFFCB67D6230D6E89D3E1B /* ScreenTabletCalendar.swift in Sources */,
+				F73DCAA9E92717E6FF1FC1BD /* KidAdaptive.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

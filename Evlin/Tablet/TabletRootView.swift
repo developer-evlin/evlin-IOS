@@ -48,8 +48,8 @@ struct TabletRootView: View {
                     ScreenTabletHome(tasks: $tasks, onSwitchMode: onSwitchMode, onSelectTask: { selectedTask = $0 })
                         .tabItem { Label("Task", systemImage: "checkmark.circle.fill") }
                         .tag(0)
-                    ScreenRing(tasks: tasks, onSelectTask: { selectedTask = $0 })
-                        .tabItem { Label("Ring", systemImage: "chart.pie.fill") }
+                    ScreenTabletCalendar()
+                        .tabItem { Label("Calendar", systemImage: "calendar") }
                         .tag(1)
                     ScreenTabletLibrary()
                         .tabItem { Label("Library", systemImage: "book.closed.fill") }
@@ -133,6 +133,12 @@ private struct TaskDayIntroOverlay: View {
     var onContinue: () -> Void
 
     @State private var appeared = false
+    // A full-bleed splash-style overlay, not a pushed screen — without a
+    // cap its icon/copy/CTA just spread across the full iPad width, most
+    // visibly as an edge-to-edge "Let's go!" button that reads like a
+    // stretched phone screen rather than an iPad-sized moment.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
     var body: some View {
         ZStack {
@@ -142,9 +148,9 @@ private struct TaskDayIntroOverlay: View {
                 Spacer()
 
                 ZStack {
-                    Circle().fill(KidTheme.greenTint).frame(width: 132, height: 132)
+                    Circle().fill(KidTheme.greenTint).frame(width: kid.of(132, 168), height: kid.of(132, 168))
                     Image(systemName: "sun.max.fill")
-                        .font(.system(size: 56))
+                        .font(.system(size: kid.of(56, 72)))
                         .foregroundStyle(KidTheme.greenDeep)
                 }
                 .scaleEffect(appeared ? 1 : 0.6)
@@ -152,13 +158,13 @@ private struct TaskDayIntroOverlay: View {
 
                 VStack(spacing: 8) {
                     Text("Your tasks for today")
-                        .font(Typography.display(28, weight: .heavy))
+                        .font(Typography.display(kid.of(28, 34), weight: .heavy))
                         .foregroundStyle(KidTheme.ink)
                         .multilineTextAlignment(.center)
                     Text(taskCount == 1
                          ? "You've got 1 thing to knock out, \(childName)."
                          : "You've got \(taskCount) things to knock out, \(childName).")
-                        .font(Typography.font(15, weight: .semibold))
+                        .font(Typography.font(kid.of(15, 17), weight: .semibold))
                         .foregroundStyle(KidTheme.inkSoft)
                         .multilineTextAlignment(.center)
                 }
@@ -189,9 +195,11 @@ private struct TaskDayIntroOverlay: View {
                 }
                 .buttonStyle(.plain)
                 .opacity(appeared ? 1 : 0)
+                .frame(maxWidth: 420)
             }
             .padding(.horizontal, 32)
             .padding(.bottom, 40)
+            .kidContentColumn(kid.isRegular ? 560 : nil)
         }
         .onAppear {
             withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) { appeared = true }
@@ -211,6 +219,8 @@ private struct TaskCompletionOverlay: View {
     var onContinue: () -> Void
 
     @State private var appeared = false
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
     private var timeLabel: String {
         let h = limitMin / 60, m = limitMin % 60
@@ -227,9 +237,9 @@ private struct TaskCompletionOverlay: View {
                 Spacer()
 
                 ZStack {
-                    Circle().fill(KidTheme.greenTint).frame(width: 132, height: 132)
+                    Circle().fill(KidTheme.greenTint).frame(width: kid.of(132, 168), height: kid.of(132, 168))
                     Image(systemName: stage == .congrats ? "star.fill" : "clock.fill")
-                        .font(.system(size: 56))
+                        .font(.system(size: kid.of(56, 72)))
                         .foregroundStyle(KidTheme.greenDeep)
                 }
                 .scaleEffect(appeared ? 1 : 0.4)
@@ -237,13 +247,13 @@ private struct TaskCompletionOverlay: View {
 
                 VStack(spacing: 8) {
                     Text(stage == .congrats ? "Great job, \(childName)! 🎉" : "You unlocked \(timeLabel)!")
-                        .font(Typography.display(28, weight: .heavy))
+                        .font(Typography.display(kid.of(28, 34), weight: .heavy))
                         .foregroundStyle(KidTheme.ink)
                         .multilineTextAlignment(.center)
                     Text(stage == .congrats
                          ? "You finished every task today. That's the whole list!"
                          : "That's your play time for today — go have fun.")
-                        .font(Typography.font(15, weight: .semibold))
+                        .font(Typography.font(kid.of(15, 17), weight: .semibold))
                         .foregroundStyle(KidTheme.inkSoft)
                         .multilineTextAlignment(.center)
                 }
@@ -273,9 +283,11 @@ private struct TaskCompletionOverlay: View {
                 }
                 .buttonStyle(.plain)
                 .opacity(appeared ? 1 : 0)
+                .frame(maxWidth: 420)
             }
             .padding(.horizontal, 32)
             .padding(.bottom, 40)
+            .kidContentColumn(kid.isRegular ? 560 : nil)
         }
         // Re-fires the entrance beat on every stage change (congrats ->
         // reveal is a whole new ZStack instance since `stage` swaps the
@@ -296,6 +308,9 @@ private struct PlayTimeTopBar: View {
     var done: Int
     var total: Int
     var onBreak: Bool = false
+
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
     private var frac: Double {
         locked ? 0 : max(0, min(1, minutesMax > 0 ? Double(minutesLeft) / Double(minutesMax) : 0))
@@ -337,5 +352,6 @@ private struct PlayTimeTopBar: View {
         }
         .padding(.horizontal, 22)
         .padding(.top, 22)
+        .kidContentColumn(kid.contentMaxWidth)
     }
 }

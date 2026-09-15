@@ -60,7 +60,34 @@ struct ChildRule: Identifiable {
 // Per-child task lists, ported from screen-profile.jsx's hardcoded set
 // (originally only Liam's — mirrored across kids so every profile has content).
 enum TaskStore {
+    // Generated once per child, then cached — ScreenProfile and a direct
+    // notification-tap-to-TaskReviewDeckView route (see ScreenHome) both
+    // need to land on the *same* live task list so an approval made from
+    // one path is still there if the other path opens afterward. Without
+    // this, each fresh call to the old plain generator handed back a brand
+    // new array and any edit made through one route silently vanished the
+    // moment the other route read `tasks(for:)` again.
+    private static var cache: [String: [ChildTask]] = [:]
+
     static func tasks(for childId: String) -> [ChildTask] {
+        if let cached = cache[childId] { return cached }
+        let generated = generate(for: childId)
+        cache[childId] = generated
+        return generated
+    }
+
+    // A real, always-up-to-date Binding into the cache — lets any view read
+    // and write the same live array without needing to own a @State copy
+    // of its own (which is what used to make ScreenProfile the only place
+    // that could ever see or make task edits).
+    static func binding(for childId: String) -> Binding<[ChildTask]> {
+        Binding(
+            get: { tasks(for: childId) },
+            set: { cache[childId] = $0 }
+        )
+    }
+
+    private static func generate(for childId: String) -> [ChildTask] {
         if childId == "alex" {
             return []
         }
@@ -71,6 +98,23 @@ enum TaskStore {
                 ChildTask(id: 3, title: "Feed the Cat", state: .done, category: "Chore", description: "Fill the food and water bowls.", note: "Fed and watered.", submittedAt: "6:15 PM", dueLabel: "Today, 6:30 PM", repeats: "sun,mon,tue,wed,thu,fri,sat"),
                 ChildTask(id: 4, title: "Read for 20 minutes", state: .done, category: "Reading", description: "Any book, 20+ minutes.", note: "Finished a whole chapter.", submittedAt: "7:40 PM", dueLabel: "Today, 8:00 PM"),
                 ChildTask(id: 5, title: "Practice Piano", state: .done, category: "Chore", description: "15 minutes, scales then one song.", note: "Did scales and Ode to Joy.", submittedAt: "5:30 PM", dueLabel: "Today, 6:00 PM"),
+            ]
+        }
+        // Every task submitted — 4 in normal review, 1 asking to bypass —
+        // and nothing outstanding or overdue, so headerCard's Approve All
+        // button (see ScreenProfile.allTasksAwaitingReview) replaces the
+        // manual lock/unlock slider. A dedicated branch rather than
+        // folding this into the generic default below, which Noah and
+        // Mia also fall through — they still have real outstanding tasks
+        // and shouldn't pick up Leo's all-submitted scenario.
+        if childId == "leo" {
+            return [
+                ChildTask(id: 1, title: "Clean Table", state: .review, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),
+                ChildTask(id: 2, title: "Science Project", state: .review, category: "Homework", description: "Finish the volcano diagram, page 14. Photo when done.", note: "Took longer than expected.", submittedAt: "3:18 PM", dueLabel: "Today, 4:00 PM", photoCount: 1),
+                ChildTask(id: 3, title: "Math Practice", state: .review, category: "Homework", description: "Questions 1–8, page 24. Photo when done.", note: "Did all 8, #6 was tricky.", submittedAt: "5:40 PM", dueLabel: "Today, 6:00 PM", photoCount: 3, repeats: "mon,tue,wed,thu,fri"),
+                ChildTask(id: 4, title: "Walk Dog", state: .review, category: "Chore", description: "Walk around the block, 15+ minutes.", note: "Walked him around the block.", submittedAt: "5:20 PM", dueLabel: "Today, 5:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),
+                ChildTask(id: 6, title: "Reading Essay", state: .review, category: "Homework", description: "300-word essay on this week's chapter.", note: "Kept it short like you said.", submittedAt: "4:12 PM", dueLabel: "Today, 5:00 PM"),
+                ChildTask(id: 5, title: "Read for 20 minutes", state: .bypass, category: "Reading", description: "Any book, 20+ minutes.", note: "Had football practice, home too late. Can I double up tomorrow?", submittedAt: "7:42 PM", dueLabel: "Today, 8:00 PM", hasVoiceNote: true),
             ]
         }
         if childId == "zoe" {

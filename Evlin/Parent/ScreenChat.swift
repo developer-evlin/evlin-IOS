@@ -56,66 +56,107 @@ private struct ComposerHeightKey: PreferenceKey {
 // overflowing horizontally.
 private let bubbleMaxWidth: CGFloat = 300
 
-// Renders a message body, splitting out ```-fenced code blocks into their
-// own monospaced, horizontally-scrollable strip so a long code line scrolls
-// sideways within its own box instead of stretching the chat bubble (or the
-// screen) wide.
+// Renders a message body: ```-fenced code blocks split into their own
+// monospaced, horizontally-scrollable strip so a long code line scrolls
+// sideways within its own box instead of stretching the row wide, and
+// everything else run through a small line-based block parser — headings
+// (#/##) and bullet lists (-/*) get their own treatment, plain lines are
+// paragraphs, and every line gets inline **bold** via
+// AttributedString(markdown:). Paragraph/bullet text sets no font of its
+// own, so it inherits whatever the caller applies to MessageContent
+// itself (the user bubble's tighter style, or the assistant's full-width
+// body type) — headings always render larger regardless, since they need
+// to read as structurally different no matter the body size in use.
 private struct MessageContent: View {
     var text: String
 
     var body: some View {
         let parts = text.components(separatedBy: "```")
-        if parts.count > 1 {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(parts.enumerated()), id: \.offset) { i, part in
-                    let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.isEmpty {
-                        EmptyView()
-                    } else if i % 2 == 1 {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            Text(trimmed)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.white)
-                                .padding(10)
-                        }
-                        .background(Color.black.opacity(0.85))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    } else {
-                        Text(trimmed)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { i, part in
+                let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    EmptyView()
+                } else if i % 2 == 1 {
+                    codeBlock(trimmed)
+                } else {
+                    markdownLines(trimmed)
                 }
             }
-        } else {
-            Text(text)
-                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func codeBlock(_ code: String) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(code)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(10)
+        }
+        .background(Color.black.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func markdownLines(_ block: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(block.components(separatedBy: "\n").enumerated()), id: \.offset) { _, raw in
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty {
+                    Color.clear.frame(height: 4)
+                } else if line.hasPrefix("## ") {
+                    inline(String(line.dropFirst(3))).font(Typography.font(17, weight: .bold)).padding(.top, 2)
+                } else if line.hasPrefix("# ") {
+                    inline(String(line.dropFirst(2))).font(Typography.font(20, weight: .heavy)).padding(.top, 2)
+                } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle().fill(EColor.onSurfaceVariant).frame(width: 4, height: 4).padding(.top, 9)
+                        inline(String(line.dropFirst(2)))
+                    }
+                } else {
+                    inline(line)
+                }
+            }
+        }
+    }
+
+    // lineSpacing lives here, scoped to each line, rather than as a
+    // blanket modifier the caller applies to the whole message — SwiftUI
+    // counts .lineSpacing() as trailing space after the *last* line too,
+    // not just between lines, so applying it once around an entire
+    // multi-paragraph reply was inflating the gap after assistant
+    // messages specifically (the ones using it) well past the 24pt turn
+    // spacing, while the plain user bubble looked normal beside it.
+    private func inline(_ s: String) -> some View {
+        let t = (try? AttributedString(markdown: s)).map(Text.init) ?? Text(s)
+        return t.lineSpacing(3).fixedSize(horizontal: false, vertical: true)
     }
 }
 
 // Three dots that bounce in a staggered loop while a response is pending.
+// No card any more — matches the assistant's own messages, which now sit
+// plain on the chat background with nothing drawn around them. A soft
+// scale+opacity pulse (not the old boxed bounce) reads as "thinking"
+// rather than "loading," which is the more modern idiom this kind of
+// indicator uses elsewhere now.
 private struct TypingIndicator: View {
-    @State private var bounce = false
+    @State private var pulse = false
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { i in
                 Circle()
-                    .fill(EColor.onSurfaceVariant)
-                    .frame(width: 6, height: 6)
-                    .offset(y: bounce ? -3 : 0)
+                    .fill(EColor.primary)
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(pulse ? 1 : 0.5)
+                    .opacity(pulse ? 1 : 0.3)
                     .animation(
-                        .easeInOut(duration: 0.5).repeatForever(autoreverses: true).delay(Double(i) * 0.15),
-                        value: bounce
+                        .easeInOut(duration: 0.6).repeatForever(autoreverses: true).delay(Double(i) * 0.16),
+                        value: pulse
                     )
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 14)
-        .background(EColor.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(EColor.outlineVariant))
-        .onAppear { bounce = true }
+        .frame(height: 28)
+        .onAppear { pulse = true }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Evlin is typing")
     }
@@ -561,58 +602,74 @@ struct ScreenChat: View {
                         }
 
                         if !messages.isEmpty {
-                            VStack(alignment: .leading, spacing: 10) {
+                            // 24pt between turns — spacing is what
+                            // separates messages now that nothing's drawn
+                            // around the assistant's replies.
+                            VStack(alignment: .leading, spacing: 24) {
                                 ForEach(messages) { m in
-                                    HStack {
-                                        if m.fromUser { Spacer(minLength: 40) }
-                                        HStack(alignment: .top, spacing: 10) {
-                                            if !m.fromUser {
-                                                RoundedRectangle(cornerRadius: 9).fill(EColor.primary).frame(width: 28, height: 28)
-                                                    .overlay(Image(systemName: "flame.fill").font(.system(size: 12)).foregroundStyle(Color(hex: "8CE6A8")))
-                                            }
+                                    if m.fromUser {
+                                        // The one bubble left: dark fill,
+                                        // rounded, right-aligned, hugging
+                                        // its content. Keeping this
+                                        // asymmetric against the
+                                        // assistant's plain text below is
+                                        // what makes the two speakers
+                                        // distinguishable at all now.
+                                        HStack {
+                                            Spacer(minLength: 40)
+                                            MessageContent(text: m.text)
+                                                .font(Typography.font(13, weight: .medium))
+                                                .foregroundStyle(.white)
+                                                .padding(12)
+                                                .frame(maxWidth: bubbleMaxWidth, alignment: .leading)
+                                                .background(EColor.primary)
+                                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                        }
+                                        .id(m.id)
+                                        .transition(messageTransition)
+                                    } else {
+                                        // No card, no border, no fill, no
+                                        // avatar — text laid directly on the
+                                        // chat background, full width,
+                                        // left-aligned. Turn spacing alone
+                                        // (24pt, above) is what separates
+                                        // this from the message before it —
+                                        // exactly the Gemini/ChatGPT read.
+                                        Group {
                                             if let card = m.card {
-                                                // The intro line + the card are one message, one
-                                                // avatar — matches how a real card reply reads as a
-                                                // single turn, not two separate bubbles.
-                                                VStack(alignment: .leading, spacing: 8) {
+                                                // The intro line + the card are one
+                                                // message — matches how a real card
+                                                // reply reads as a single turn, not
+                                                // two separate messages.
+                                                VStack(alignment: .leading, spacing: 10) {
                                                     Text(m.text)
-                                                        .font(Typography.font(13, weight: .medium))
+                                                        .font(Typography.font(15, weight: .regular))
+                                                        .lineSpacing(3)
                                                         .foregroundStyle(EColor.onSurface)
                                                     cardView(for: card)
                                                 }
                                             } else {
                                                 MessageContent(text: m.text)
-                                                    .font(Typography.font(13, weight: .medium))
-                                                    .foregroundStyle(m.fromUser ? .white : EColor.onSurface)
-                                                    .padding(12)
-                                                    .frame(maxWidth: bubbleMaxWidth, alignment: .leading)
-                                                    .background(m.fromUser ? EColor.primary : EColor.surfaceContainerLowest)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                                                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(m.fromUser ? .clear : EColor.outlineVariant))
-                                                    // Gemini/ChatGPT-style streaming reveal (see respondAfterDelay) —
-                                                    // as words get appended to `m.text`, the bubble smoothly grows
-                                                    // into its new size instead of snapping, so new text feels like
-                                                    // it's floating/settling into place.
+                                                    .font(Typography.font(15, weight: .regular))
+                                                    .foregroundStyle(EColor.onSurface)
+                                                    // Gemini/ChatGPT-style streaming reveal (see
+                                                    // respondAfterDelay) — as words get appended
+                                                    // to `m.text`, the text smoothly grows into
+                                                    // its new size instead of snapping.
                                                     .animation(.easeOut(duration: 0.16), value: m.text)
                                             }
                                         }
-                                        if !m.fromUser { Spacer(minLength: 40) }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .id(m.id)
+                                        .transition(messageTransition)
                                     }
-                                    .id(m.id)
-                                    .transition(messageTransition)
                                 }
 
                                 if isSending {
-                                    HStack {
-                                        HStack(alignment: .top, spacing: 10) {
-                                            RoundedRectangle(cornerRadius: 9).fill(EColor.primary).frame(width: 28, height: 28)
-                                                .overlay(Image(systemName: "flame.fill").font(.system(size: 12)).foregroundStyle(Color(hex: "8CE6A8")))
-                                            TypingIndicator()
-                                        }
-                                        Spacer(minLength: 40)
-                                    }
-                                    .id("typing")
-                                    .transition(.opacity)
+                                    TypingIndicator()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .id("typing")
+                                        .transition(.opacity)
                                 }
                             }
                         }
@@ -638,7 +695,10 @@ struct ScreenChat: View {
                     )
                 }
                 .coordinateSpace(name: chatScrollSpace)
-                .background(EColor.surface)
+                // Plain white — Home, Calendar, and Settings all use it as
+                // their root ground; EColor.surface's faint off-white cast
+                // was the one tab that read as a slightly different shade.
+                .background(Color.white)
                 .scrollDismissesKeyboard(.interactively)
                 .dismissKeyboardOnTap()
                 .onPreferenceChange(ChatScrollOffsetKey.self) { newOffset in

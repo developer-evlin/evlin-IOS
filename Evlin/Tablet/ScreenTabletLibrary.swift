@@ -1,51 +1,35 @@
 import SwiftUI
 
 struct ScreenTabletLibrary: View {
-    @State private var comicTaskId: String?
     @State private var activeGuide: HowToGuide?
+
+    // A browse list, not a canvas like the calendar, so the whole page
+    // still caps to KidAdaptive's content column rather than spreading
+    // edge to edge.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Library").font(Typography.display(26, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                    Text("Library").font(Typography.display(kid.of(26, 30), weight: .heavy)).foregroundStyle(KidTheme.ink)
 
-                    Text("Comics to explore").font(Typography.display(17, weight: .heavy)).foregroundStyle(KidTheme.ink).padding(.top, 10)
-
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        ForEach(TabletData.tasks.filter { !TabletData.comicPanels(for: $0.iconTaskId).isEmpty }) { task in
-                            Button { comicTaskId = task.iconTaskId } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    RoundedRectangle(cornerRadius: 11).fill(.white).frame(width: 38, height: 38)
-                                        .overlay(Image(systemName: sfIcon(for: task.iconTaskId)).font(.system(size: 17)).foregroundStyle(KidTheme.greenDeep))
-                                    Text(task.title).font(Typography.font(12.5, weight: .heavy)).foregroundStyle(KidTheme.ink).lineLimit(2)
-                                    Label("Watch", systemImage: "play.circle.fill").font(Typography.font(10.5, weight: .bold)).foregroundStyle(KidTheme.greenDeep)
-                                }
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(KidTheme.cream)
-                                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(KidTheme.line, lineWidth: 2))
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    Text("How-to guides").font(Typography.display(18, weight: .heavy)).foregroundStyle(KidTheme.ink).padding(.top, 14)
+                    Text("How-to guides").font(Typography.display(kid.of(18, 21), weight: .heavy)).foregroundStyle(KidTheme.ink).padding(.top, 10)
 
                     VStack(spacing: 10) {
                         ForEach(TabletData.howToGuides) { guide in
                             Button { activeGuide = guide } label: {
                                 HStack(spacing: 12) {
-                                    Text(guide.emoji).font(.system(size: 28))
+                                    Text(guide.emoji).font(.system(size: kid.of(28, 32)))
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(guide.title).font(Typography.font(15, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                                        Text(guide.blurb).font(Typography.font(12.5, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
+                                        Text(guide.title).font(Typography.font(kid.of(15, 17), weight: .heavy)).foregroundStyle(KidTheme.ink)
+                                        Text(guide.blurb).font(Typography.font(kid.of(12.5, 14), weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
                                     }
                                     Spacer()
-                                    Label("\(guide.count)", systemImage: "book.closed.fill").font(Typography.font(11.5, weight: .bold)).foregroundStyle(KidTheme.greenDeep)
+                                    Label("\(guide.count)", systemImage: "book.closed.fill").font(Typography.font(kid.of(11.5, 13), weight: .bold)).foregroundStyle(KidTheme.greenDeep)
                                 }
-                                .padding(14)
+                                .padding(kid.of(14, 18))
                                 .background(Color(hex: "F0F4FF"))
                                 .clipShape(RoundedRectangle(cornerRadius: 18))
                             }
@@ -56,26 +40,12 @@ struct ScreenTabletLibrary: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 4)
                 .padding(.bottom, 100)
+                .kidContentColumn(kid.contentMaxWidth)
             }
             .background(KidTheme.background)
         }
-        .fullScreenCover(item: Binding(get: { comicTaskId.map { IdentifiedString(value: $0) } }, set: { comicTaskId = $0?.value })) { wrapped in
-            let task = TabletData.tasks.first { $0.iconTaskId == wrapped.value }
-            ComicViewerView(title: task?.title ?? "", panels: TabletData.comicPanels(for: wrapped.value))
-        }
         .fullScreenCover(item: $activeGuide) { guide in
             HowToGuideViewer(guide: guide)
-        }
-    }
-
-    private func sfIcon(for taskId: String) -> String {
-        switch taskId {
-        case "t1": return "bed.double.fill"
-        case "t2": return "function"
-        case "t3": return "pawprint.fill"
-        case "t4": return "book.fill"
-        case "t5": return "mouth.fill"
-        default: return "star.fill"
         }
     }
 }
@@ -85,6 +55,8 @@ struct HowToGuideViewer: View {
     let guide: HowToGuide
     @Environment(\.dismiss) private var dismiss
     @State private var step = 0
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
     private var isLast: Bool { step == guide.count - 1 }
 
@@ -122,6 +94,7 @@ struct HowToGuideViewer: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16))
                         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(KidTheme.ink, lineWidth: 2.5))
                         .padding(.horizontal, 20)
+                        .kidContentColumn(kid.contentMaxWidth)
                 }
 
                 Spacer(minLength: 0)
@@ -165,6 +138,7 @@ struct HowToGuideViewer: View {
                     .padding(.bottom, 4)
                 }
                 .padding(.horizontal, 20).padding(.bottom, 20)
+                .kidContentColumn(kid.contentMaxWidth)
             }
         }
         .statusBarHidden()

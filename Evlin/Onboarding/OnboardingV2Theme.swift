@@ -108,25 +108,47 @@ enum OnboardingV2Theme {
         static let dotSize: CGFloat = 9
         static let dotSpacing: CGFloat = 7
         static let dotActiveScale: CGFloat = 1.3
+
+        // The column onboarding's single-screen steps (and the done/
+        // confirm screens and mode picker outside this container) center
+        // themselves in on iPad. Started as a literal iPhone-width cap —
+        // "looks identical to iPhone, just not stretched" — but that read
+        // as a small phone screen floating in the middle of the canvas.
+        // Widened once the type/buttons themselves were also scaled up for
+        // iPad, so the column is sized for what's actually in it now
+        // rather than for an iPhone's own screen width.
+        static let iPadCenteredMaxWidth: CGFloat = 620
     }
 
     // Plus Jakarta Sans (the app-wide body/parent font — see Evlin.Typography
     // in DesignSystem/Theme.swift) instead of the system font, so onboarding
     // matches the rest of the app instead of reading as native iOS chrome.
+    //
+    // Each size takes a `regular` flag (iPad's horizontalSizeClass, read by
+    // the Text.onboardingV2*() modifiers below) and scales up ~40% when
+    // true. Capping the column to an iPhone width fixed the edge-to-edge
+    // stretch, but left every screen reading as a literal small iPhone
+    // sitting in a sea of blank canvas — the same "auto-rendered, not
+    // customized" complaint the kid tablet screens had before KidAdaptive
+    // scaled *their* type up too, not just capped width. This is that same
+    // fix applied here. Only the sizes that actually carry a screen's
+    // visual weight (headline, body, primary CTA) scale; small incidental
+    // labels (phase tag, step counter, phone-mock label) stay put — bumping
+    // genuinely tiny chrome text doesn't read as "bigger," just blurrier.
     enum Typography {
-        static let titleXL = Evlin.Typography.font(25, weight: .bold)
+        static func titleXL(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 36 : 25, weight: .bold) }
         static let titleXLTracking: CGFloat = -0.6
 
-        static let titleL = Evlin.Typography.font(19, weight: .semibold)
+        static func titleL(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 26 : 19, weight: .semibold) }
         static let titleLTracking: CGFloat = -0.3
 
-        static let body = Evlin.Typography.font(13.5, weight: .regular)
+        static func body(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 18 : 13.5, weight: .regular) }
         static let bodyLineSpacing: CGFloat = 13.5 * 0.5
 
-        static let bodyStrong = Evlin.Typography.font(15, weight: .medium)
+        static func bodyStrong(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 19 : 15, weight: .medium) }
         static let bodyXS = Evlin.Typography.font(11, weight: .regular)
-        static let cta = Evlin.Typography.font(15, weight: .bold)
-        static let ctaBold = Evlin.Typography.font(15, weight: .heavy)
+        static func cta(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 21 : 15, weight: .bold) }
+        static func ctaBold(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 21 : 15, weight: .heavy) }
 
         static let phaseTag = Evlin.Typography.font(12, weight: .bold)
         static let phaseTagTracking: CGFloat = 0.2
@@ -167,31 +189,59 @@ enum OnboardingV2Role {
 }
 
 // MARK: - Text helpers
+//
+// Modifiers, not plain Text extension methods — reading
+// horizontalSizeClass to pick the iPad-scaled font requires @Environment,
+// which only a ViewModifier's own body(content:) can see; a bare
+// `extension Text` method has no environment access of its own.
 
-extension Text {
-    func onboardingV2TitleXL() -> some View {
-        self.font(OnboardingV2Theme.Typography.titleXL)
+private struct OnboardingV2TitleXLModifier: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    func body(content: Content) -> some View {
+        content
+            .font(OnboardingV2Theme.Typography.titleXL(hSizeClass == .regular))
             .tracking(OnboardingV2Theme.Typography.titleXLTracking)
             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
     }
+}
 
-    func onboardingV2TitleL() -> some View {
-        self.font(OnboardingV2Theme.Typography.titleL)
+private struct OnboardingV2TitleLModifier: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    func body(content: Content) -> some View {
+        content
+            .font(OnboardingV2Theme.Typography.titleL(hSizeClass == .regular))
             .tracking(OnboardingV2Theme.Typography.titleLTracking)
             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
     }
+}
 
-    func onboardingV2Body() -> some View {
-        self.font(OnboardingV2Theme.Typography.body)
+private struct OnboardingV2BodyModifier: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    func body(content: Content) -> some View {
+        content
+            .font(OnboardingV2Theme.Typography.body(hSizeClass == .regular))
             .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
             .lineSpacing(OnboardingV2Theme.Typography.bodyLineSpacing)
     }
+}
 
-    func onboardingV2BodyStrong() -> some View {
-        self.font(OnboardingV2Theme.Typography.bodyStrong)
+private struct OnboardingV2BodyStrongModifier: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    func body(content: Content) -> some View {
+        content
+            .font(OnboardingV2Theme.Typography.bodyStrong(hSizeClass == .regular))
             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
     }
+}
 
+extension Text {
+    func onboardingV2TitleXL() -> some View { modifier(OnboardingV2TitleXLModifier()) }
+    func onboardingV2TitleL() -> some View { modifier(OnboardingV2TitleLModifier()) }
+    func onboardingV2Body() -> some View { modifier(OnboardingV2BodyModifier()) }
+    func onboardingV2BodyStrong() -> some View { modifier(OnboardingV2BodyStrongModifier()) }
+
+    // Small incidental chrome (helper captions, inline hints) — stays
+    // iPhone-sized on purpose, see the Typography enum's own comment.
     func onboardingV2BodyXS() -> some View {
         self.font(OnboardingV2Theme.Typography.bodyXS)
             .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
@@ -218,6 +268,17 @@ struct OnboardingV2PrimaryButton: View {
     // two separate overlapping shapes, the result was a smeared double pill
     // rather than one grayed-out button.
     @Environment(\.isEnabled) private var isEnabled
+    // The single most visible "this still looks like a phone" tell on
+    // iPad — a CTA sized for a 44pt iPhone touch target reads as tiny
+    // floating in the middle of a 1024pt-wide canvas. Taller + bigger
+    // label on regular width, same pill shape.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
+    // Keeps the pill looking like a pill instead of a rounded rectangle
+    // once the taller padding above roughly doubles the button's height —
+    // a fixed corner radius sized for the iPhone height reads noticeably
+    // less rounded at the taller iPad size.
+    private var cornerRadius: CGFloat { isRegular ? OnboardingV2Theme.Metrics.ctaCornerRadius + 10 : OnboardingV2Theme.Metrics.ctaCornerRadius }
 
     init(_ title: String,
          systemImage: String? = nil,
@@ -254,7 +315,7 @@ struct OnboardingV2PrimaryButton: View {
             // get a heavier weight than the flat parent-mode pill — reads
             // bolder/punchier for a kid audience, matching the chunkier
             // mascot-UI feel used elsewhere in kid mode.
-            .font(flat ? OnboardingV2Theme.Typography.cta : OnboardingV2Theme.Typography.ctaBold)
+            .font(flat ? OnboardingV2Theme.Typography.cta(isRegular) : OnboardingV2Theme.Typography.ctaBold(isRegular))
             // A translucent version of the brand green (the old approach —
             // fill and text both faded via `.opacity`) washes out to almost
             // nothing against a light background, so a disabled button
@@ -263,7 +324,7 @@ struct OnboardingV2PrimaryButton: View {
             // convention — it stays a clearly defined pill, just inert.
             .foregroundStyle(isEnabled ? OnboardingV2Theme.Palette.onPrimary : OnboardingV2Theme.Palette.onSurfaceVariant)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, OnboardingV2Theme.Metrics.ctaPaddingVertical)
+            .padding(.vertical, isRegular ? OnboardingV2Theme.Metrics.ctaPaddingVertical + 14 : OnboardingV2Theme.Metrics.ctaPaddingVertical)
             .padding(.horizontal, OnboardingV2Theme.Metrics.ctaPaddingHorizontal)
             .background(
                 ZStack {
@@ -277,11 +338,11 @@ struct OnboardingV2PrimaryButton: View {
                     // — a second overlapping shape has nothing to blend into
                     // once the button reads as one flat gray pill.
                     if !flat && isEnabled {
-                        RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.ctaCornerRadius, style: .continuous)
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .fill(OnboardingV2Theme.Palette.greenDeep)
                             .offset(y: 5)
                     }
-                    RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.ctaCornerRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .fill(isEnabled ? fill : OnboardingV2Theme.Palette.surfaceContainer)
                 }
                 // Flattens the two overlapping rectangles into one rendered
@@ -305,6 +366,8 @@ struct OnboardingV2SecondaryButton: View {
     let title: String
     var systemImage: String? = nil
     let action: () -> Void
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
 
     init(_ title: String,
          systemImage: String? = nil,
@@ -322,18 +385,18 @@ struct OnboardingV2SecondaryButton: View {
                 }
                 Text(title)
             }
-            .font(OnboardingV2Theme.Typography.cta)
+            .font(OnboardingV2Theme.Typography.cta(isRegular))
             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, OnboardingV2Theme.Metrics.ctaPaddingVertical)
+            .padding(.vertical, isRegular ? OnboardingV2Theme.Metrics.ctaPaddingVertical + 14 : OnboardingV2Theme.Metrics.ctaPaddingVertical)
             .padding(.horizontal, OnboardingV2Theme.Metrics.ctaPaddingHorizontal)
             .background(
-                RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.ctaCornerRadius,
+                RoundedRectangle(cornerRadius: isRegular ? OnboardingV2Theme.Metrics.ctaCornerRadius + 10 : OnboardingV2Theme.Metrics.ctaCornerRadius,
                                  style: .continuous)
                     .fill(Color.white)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.ctaCornerRadius,
+                RoundedRectangle(cornerRadius: isRegular ? OnboardingV2Theme.Metrics.ctaCornerRadius + 10 : OnboardingV2Theme.Metrics.ctaCornerRadius,
                                  style: .continuous)
                     .stroke(OnboardingV2Theme.Palette.outlineVariant, lineWidth: 1)
             )
@@ -472,6 +535,20 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
     @ViewBuilder var content: () -> Content
     @ViewBuilder var footer: () -> Footer
 
+    // This container is the one thing every onboarding step (parent and
+    // child chains alike) renders through, so it's the one place that
+    // needs to know about iPad at all. Without this, the screen just
+    // stretched this iPhone-shaped form (fields, single-column copy, a
+    // full-width CTA) edge to edge across the iPad's much wider window —
+    // the same "auto-rendered" look the tablet kid screens had before
+    // their own iPad pass, just here on a design that's meant to read as
+    // one phone-width screen, not scale up into a bigger one. So instead
+    // of scaling typography/spacing up like the kid side did, this caps
+    // the content at a real iPhone's width and centers it — the flow
+    // should look identical to iPhone, just not stretched.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
+
     init(role: OnboardingV2Role,
          phase: String,
          stepIndex: Int,
@@ -500,20 +577,32 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
         self.footer = footer
     }
 
+    private func backButton() -> some View {
+        Button(action: onBack!) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(dark ? Color.white : OnboardingV2Theme.Palette.onSurfaceVariant)
+                // Icon reads small on purpose; the frame is the real
+                // hit target so it's still comfortable to tap.
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // One column, not a split — a left pane only had something to show on
+    // steps that actually pass a title into this container, and most of
+    // this flow draws its own heading *inside* content() instead (a QR
+    // step's "Pair Your Child's Device," an app-picker step's "Choose Apps
+    // to Lock," …). On those, the left pane had nothing but the bare
+    // "Evlin" wordmark and a phase tag — dead space next to the screen's
+    // actual heading, not a second meaningful region. Single centered
+    // column, sized for iPad (wider cap, same bigger type/buttons from the
+    // scale-up pass) instead of trying to either split the screen or hold
+    // it to an iPhone's own width.
     private var screenBody: some View {
         VStack(alignment: .leading, spacing: Spacing.xl) {
-
-            if let onBack {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(dark ? Color.white : OnboardingV2Theme.Palette.onSurfaceVariant)
-                        // Icon reads small on purpose; the frame is the real
-                        // hit target so it's still comfortable to tap.
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(.plain)
-                .padding(.bottom, Spacing.xs)
+            if onBack != nil {
+                backButton().padding(.bottom, Spacing.xs)
             }
 
             // Centered headline + body, matching the reference flow's
@@ -543,24 +632,63 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
                 .frame(maxWidth: .infinity, alignment: role == .parent ? .center : .leading)
             }
 
-            Spacer(minLength: Spacing.lg)
+            // On iPhone, flexible Spacers push the footer toward the
+            // bottom of the (short) screen — exactly what makes this read
+            // as a real iOS screen. On iPad's much taller canvas, those
+            // same flexible Spacers absorbed every bit of the extra
+            // height instead, stranding the header at the very top and
+            // the footer at the very bottom with an empty gap between big
+            // enough to lose the actual content in. Fixed spacing plus
+            // centering the whole block vertically (below) is what a
+            // screen actually designed for the bigger canvas looks like,
+            // rather than a phone screen with a hole punched in the
+            // middle of it.
+            if isRegular {
+                // Several steps' own content() closures have their *own*
+                // internal flexible Spacers, authored to mimic a real iOS
+                // prompt sliding up from the bottom of a phone screen (icon
+                // up top, a beat of empty space, the mock system dialog
+                // pinned near the bottom). Centering the outer block (below)
+                // still proposes this a full screen's worth of height to
+                // fill, so those inner Spacers greedily expanded to consume
+                // it — recreating the exact same dead-space bug one level
+                // deeper. fixedSize forces content() to report its own
+                // natural/hugging height instead of accepting that
+                // proposal, so its Spacers collapse to their minimum and
+                // the icon+card render as one compact group, which is what
+                // actually gets centered.
+                content()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, Spacing.section)
+                VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
+                    footer()
+                    if let dotsCount, let dotsCurrent {
+                        OnboardingV2DotsNav(count: dotsCount, current: dotsCurrent, activeColor: role.accent)
+                            .padding(.top, Spacing.sm)
+                    }
+                }
+                .padding(.top, Spacing.section)
+            } else {
+                Spacer(minLength: Spacing.lg)
 
-            content()
+                content()
 
-            Spacer(minLength: Spacing.lg)
+                Spacer(minLength: Spacing.lg)
 
-            VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
-                footer()
-                if let dotsCount, let dotsCurrent {
-                    OnboardingV2DotsNav(count: dotsCount, current: dotsCurrent, activeColor: role.accent)
-                        .padding(.top, Spacing.sm)
+                VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
+                    footer()
+                    if let dotsCount, let dotsCurrent {
+                        OnboardingV2DotsNav(count: dotsCount, current: dotsCurrent, activeColor: role.accent)
+                            .padding(.top, Spacing.sm)
+                    }
                 }
             }
         }
         .padding(.top, OnboardingV2Theme.Metrics.screenBodyPaddingTop)
-        .padding(.horizontal, OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
+        .padding(.horizontal, isRegular ? 8 : OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
         .padding(.bottom, OnboardingV2Theme.Metrics.screenBodyPaddingBottom)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isRegular ? .center : .top)
         .background(dark ? OnboardingV2Theme.Palette.darkScreen
                          : OnboardingV2Theme.Palette.surface)
     }

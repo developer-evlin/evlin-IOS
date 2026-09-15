@@ -6,6 +6,54 @@ import UIKit
 // heading, brighter leaf-green accent, lavender "Pro" badge. Distinct from
 // the app-wide Brand tokens; scoped to the add-task/add-rule sheets only.
 private let formBottomAnchorID = "form-bottom-anchor"
+private let formTopAnchorID = "form-top-anchor"
+
+// Lets a field buried inside FormShell's content (MoreOptions expanding,
+// TaskWhenField revealing its date/time pickers, a multi-line Notes/"What
+// to do" field growing another line) ask the sheet to re-run its
+// keyboard-avoidance scroll after growing taller. Without this, the
+// scroll-to-bottom only ever fires once, on keyboardWillShowNotification —
+// content that grows *after* that has no way to pull the view back down to
+// it, so it ends up crammed against the fixed Save button instead of fully
+// visible.
+//
+// A GeometryReader-based height tracker was tried here instead (measure
+// the content's own height via .background(GeometryReader{...}) +
+// onPreferenceChange, so growth of any kind would self-report) — it reads
+// as more general, but a GeometryReader placed inside a ScrollView's
+// content interferes with that ScrollView's own content-size measurement:
+// scrollTo(anchor: .bottom) started undershooting and leaving real fields
+// (a still-open "What to do" box) hidden behind the Save button, the exact
+// bug this mechanism exists to prevent. Explicit triggers at the specific
+// places content actually grows are more code, but they don't fight the
+// scroll view's own layout math.
+private struct ScrollFormToBottomKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+extension EnvironmentValues {
+    var scrollFormToBottom: () -> Void {
+        get { self[ScrollFormToBottomKey.self] }
+        set { self[ScrollFormToBottomKey.self] = newValue }
+    }
+}
+
+// The bottom-anchor mechanism above only ever pulls the view *down* to
+// reveal newly-grown content — it has no notion of "scroll back up to
+// whatever's now focused." That breaks the moment a parent expands "More
+// options" (scrolling down), then taps back into the very first field
+// (Title/Task name): nothing scrolls back up for it, so it can end up
+// exactly as cramped against a since-grown form as the bottom field used
+// to be. This is the same idea, aimed at the top anchor instead, for the
+// one field that's always first in every one of these forms.
+private struct ScrollFormToTopKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+extension EnvironmentValues {
+    var scrollFormToTop: () -> Void {
+        get { self[ScrollFormToTopKey.self] }
+        set { self[ScrollFormToTopKey.self] = newValue }
+    }
+}
 
 enum FormGreen {
     static let fieldBg = Color(hex: "F5FAF7")
@@ -30,6 +78,17 @@ struct FormShell<Content: View>: View {
     // button top-right of the header, next to Cancel.
     var onDelete: (() -> Void)? = nil
     @ViewBuilder var content: Content
+    // A second, compact copy of this button used to live in the keyboard's
+    // own accessory bar, hidden/shown opposite this one so only one was
+    // ever meant to be on screen at a time. In practice that turned into
+    // three rounds of real bugs (a broken toolbar-button style, a fixed
+    // "stuck visible" state when the keyboard was dismissed interactively,
+    // general confusion about which button was the real one) for a modest
+    // space win in one edge case (keyboard up *and* "More options" fully
+    // expanded). One button, always in the same place, is worth more than
+    // that edge case — the scroll-to-bottom mechanism below still brings it
+    // into view along with whatever's actively being typed.
+    @State private var keyboardVisible = false
 
     var body: some View {
         // No drag handle here on purpose: these sheets disable interactive
@@ -46,8 +105,12 @@ struct FormShell<Content: View>: View {
                     // Bigger than Apple's bare 44pt minimum — the text-only link
                     // read as small/easy-to-miss even at the minimum tap size,
                     // so both the font and the hit area are sized up a bit past
-                    // the floor rather than exactly to it.
-                    .frame(minHeight: 48, alignment: .leading)
+                    // the floor rather than exactly to it. minWidth matters just
+                    // as much as minHeight here: without it the tappable area
+                    // was only as wide as the word "Cancel" itself, so a tap a
+                    // few points to its right (still well inside this row's
+                    // empty-looking leading corner) missed entirely.
+                    .frame(minWidth: 72, minHeight: 48, alignment: .leading)
                     .contentShape(Rectangle())
 
                 Spacer(minLength: 12)
@@ -76,6 +139,7 @@ struct FormShell<Content: View>: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
+                    Color.clear.frame(height: 1).id(formTopAnchorID)
                     VStack(alignment: .leading, spacing: 0) { content }
                         .padding(.horizontal, 20)
                     // A "More options" field (the usual reason this needs
@@ -84,20 +148,58 @@ struct FormShell<Content: View>: View {
                     // reliably surfaces whatever's actively being typed
                     // without needing per-field FocusState plumbing that
                     // every FormShell call site would otherwise have to add.
-                    Color.clear.frame(height: 1).id(formBottomAnchorID)
+                    Color.clear.frame(height: 24).id(formBottomAnchorID)
                 }
-                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                // keyboardWillShow/keyboardWillHide (the discrete pair this
+                // used to rely on) go out of sync the moment a keyboard is
+                // dismissed *interactively* (dragging the scroll content
+                // down, which .scrollDismissesKeyboard(.interactively)
+                // below explicitly enables) — that gesture doesn't reliably
+                // fire keyboardWillHide, so keyboardVisible could get stuck
+                // true forever. keyboardWillChangeFrame fires for every way
+                // the keyboard's frame can change, interactive dismissal
+                // included, and carries the actual frame — checking that
+                // directly instead of trusting a separate "did it hide"
+                // event is what actually stays correct.
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                    guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+                    let visible = frame.origin.y < UIScreen.main.bounds.height
+                    guard visible != keyboardVisible else { return }
+                    keyboardVisible = visible
+                    if visible {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            proxy.scrollTo(formBottomAnchorID, anchor: .bottom)
+                        }
+                    }
+                }
+                .environment(\.scrollFormToBottom, {
                     withAnimation(.easeOut(duration: 0.25)) {
                         proxy.scrollTo(formBottomAnchorID, anchor: .bottom)
                     }
-                }
+                })
+                .environment(\.scrollFormToTop, {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(formTopAnchorID, anchor: .top)
+                    }
+                })
             }
             // Every field in these sheets is a plain tap-to-focus text field
             // with no other gesture of its own to protect, so a tap anywhere
-            // in the scroll area — not just a drag — dismisses the keyboard,
-            // matching the swipe-to-dismiss below.
+            // in the scroll area dismisses the keyboard too.
             .dismissKeyboardOnTap()
-            .scrollDismissesKeyboard(.interactively)
+            // .immediately, not .interactively — interactively ties the
+            // keyboard's dismissal to the same continuous drag a scroll
+            // gesture starts with, which is exactly the drag a sheet's own
+            // pan-to-dismiss recognizer is watching for. Even with
+            // .interactiveDismissDisabled() set on this sheet (see the call
+            // site), a fast/aggressive scroll-down starting from a focused
+            // field could still let that drag bleed through and dismiss the
+            // whole sheet — silently discarding whatever was typed — because
+            // the two pan gestures aren't fully isolated from each other.
+            // .immediately drops the keyboard the instant a drag begins
+            // instead of tracking it, so there's no longer a continuous
+            // interactive pan for that ambiguity to happen in.
+            .scrollDismissesKeyboard(.immediately)
 
             Button(action: onSave) {
                 Text(saveLabel)
@@ -138,6 +240,16 @@ struct FormField<Content: View>: View {
 struct FormTextField: View {
     var placeholder: String
     @Binding var text: String
+    // Opt-in — every FormShell form's first field (Title/Task name) sets
+    // this so tapping back into it after scrolling down for a later field
+    // (MoreOptions, a date picker) brings it back into comfortable view,
+    // instead of leaving it exactly as cramped against the rest of the
+    // grown form as the field that pulled the scroll down in the first
+    // place. Every other field leaves this off — they're not always first,
+    // and the bottom-anchor scroll already covers them growing/appearing.
+    var scrollToTopOnFocus: Bool = false
+    @FocusState private var focused: Bool
+    @Environment(\.scrollFormToTop) private var scrollFormToTop
 
     var body: some View {
         TextField(placeholder, text: $text)
@@ -147,6 +259,11 @@ struct FormTextField: View {
             .frame(height: 48)
             .background(FormGreen.fieldBg)
             .clipShape(RoundedRectangle(cornerRadius: 14))
+            .focused($focused)
+            .onChange(of: focused) { _, isFocused in
+                guard scrollToTopOnFocus, isFocused else { return }
+                scrollFormToTop()
+            }
     }
 }
 
@@ -222,17 +339,14 @@ struct FlowLayout: Layout {
 struct FormDateTimeRow: View {
     @Binding var date: Date
     @Binding var hasDate: Bool
+    // Any date from here onward — a parent can schedule a task for
+    // whenever it's actually needed, not just today or tomorrow. Defaults
+    // to real "today," but Calendar's own Add Task (whose day numbering
+    // is the mock day being viewed, not necessarily today's real date)
+    // widens this so that day is always pickable.
+    var minDate: Date = Calendar.current.startOfDay(for: Date())
 
-    // A task is day-scoped — it's due today or it's due tomorrow, full
-    // stop (see ChildTask.dueDate/isDueToday: a task due any other day
-    // simply doesn't show up on a day it isn't due). Offering a
-    // years-wide default date range read as "schedule this whenever,"
-    // which isn't a thing this app actually does anything with.
-    private var dateRange: ClosedRange<Date> {
-        let start = Calendar.current.startOfDay(for: Date())
-        let end = Calendar.current.date(byAdding: .day, value: 2, to: start)?.addingTimeInterval(-1) ?? start
-        return start...end
-    }
+    private var dateRange: PartialRangeFrom<Date> { minDate... }
 
     var body: some View {
         // Already functionally optional (canSave only requires a title —
@@ -271,6 +385,78 @@ struct FormDateTimeRow: View {
         .frame(maxWidth: .infinity)
         .background(FormGreen.fieldBg)
         .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// The shared "When" field for the Add Task mechanism — Calendar's own Add
+// Task and a profile's Add Task use this exact same field now, not two
+// different ideas of what "when" means (one used to offer a same-day
+// Anytime/set-time toggle, the other a real date picker). A task either
+// has no due date at all, or a real date + time picked from
+// FormDateTimeRow — nothing collapsed under More Options is hidden until
+// a parent actually taps in, so an empty form never reads as "already
+// scheduled."
+struct TaskWhenField: View {
+    @Binding var hasDueDate: Bool
+    @Binding var dueDate: Date
+    // What "Add a date & time" seeds the picker with, and the earliest
+    // date the picker itself allows — both default to real "now," which
+    // is right for a profile's own Add Task (a real due date). Calendar's
+    // Add Task overrides both to the mock day actually being viewed,
+    // since that day's number has nothing to do with the real calendar.
+    var defaultDate: Date = Date()
+    var minDate: Date = Calendar.current.startOfDay(for: Date())
+    @Environment(\.scrollFormToBottom) private var scrollFormToBottom
+
+    var body: some View {
+        if hasDueDate {
+            VStack(alignment: .leading, spacing: 10) {
+                FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate, minDate: minDate)
+                Button("Remove date") { hasDueDate = false }
+                    .buttonStyle(.plain)
+                    .font(Typography.font(14, weight: .bold))
+                    .foregroundStyle(EColor.danger)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+        } else {
+            FormField(label: "When") {
+                Button {
+                    dueDate = defaultDate
+                    hasDueDate = true
+                    // Combining this with the state change in one
+                    // withAnimation block was tried (scrollTo, called
+                    // inside an active animation, is *supposed* to resolve
+                    // against the transaction's post-layout geometry) —
+                    // measured against a real device, it undershot just
+                    // like calling it with no delay at all: TaskWhenField
+                    // is nested several views below the ScrollView, and by
+                    // the time scrollTo actually runs, that layout hasn't
+                    // propagated up to the ScrollView's own content size
+                    // yet. This delay is empirically the fix that's
+                    // actually been verified to work — don't remove it
+                    // without re-verifying on a real device, not just a
+                    // pre-expanded-from-launch simulator screenshot.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        scrollFormToBottom()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle.fill").font(.system(size: 16))
+                        Text("Add a date & time").font(Typography.font(14, weight: .semibold))
+                    }
+                    .foregroundStyle(FormGreen.accent)
+                    .padding(.horizontal, 14)
+                    .frame(height: 48)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 }
 
@@ -365,6 +551,7 @@ struct MoreOptions<Content: View>: View {
     var startOpen: Bool = false
     @State private var open: Bool
     @ViewBuilder var content: Content
+    @Environment(\.scrollFormToBottom) private var scrollFormToBottom
 
     init(startOpen: Bool = false, @ViewBuilder content: () -> Content) {
         self.startOpen = startOpen
@@ -376,6 +563,19 @@ struct MoreOptions<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.16)) { open.toggle() }
+                if open {
+                    // Combining this with the toggle in one withAnimation
+                    // was tried and measured to undershoot on a real
+                    // device — MoreOptions is nested below the ScrollView,
+                    // and scrollTo fired synchronously inside that block
+                    // ran before the newly-revealed content's height had
+                    // actually propagated up to the ScrollView. This delay
+                    // is the version that's actually been verified to
+                    // work; don't remove it without re-verifying.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                        scrollFormToBottom()
+                    }
+                }
             } label: {
                 HStack {
                     Text("More options").font(Typography.font(15, weight: .heavy)).foregroundStyle(EColor.onSurface)
@@ -392,6 +592,69 @@ struct MoreOptions<Content: View>: View {
             if open {
                 VStack(alignment: .leading, spacing: 0) { content }
                     .padding(.top, 6)
+            }
+        }
+    }
+}
+
+// MARK: - Shared "Add Task" mechanism — Calendar's own Add Task and a
+// child's profile Add Task are the exact same form (title, an optional
+// For picker, Repeats, More options, What to do), not two copies that
+// happen to look alike and can quietly drift apart. Only two things are
+// legitimately different per caller: whether a child still needs picking
+// (a profile's add-task is already scoped to one child; the calendar's
+// isn't), and what "due" even means there (see `when`) — everything else,
+// including the FormShell chrome itself, lives here once.
+struct AddTaskFormFields<When: View>: View {
+    var title: String
+    var saveLabel: String
+    // nil shows the For picker (Calendar's case); a real child hides it
+    // (a profile's add-task, already scoped to that one child).
+    var fixedChild: Child?
+    @Binding var taskTitle: String
+    @Binding var personId: String
+    @Binding var whatToDo: String
+    @Binding var repeatDays: Set<String>
+    var canSave: Bool
+    var onCancel: () -> Void
+    var onSave: () -> Void
+    @ViewBuilder var when: () -> When
+    @Environment(\.scrollFormToBottom) private var scrollFormToBottom
+
+    var body: some View {
+        FormShell(title: title, onCancel: onCancel, onSave: onSave, canSave: canSave, saveLabel: saveLabel) {
+            FormField(label: fixedChild == nil ? "Title" : "Task name") {
+                FormTextField(placeholder: "e.g. Make your bed", text: $taskTitle, scrollToTopOnFocus: true)
+            }
+            if fixedChild == nil {
+                FormField(label: "For") {
+                    FlowChips {
+                        ForEach(CalendarData.people.filter { $0.id != "family" }) { p in
+                            DotChip(label: p.name, color: p.color, selected: personId == p.id) { personId = p.id }
+                        }
+                    }
+                }
+            }
+            RepeatPicker(selectedDays: $repeatDays)
+            MoreOptions {
+                when()
+                FormField(label: "What to do") {
+                    TextField("Instructions…", text: $whatToDo, axis: .vertical)
+                        .font(Typography.font(15, weight: .regular))
+                        .lineLimit(3...5)
+                        .padding(14)
+                        .background(FormGreen.fieldBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        // Growing to a new line while the keyboard is up is
+                        // the same "content got taller" case MoreOptions'
+                        // own toggle handles above — this field just grows
+                        // from typing instead of a tap.
+                        .onChange(of: whatToDo) { _, _ in
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                scrollFormToBottom()
+                            }
+                        }
+                }
             }
         }
     }

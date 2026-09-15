@@ -32,6 +32,7 @@ struct ParentSignInStep: View {
     private enum Phase { case providers, emailAddress, password, confirmEmail }
     private enum AuthMode { case signUp, signIn }
 
+    @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var phase: Phase = .providers
     @State private var authMode: AuthMode = .signUp
     @State private var email = ""
@@ -114,10 +115,10 @@ struct ParentSignInStep: View {
                     Text("G").font(.system(size: 15, weight: .bold))
                     Text("Continue with Google")
                 }
-                .font(OnboardingV2Theme.Typography.cta)
+                .font(OnboardingV2Theme.Typography.cta(hSizeClass == .regular))
                 .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, OnboardingV2Theme.Metrics.ctaPaddingVertical)
+                .padding(.vertical, hSizeClass == .regular ? OnboardingV2Theme.Metrics.ctaPaddingVertical + 14 : OnboardingV2Theme.Metrics.ctaPaddingVertical)
                 .padding(.horizontal, OnboardingV2Theme.Metrics.ctaPaddingHorizontal)
                 .background(
                     RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.ctaCornerRadius,
@@ -917,6 +918,13 @@ private struct PasscodeConfirmCard: View {
     var kidName: String
     var onConfirm: () -> Void
     var onNotYet: () -> Void
+    // A full-screen .overlay, not routed through OnboardingV2ScreenContainer
+    // (it sits on top of that container, at the whole-screen scope) — so it
+    // never picked up that container's iPhone-width cap and just stretched
+    // its card across the full iPad width via a bare horizontal padding.
+    // Same fix, applied directly here.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
 
     var body: some View {
         ZStack {
@@ -944,6 +952,7 @@ private struct PasscodeConfirmCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
             .padding(.horizontal, 24)
+            .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity)
         }
         .transition(.opacity)
     }
@@ -953,17 +962,33 @@ private struct PasscodeConfirmCard: View {
 
 struct ParentOnboardingDoneStep: View {
     let onEnter: () -> Void
+    // Doesn't route through OnboardingV2ScreenContainer (nothing here needs
+    // its phase tag/step counter/back button), so it needs its own iPad
+    // cap — without one this full-bleed splash stretched its CTA edge to
+    // edge across the iPad's width instead of reading as one iPhone-shaped
+    // screen. See OnboardingV2ScreenContainer's own comment for why this
+    // matches iPhone rather than scaling up like the kid tablet screens do.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
 
     var body: some View {
         VStack(spacing: Spacing.section) {
-            Spacer()
+            // On iPhone, the two flexible Spacers push the icon/title up
+            // and the button down within a short screen. On iPad's much
+            // taller canvas they'd absorb all of it instead, stranding
+            // everything at the far top/bottom with the actual content
+            // lost in an empty middle — so on regular width this drops
+            // them and lets the outer frame's centered alignment (below)
+            // position the whole compact block in the middle of the
+            // screen instead.
+            if !isRegular { Spacer() }
 
             Circle()
                 .fill(OnboardingV2Theme.Palette.primary)
-                .frame(width: 64, height: 64)
+                .frame(width: isRegular ? 84 : 64, height: isRegular ? 84 : 64)
                 .overlay(
                     Image(systemName: "sparkles")
-                        .font(.system(size: 28, weight: .bold))
+                        .font(.system(size: isRegular ? 36 : 28, weight: .bold))
                         .foregroundStyle(OnboardingV2Theme.Palette.onPrimary)
                 )
 
@@ -971,12 +996,14 @@ struct ParentOnboardingDoneStep: View {
                 .onboardingV2TitleXL()
                 .multilineTextAlignment(.center)
 
-            Spacer()
+            if !isRegular { Spacer() }
 
             OnboardingV2PrimaryButton("Enter Evlin", role: .parent, action: onEnter)
                 .padding(.horizontal, Spacing.xl)
+                .padding(.top, isRegular ? Spacing.section : 0)
         }
         .padding(Spacing.xl)
+        .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(OnboardingV2Theme.Palette.surface)
     }

@@ -17,6 +17,12 @@ struct ScreenTabletSettings: View {
     @ObservedObject private var childProfile = FamilyStore.children.last ?? FamilyStore.child(TabletData.child.id)
     @State private var showApprovalWait = false
     @Environment(\.dismiss) private var dismiss
+    // iPad already renders this .sheet as a system form sheet (centered,
+    // width-capped on its own) rather than full-bleed, so this mostly just
+    // needs the same content-column cap and type bump as the rest of the
+    // kid side for consistency, not a rescue from edge-to-edge stretching.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
     var body: some View {
         NavigationStack {
@@ -28,7 +34,7 @@ struct ScreenTabletSettings: View {
                     // pulled out of the kid's main tab bar in the first
                     // place (see TabletRootView).
                     Text("Parent Controls")
-                        .font(Typography.display(30, weight: .heavy))
+                        .font(Typography.display(kid.of(30, 34), weight: .heavy))
                         .foregroundStyle(KidTheme.ink)
                         .padding(.top, 4)
 
@@ -38,6 +44,7 @@ struct ScreenTabletSettings: View {
                 .padding(.horizontal, 22)
                 .padding(.top, 4)
                 .padding(.bottom, 100)
+                .kidContentColumn(kid.contentMaxWidth)
             }
             .background(KidTheme.background)
             .toolbar {
@@ -83,21 +90,21 @@ struct ScreenTabletSettings: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 14).fill(KidTheme.greenTint)
                     Image(systemName: "lock.rectangle.stack.fill")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: kid.of(20, 24), weight: .semibold))
                         .foregroundStyle(KidTheme.greenDeep)
                 }
-                .frame(width: 44, height: 44)
+                .frame(width: kid.of(44, 54), height: kid.of(44, 54))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("PARENT")
-                        .font(Typography.font(11, weight: .heavy))
+                        .font(Typography.font(kid.of(11, 12.5), weight: .heavy))
                         .tracking(1)
                         .foregroundStyle(KidTheme.greenDeep)
                     Text("Parent controls")
-                        .font(Typography.font(16, weight: .heavy))
+                        .font(Typography.font(kid.of(16, 19), weight: .heavy))
                         .foregroundStyle(KidTheme.ink)
                     Text("Needs parent approval")
-                        .font(Typography.font(13, weight: .medium))
+                        .font(Typography.font(kid.of(13, 15), weight: .medium))
                         .foregroundStyle(KidTheme.inkSoft)
                 }
 
@@ -107,7 +114,7 @@ struct ScreenTabletSettings: View {
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(KidTheme.inkSoft)
             }
-            .padding(18)
+            .padding(kid.of(18, 22))
             .background(KidTheme.cream)
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(KidTheme.line))

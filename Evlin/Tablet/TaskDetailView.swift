@@ -8,7 +8,6 @@ struct TaskDetailView: View {
     var onComplete: (_ photoCount: Int, _ note: String?, _ hasVoiceNote: Bool) -> Void
     var onRequestBypass: (String, Bool) -> Void = { _, _ in }
     @Environment(\.dismiss) private var dismiss
-    @State private var showComic = false
     // Several photos, not one — mirrors the parent side's multi-page
     // submissions (e.g. Math Practice's photoCount 3 in TaskStore). Each
     // entry is a stable id so a single photo can be retaken/removed without
@@ -25,8 +24,22 @@ struct TaskDetailView: View {
     @State private var showBypassSheet = false
     @State private var bypassSent = false
     @State private var viewerIndex: Int?
-
-    private var panels: [ComicPanel] { TabletData.comicPanels(for: task.iconTaskId) }
+    // A form/detail screen, same reading-shaped treatment as the rest of
+    // the kid side — caps to KidAdaptive's content column instead of
+    // stretching this full-screen cover's padding(20) across the iPad's
+    // whole width, and the photo grid grows more columns instead of 3
+    // fixed ones stretching wider.
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
+    // Regular's minimum/maximum used to both sit close to compact's (130/160)
+    // — fine for tile size, but against the 760pt-capped content column that
+    // fits 5 of them per row, so a typical 5-6 photo submission stranded the
+    // "Add photo" tile alone on its own row with four empty column-widths of
+    // blank space beside it. Widening both bounds drops that to 4 per row
+    // (a smaller, less noticeable 2-tile trailing gap) and makes each tile a
+    // bit bigger besides, in keeping with iPad getting more than a
+    // same-sized-but-more-of-it version of the phone layout.
+    private var photoGridColumns: [GridItem] { [GridItem(.adaptive(minimum: kid.of(90, 150), maximum: kid.of(160, 190)), spacing: 10)] }
 
     // Seeds submitted/photos/note from the task itself — without this, a
     // kid reopening an already-done task would land back on the "take a
@@ -92,32 +105,6 @@ struct TaskDetailView: View {
                             .padding(.top, 16)
                         }
 
-                        if !panels.isEmpty {
-                            Button { showComic = true } label: {
-                                HStack(spacing: 12) {
-                                    HStack(spacing: 3) {
-                                        ForEach(panels.prefix(3)) { p in
-                                            Image(p.imageName).resizable().aspectRatio(contentMode: .fill)
-                                                .frame(width: 36, height: 46).clipShape(RoundedRectangle(cornerRadius: 7))
-                                                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(KidTheme.ink, lineWidth: 1.5))
-                                        }
-                                    }
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Watch Evlin show you").font(Typography.font(15.5, weight: .heavy)).foregroundStyle(KidTheme.greenDeep)
-                                        Text("Tap to see how").font(Typography.font(12.5, weight: .semibold)).foregroundStyle(KidTheme.greenDeep)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right").foregroundStyle(KidTheme.green)
-                                }
-                                .padding(14)
-                                .background(KidTheme.cream)
-                                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(KidTheme.ink, lineWidth: 2.5))
-                                .clipShape(RoundedRectangle(cornerRadius: 18))
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.top, 18)
-                        }
-
                         Text(photos.isEmpty ? "Take a photo to show you're done" : "Add another photo, or you're all set")
                             .font(Typography.display(18, weight: .bold))
                             .foregroundStyle(KidTheme.ink)
@@ -140,7 +127,7 @@ struct TaskDetailView: View {
                             }
                             .buttonStyle(.plain)
                         } else {
-                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                            LazyVGrid(columns: photoGridColumns, spacing: 10) {
                                 ForEach(Array(photos.enumerated()), id: \.element) { index, id in
                                     KidCapturedPhotoTile(pageNumber: index + 1) {
                                         // A retake removes and expects the kid
@@ -152,19 +139,30 @@ struct TaskDetailView: View {
                                     }
                                 }
                                 Button { withAnimation(.easeOut(duration: 0.15)) { photos.append(UUID()) } } label: {
-                                    VStack(spacing: 6) {
-                                        Image(systemName: "plus")
-                                            .font(.system(size: 20, weight: .bold))
-                                            .foregroundStyle(KidTheme.green)
-                                        Text("Add photo")
-                                            .font(Typography.font(11.5, weight: .bold))
-                                            .foregroundStyle(KidTheme.inkSoft)
+                                    // GeometryReader, not aspectRatio directly on the VStack — a
+                                    // VStack of just an icon + label has real intrinsic content
+                                    // size, so aspectRatio(.fit) sizes itself to fit THAT (a tiny
+                                    // square) rather than expanding to the grid column's proposed
+                                    // width, no matter what order .frame(maxWidth:.infinity) is
+                                    // applied in. GeometryReader itself has no intrinsic size, so
+                                    // aspectRatio on it is forced to size from the column's
+                                    // proposed width instead — the same reason KidCapturedPhotoTile
+                                    // works: MockHomeworkPhoto is GeometryReader-based internally.
+                                    GeometryReader { geo in
+                                        VStack(spacing: 6) {
+                                            Image(systemName: "plus")
+                                                .font(.system(size: 20, weight: .bold))
+                                                .foregroundStyle(KidTheme.green)
+                                            Text("Add photo")
+                                                .font(Typography.font(11.5, weight: .bold))
+                                                .foregroundStyle(KidTheme.inkSoft)
+                                        }
+                                        .frame(width: geo.size.width, height: geo.size.height)
+                                        .background(KidTheme.cream)
+                                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, style: StrokeStyle(lineWidth: 2, dash: [6])))
+                                        .clipShape(RoundedRectangle(cornerRadius: 14))
                                     }
-                                    .frame(maxWidth: .infinity)
                                     .aspectRatio(3.0/4.0, contentMode: .fit)
-                                    .background(KidTheme.cream)
-                                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, style: StrokeStyle(lineWidth: 2, dash: [6])))
-                                    .clipShape(RoundedRectangle(cornerRadius: 14))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -276,7 +274,7 @@ struct TaskDetailView: View {
                                 .foregroundStyle(KidTheme.ink)
                                 .padding(.top, 20).padding(.bottom, 10)
 
-                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                            LazyVGrid(columns: photoGridColumns, spacing: 10) {
                                 ForEach(Array(photos.enumerated()), id: \.element) { index, _ in
                                     Button { viewerIndex = index } label: {
                                         MockHomeworkPhoto(pageNumber: index + 1)
@@ -332,6 +330,7 @@ struct TaskDetailView: View {
                     Color.clear.frame(height: 1).id(taskDetailBottomAnchorID)
                 }
                 .padding(20)
+                .kidContentColumn(kid.contentMaxWidth)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                     withAnimation(.easeOut(duration: 0.25)) {
@@ -348,16 +347,20 @@ struct TaskDetailView: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: $showComic) {
-            ComicViewerView(title: task.title, panels: panels)
-        }
         .fullScreenCover(item: Binding(
             get: { viewerIndex.map { IdentifiedInt(value: $0) } },
             set: { viewerIndex = $0?.value }
         )) { wrapped in
             KidPhotoViewer(count: photos.count, index: wrapped.value) { viewerIndex = nil }
         }
-        .sheet(isPresented: $showBypassSheet) {
+        // fullScreenCover, not .sheet — a .sheet always renders in compact
+        // horizontal size class on iPad regardless of the actual device
+        // width (confirmed empirically elsewhere in this app), so none of
+        // KidAdaptive's regular-width scaling ever kicked in here: it just
+        // floated as a small, tightly-packed phone-sized card in the
+        // middle of a huge screen, which is what read as cluttered rather
+        // than an intentional compose screen.
+        .fullScreenCover(isPresented: $showBypassSheet) {
             BypassRequestSheet(
                 taskTitle: task.title,
                 onSend: { reason, hasVoice in
@@ -367,7 +370,6 @@ struct TaskDetailView: View {
                 },
                 onCancel: { showBypassSheet = false }
             )
-            .presentationDetents([.medium])
         }
     }
 
@@ -489,6 +491,8 @@ private struct BypassRequestSheet: View {
 
     @State private var reason = ""
     @State private var hasVoiceNote = false
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
     // Same either/or rule as the parent-side Redo compose sheet: a typed
     // reason or a recorded one, not necessarily both.
@@ -496,31 +500,31 @@ private struct BypassRequestSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: kid.of(16, 22)) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Ask to skip this one?")
-                        .font(Typography.display(20, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                        .font(Typography.display(kid.of(20, 26), weight: .heavy)).foregroundStyle(KidTheme.ink)
                     Text(taskTitle)
-                        .font(Typography.font(14, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
+                        .font(Typography.font(kid.of(14, 16), weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
                 }
 
                 TextField("e.g. I have soccer practice today", text: $reason, axis: .vertical)
-                    .font(Typography.font(15, weight: .regular))
+                    .font(Typography.font(kid.of(15, 17), weight: .regular))
                     .lineLimit(3...5)
-                    .padding(14)
+                    .padding(kid.of(14, 18))
                     .background(KidTheme.muted)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
 
-                Spacer(minLength: 0)
+                if !kid.isRegular { Spacer(minLength: 0) }
 
                 Button { onSend(reason.trimmingCharacters(in: .whitespacesAndNewlines), hasVoiceNote) } label: {
                     Text("Send to a parent")
-                        .font(Typography.display(18, weight: .heavy))
+                        .font(Typography.display(kid.of(18, 21), weight: .heavy))
                         .foregroundStyle(canSend ? .white : Color(hex: "B5C8BC"))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 58)
+                        .frame(height: kid.of(58, 66))
                         .background(
                             // Offset duplicate behind the face, not
                             // `.shadow()` — that ghosts the label text too.
@@ -541,7 +545,9 @@ private struct BypassRequestSheet: View {
                 .buttonStyle(.plain)
                 .disabled(!canSend)
             }
-            .padding(20)
+            .padding(kid.of(20, 32))
+            .kidContentColumn(kid.isRegular ? 620 : nil)
+            .frame(maxHeight: .infinity, alignment: kid.isRegular ? .center : .top)
             .background(KidTheme.background)
             .dismissKeyboardOnTap()
             .toolbar {

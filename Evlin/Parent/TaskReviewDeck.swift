@@ -284,16 +284,26 @@ private struct TaskReviewCard: View {
                         .font(Typography.font(30, weight: .heavy))
                         .foregroundStyle(EColor.onSurface)
 
-                    HStack(spacing: 8) {
-                        Circle().fill(statusMeta.tone).frame(width: 7, height: 7)
-                        Text(statusMeta.label).font(Typography.font(12, weight: .bold)).foregroundStyle(statusMeta.tone)
-                        if let due = task.dueLabel {
-                            Spacer(minLength: 8)
-                            Text("Due \(due)").font(Typography.font(11, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                    if task.state == .review {
+                        // Routine, positive state — the kid already did the
+                        // work, there's nothing here to flag — so this skips
+                        // the colored "Awaiting your review" pill every other
+                        // state gets (same reasoning as ScreenProfile's own
+                        // review-state declutter) and shows nothing here at
+                        // all: the due date isn't worth surfacing once the
+                        // work's already been turned in.
+                    } else {
+                        HStack(spacing: 8) {
+                            Circle().fill(statusMeta.tone).frame(width: 7, height: 7)
+                            Text(statusMeta.label).font(Typography.font(12, weight: .bold)).foregroundStyle(statusMeta.tone)
+                            if let due = task.dueLabel {
+                                Spacer(minLength: 8)
+                                Text("Due \(due)").font(Typography.font(11, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
+                            }
                         }
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(statusMeta.bg).clipShape(Capsule())
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 7)
-                    .background(statusMeta.bg).clipShape(Capsule())
                 }
 
                 // The photo is the whole point of opening this card — a
@@ -841,6 +851,7 @@ private struct EditTaskReviewSheet: View {
     @State private var hasDueDate: Bool
     @State private var repeatDays: Set<String>
     @State private var showDeleteConfirm = false
+    @Environment(\.scrollFormToBottom) private var scrollFormToBottom
 
     init(task: ChildTask, onSave: @escaping (ChildTask) -> Void, onDelete: @escaping () -> Void, onCancel: @escaping () -> Void) {
         self.task = task
@@ -870,7 +881,7 @@ private struct EditTaskReviewSheet: View {
             onSave(updated)
         }, canSave: canSave, saveLabel: "Save changes", onDelete: { showDeleteConfirm = true }) {
             FormField(label: "Task name") {
-                FormTextField(placeholder: "e.g. Make your bed", text: $title)
+                FormTextField(placeholder: "e.g. Make your bed", text: $title, scrollToTopOnFocus: true)
             }
             RepeatPicker(selectedDays: $repeatDays)
             // Starts expanded when there's already something to show
@@ -879,7 +890,7 @@ private struct EditTaskReviewSheet: View {
             // an extra tap — a brand-new task has nothing to hide, so
             // AddTaskSheet's version of this always starts closed instead.
             MoreOptions(startOpen: hasDueDate || !description.isEmpty) {
-                whenField
+                TaskWhenField(hasDueDate: $hasDueDate, dueDate: $dueDate)
                 FormField(label: "What to do") {
                     TextField("Instructions for the student…", text: $description, axis: .vertical)
                         .font(Typography.font(15, weight: .regular))
@@ -887,6 +898,11 @@ private struct EditTaskReviewSheet: View {
                         .padding(14)
                         .background(FormGreen.fieldBg)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .onChange(of: description) { _, _ in
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                scrollFormToBottom()
+                            }
+                        }
                 }
             }
         }
@@ -895,46 +911,6 @@ private struct EditTaskReviewSheet: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This can't be undone.")
-        }
-    }
-
-    // Same collapsed-until-asked-for field as AddTaskSheet's whenField —
-    // kept in sync there rather than shared outright since this one also
-    // has to seed from an existing task's due date instead of always
-    // starting empty.
-    @ViewBuilder
-    private var whenField: some View {
-        if hasDueDate {
-            VStack(alignment: .leading, spacing: 10) {
-                FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate)
-                Button("Remove date") { hasDueDate = false }
-                    .buttonStyle(.plain)
-                    .font(Typography.font(14, weight: .bold))
-                    .foregroundStyle(EColor.danger)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(FormGreen.fieldBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-        } else {
-            FormField(label: "When") {
-                Button {
-                    dueDate = Date()
-                    hasDueDate = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus.circle.fill").font(.system(size: 16))
-                        Text("Add a date & time").font(Typography.font(14, weight: .semibold))
-                    }
-                    .foregroundStyle(FormGreen.accent)
-                    .padding(.horizontal, 14)
-                    .frame(height: 48)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(FormGreen.fieldBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 

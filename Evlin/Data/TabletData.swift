@@ -90,20 +90,13 @@ enum TabletData {
         // A parent asked for a redo instead of approving — back to normal
         // ("to do") styling, with the redo note visible on the card.
         KidTask(id: "t7", title: "Practice piano", iconTaskId: "t7", due: "4:00 PM", done: false, desc: "15 minutes, scales then one song.", redoRequested: true, redoNote: "Good start! Can you play it once more with both hands together?", redoHasVoiceNote: false),
+        // Plain demo task, no icon chip — now that the task-row icon and
+        // the calendar's per-event glyphs are both gone, this is just a
+        // fresh example to eyeball the icon-less row/timeline styling on.
+        KidTask(id: "t8", title: "Walk the dog", iconTaskId: "t8", due: "5:00 PM", done: false, desc: "Take Biscuit around the block, at least once around the park."),
     ]
 
-    // Six-panel comic strips, one per task — asset names are KidT{n}Panel{1-6}
-    // in Assets.xcassets, matching each task's iconTaskId. Only t1–t5 have
-    // actually-authored art; t6/t7 are review-state demo tasks with no
-    // comic assets behind them, so they fall through to the empty case
-    // rather than pointing "Watch Evlin show you" at images that don't exist.
-    static func comicPanels(for taskId: String) -> [ComicPanel] {
-        guard ["t1", "t2", "t3", "t4", "t5"].contains(taskId) else { return [] }
-        return (1...6).map { ComicPanel(imageName: "Kid\(taskId.uppercased())Panel\($0)", caption: "") }
-    }
-
-    // Shared between ScreenTabletHome's task rows and ScreenRing's clock
-    // face tokens, so both render the same icon for the same task.
+    // Used by ScreenTabletHome's task rows to render each task's icon.
     static func sfIcon(for taskId: String) -> String {
         switch taskId {
         case "t1": return "bed.double.fill"

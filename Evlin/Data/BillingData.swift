@@ -6,6 +6,7 @@ enum BillingCycle { case monthly, yearly }
 // Settings billing page (where a parent actually upgrades/cancels) and the
 // compact read-only row on a kid's profile (ScreenProfile.planRow) both
 // observe the same instance instead of drifting out of sync.
+@MainActor
 final class BillingState: ObservableObject {
     static let shared = BillingState()
 
