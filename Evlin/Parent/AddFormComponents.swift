@@ -662,20 +662,22 @@ struct AddTaskFormFields<When: View>: View {
 
 // MARK: - Block target picker
 
-enum BlockTargetTab: String, CaseIterable { case apps = "Apps", categories = "Categories" }
-
-// Apps/Categories tab switcher + search + rows, picking from the shared
-// mockAppCatalog/mockCategoryCatalog (AppCatalogData.swift). Used both by
-// chat's one-off "Block an app" card and ScreenProfile's standing "Blocked
-// Apps" rule, so a parent picks from the identical list either way. Only
-// the top 3 of whichever tab is active ever show without a query — search
-// is the only way to reach the rest, not a "show all" expand, so there's
-// one clear path once the shortlist doesn't have what a parent wants.
+// Search + rows, picking from the shared mockAppCatalog (AppCatalogData.swift).
+// Used both by chat's one-off "Block an app" card and ScreenProfile's
+// standing "Blocked Apps" rule, so a parent picks from the identical list
+// either way. Only the top 3 ever show without a query — search is the only
+// way to reach the rest, not a "show all" expand, so there's one clear path
+// once the shortlist doesn't have what a parent wants.
+//
+// Real apps only — no "Categories" tab. A category ("Social Media", "Games")
+// had no real bundle ID behind it, so it could only ever show a generic
+// SF Symbol tile instead of the app's actual icon the way every real app
+// here does via AppIconView/ITunesLookup. Mixing a handful of fake-icon
+// category rows in with real ones read as inconsistent — better to only
+// offer what this picker can actually show a real icon for.
 struct BlockTargetPicker: View {
-    @Binding var tab: BlockTargetTab
     @Binding var query: String
     @Binding var selectedApps: Set<UUID>
-    @Binding var selectedCategories: Set<UUID>
     var accent: Color = EColor.danger
 
     @Environment(\.isEnabled) private var isEnabled
@@ -689,68 +691,27 @@ struct BlockTargetPicker: View {
         return mockAppCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
-    private var filteredCategories: [MockCategory] {
-        guard isSearching else { return mockCategoryCatalog }
-        return mockCategoryCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
-    }
-
     private var visibleApps: [MockApp] {
         isSearching ? filteredApps : Array(filteredApps.prefix(topCount))
     }
 
-    private var visibleCategories: [MockCategory] {
-        isSearching ? filteredCategories : Array(filteredCategories.prefix(topCount))
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 6) {
-                ForEach(BlockTargetTab.allCases, id: \.self) { t in
-                    Button { tab = t } label: {
-                        Text(t.rawValue)
-                            .font(Typography.font(12.5, weight: .semibold))
-                            .foregroundStyle(tab == t ? .white : EColor.onSurface)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 32)
-                            .background(tab == t ? accent : EColor.surfaceContainerHigh)
-                            .clipShape(RoundedRectangle(cornerRadius: 9))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(EColor.onSurfaceVariant)
-                TextField(tab == .apps ? "Search apps" : "Search categories", text: $query)
+                TextField("Search apps", text: $query)
                     .font(Typography.font(13, weight: .regular))
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(EColor.surfaceContainerHigh)
             .clipShape(RoundedRectangle(cornerRadius: 10))
 
-            if tab == .apps {
-                VStack(spacing: 6) {
-                    ForEach(visibleApps) { app in
-                        targetRow(
-                            title: app.name,
-                            bundleID: app.bundleID, selected: selectedApps.contains(app.id)
-                        ) { toggleApp(app) }
-                    }
-                    if !isSearching, filteredApps.count > topCount {
-                        searchHint(noun: "app")
-                    }
+            VStack(spacing: 6) {
+                ForEach(visibleApps) { app in
+                    targetRow(title: app.name, bundleID: app.bundleID, selected: selectedApps.contains(app.id)) { toggleApp(app) }
                 }
-            } else {
-                VStack(spacing: 6) {
-                    ForEach(visibleCategories) { cat in
-                        targetRow(
-                            title: cat.name, categoryIcon: cat.icon, categoryColor: cat.color,
-                            selected: selectedCategories.contains(cat.id)
-                        ) { toggleCategory(cat) }
-                    }
-                    if !isSearching, filteredCategories.count > topCount {
-                        searchHint(noun: "category")
-                    }
+                if !isSearching, filteredApps.count > topCount {
+                    searchHint(noun: "app")
                 }
             }
         }
@@ -768,13 +729,6 @@ struct BlockTargetPicker: View {
         }
     }
 
-    private func toggleCategory(_ cat: MockCategory) {
-        guard isEnabled else { return }
-        withAnimation(.easeOut(duration: 0.12)) {
-            if selectedCategories.contains(cat.id) { selectedCategories.remove(cat.id) } else { selectedCategories.insert(cat.id) }
-        }
-    }
-
     // Bigger than the old row (44pt icon vs 34, more padding, a filled
     // circle instead of a small square) plus a colored border on top of the
     // tint fill when selected — a parent picking an app to block should be
@@ -784,20 +738,10 @@ struct BlockTargetPicker: View {
     // was standing in for (telling two similarly-named apps apart), and
     // a raw identifier like "com.zhiliaoapp.musically" routinely wrapped to
     // two lines and crowded the row below it.
-    // categoryIcon/categoryColor only apply to the no-bundle-ID (category)
-    // case — a real app always renders through AppIconView now, with
-    // nothing app-specific left to guess a fallback glyph/color from.
-    private func targetRow(title: String, categoryIcon: String? = nil, categoryColor: Color? = nil, bundleID: String? = nil, selected: Bool, onTap: @escaping () -> Void) -> some View {
+    private func targetRow(title: String, bundleID: String, selected: Bool, onTap: @escaping () -> Void) -> some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                if let bundleID {
-                    AppIconView(bundleID: bundleID)
-                } else if let categoryIcon, let categoryColor {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(categoryColor)
-                        .frame(width: 44, height: 44)
-                        .overlay(Image(systemName: categoryIcon).font(.system(size: 18)).foregroundStyle(.white))
-                }
+                AppIconView(bundleID: bundleID)
                 Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
                 Spacer(minLength: 8)
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")

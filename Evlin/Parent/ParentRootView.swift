@@ -2,12 +2,11 @@ import SwiftUI
 
 struct ParentRootView: View {
     var onSwitchMode: () -> Void
-    @Binding var taskTutorialDone: Bool
     @State private var tab = 0
 
     var body: some View {
         TabView(selection: $tab) {
-            ScreenHome(taskTutorialDone: $taskTutorialDone)
+            ScreenHome()
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .tag(0)
             ScreenCalendar()

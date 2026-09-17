@@ -17,7 +17,6 @@
 		2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8069A78F21788AAE2D1285B1 /* FamilyData.swift */; };
 		3EF322A41505C157414E37A0 /* Baloo2-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3C1EA5CA2EF749300A9511A0 /* Baloo2-Bold.ttf */; };
 		3FEF485A64930BED9F97B5C7 /* ScreenHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 752627A3153FA4BAC917E81A /* ScreenHome.swift */; };
-		0A10E6705A75938779DE3624 /* ParentAdaptive.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3DC0153E016AB0A78A53A8 /* ParentAdaptive.swift */; };
 		47E5A82E81FB42FAF0817531 /* OnboardingV2ChildSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818AC7F90F32DFC21EF0ABCD /* OnboardingV2ChildSteps.swift */; };
 		4AACFAADF8DEB0286BD9011F /* ScreenTabletSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */; };
 		4B4DA3E1DA59F8F34BCE4DDF /* SettingsMemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4C498EADEBE897F3057604C /* SettingsMemoryView.swift */; };
@@ -29,8 +28,7 @@
 		604D927F992238271CCDAF57 /* ScreenSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EAE71E90939074687633EC /* ScreenSettings.swift */; };
 		63EC9119F6DAA91C32857517 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFDCFF95587B9B1C93392CB9 /* Theme.swift */; };
 		678A0CABA7ED8CC1E3DCB472 /* PlusJakartaSans-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = E412DA621462B4F83B57FF73 /* PlusJakartaSans-Medium.ttf */; };
-		6CAFFCB67D6230D6E89D3E1B /* ScreenTabletCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08CD3A0227B34A839CB70D91 /* ScreenTabletCalendar.swift */; };
-		F73DCAA9E92717E6FF1FC1BD /* KidAdaptive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E7DDE4618BB0755EDC5810A /* KidAdaptive.swift */; };
+		6B003BDC3005E0D4F81CCCA9 /* KidAdaptive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EA395A2576B1DCBBCC9CA19 /* KidAdaptive.swift */; };
 		6EC57528204E0DBB3F3CBA5D /* AddFormComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52A3A4F008D897EF73D1585D /* AddFormComponents.swift */; };
 		772ABBF2DA791D6E54546BC6 /* ScreenTabletLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */; };
 		77B012F945BCE8A13D70F9EC /* TabletData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CDCCC05BBAE584A4035390 /* TabletData.swift */; };
@@ -53,6 +51,7 @@
 		BE203569B419A363FA541488 /* ParentRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C562974CCB5B5A4A2A533023 /* ParentRootView.swift */; };
 		BE9E925FD91473528D791854 /* TabletRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB765EA0B6A70CD8AC83D0E /* TabletRootView.swift */; };
 		BEA2C979B0B4CE3CD808D610 /* OnboardingV2Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1231BBF6CB90F4A9ABFC7634 /* OnboardingV2Components.swift */; };
+		BF1F029B64C057F9D75B7C8A /* ParentAdaptive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70F936FC0D519AF37A8CC44C /* ParentAdaptive.swift */; };
 		C00DCF7BBB942A465AB60FB9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C45B887714E40ADEA10C9103 /* Assets.xcassets */; };
 		C552747695EA262271AD7134 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 072A665B8F6487876B64EE96 /* Sentry */; };
 		C895FB379F58FF4789EF58F4 /* LibraryData.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C3ABFD36105EFE6EE6C0EE /* LibraryData.swift */; };
@@ -62,7 +61,7 @@
 		DF3F65290A9265772F1A46B0 /* ScreenLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2550BFA96ADB16E4610FB30 /* ScreenLibrary.swift */; };
 		E0ACC783C6200F1E835FCFB1 /* ContractSign.lottie in Resources */ = {isa = PBXBuildFile; fileRef = DEB584CD5AEDBED16CCF6A0E /* ContractSign.lottie */; };
 		E39F20EDA4CFBFEFD8F1FD55 /* TaskData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09012159A0D8B7D4F8CCDF34 /* TaskData.swift */; };
-		EA589D35A0A1922B5AE85ED2 /* ComicReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D1594DE9444D5F5330C574B /* ComicReaderView.swift */; };
+		F20D199E2F2B8A6821912319 /* ScreenTabletCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1649C506DCAF2B417D8C70E /* ScreenTabletCalendar.swift */; };
 		F3905F5F7712B14EBEF5AD9F /* OnboardingV2Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15DFC08E5C865CAB8A51C20F /* OnboardingV2Theme.swift */; };
 		F872287144FC0F3521FA5488 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 9FFEBC3CBCB4A02DA1386ADF /* Lottie */; };
 		FA987F694C383251CBF531A2 /* ScreenTimePINVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7235C9F06F3B36BEC827AACB /* ScreenTimePINVideoView.swift */; };
@@ -71,13 +70,11 @@
 /* Begin PBXFileReference section */
 		01B8F0802B5C16AE690C7954 /* Alerts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Alerts.json; sourceTree = "<group>"; };
 		06EDC45D88CB9E54104E5E80 /* AppCatalogData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCatalogData.swift; sourceTree = "<group>"; };
-		08CD3A0227B34A839CB70D91 /* ScreenTabletCalendar.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScreenTabletCalendar.swift; sourceTree = "<group>"; };
-		2E7DDE4618BB0755EDC5810A /* KidAdaptive.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KidAdaptive.swift; sourceTree = "<group>"; };
 		09012159A0D8B7D4F8CCDF34 /* TaskData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskData.swift; sourceTree = "<group>"; };
+		0EA395A2576B1DCBBCC9CA19 /* KidAdaptive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KidAdaptive.swift; sourceTree = "<group>"; };
 		1231BBF6CB90F4A9ABFC7634 /* OnboardingV2Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Components.swift; sourceTree = "<group>"; };
 		15DFC08E5C865CAB8A51C20F /* OnboardingV2Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Theme.swift; sourceTree = "<group>"; };
 		1736580F21DF3B408C4C1C4F /* SettingsLockListManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLockListManagerView.swift; sourceTree = "<group>"; };
-		1D1594DE9444D5F5330C574B /* ComicReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComicReaderView.swift; sourceTree = "<group>"; };
 		21D3DCE7BE6480B09C478F49 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		2695F864BB0C2A358F00D312 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		315F7E412521D00D78CFF094 /* BillingData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillingData.swift; sourceTree = "<group>"; };
@@ -88,9 +85,9 @@
 		4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LessonReaderView.swift; sourceTree = "<group>"; };
 		52A3A4F008D897EF73D1585D /* AddFormComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddFormComponents.swift; sourceTree = "<group>"; };
 		68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletLibrary.swift; sourceTree = "<group>"; };
+		70F936FC0D519AF37A8CC44C /* ParentAdaptive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParentAdaptive.swift; sourceTree = "<group>"; };
 		7235C9F06F3B36BEC827AACB /* ScreenTimePINVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimePINVideoView.swift; sourceTree = "<group>"; };
 		752627A3153FA4BAC917E81A /* ScreenHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenHome.swift; sourceTree = "<group>"; };
-		CA3DC0153E016AB0A78A53A8 /* ParentAdaptive.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ParentAdaptive.swift; sourceTree = "<group>"; };
 		7794A43F9156EA4254043CA3 /* CalendarData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarData.swift; sourceTree = "<group>"; };
 		8069A78F21788AAE2D1285B1 /* FamilyData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FamilyData.swift; sourceTree = "<group>"; };
 		818AC7F90F32DFC21EF0ABCD /* OnboardingV2ChildSteps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2ChildSteps.swift; sourceTree = "<group>"; };
@@ -108,14 +105,15 @@
 		B61198FEA8092F22132638AF /* PlusJakartaSans-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-Bold.ttf"; sourceTree = "<group>"; };
 		B6A0F89562B8F59E2F601E60 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		B6AD197EC03506109DFC3815 /* Baloo2-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Baloo2-Medium.ttf"; sourceTree = "<group>"; };
-		BAB9989856322C9057C854F9 /* screentimePIN.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = screentimePIN.mp4; sourceTree = "<group>"; };
-		C3552C1175661B1ABC302984 /* Evlin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Evlin.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BAB9989856322C9057C854F9 /* screentimePIN.mp4 */ = {isa = PBXFileReference; path = screentimePIN.mp4; sourceTree = "<group>"; };
+		C3552C1175661B1ABC302984 /* Evlin.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Evlin.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C45B887714E40ADEA10C9103 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C4C498EADEBE897F3057604C /* SettingsMemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsMemoryView.swift; sourceTree = "<group>"; };
 		C562974CCB5B5A4A2A533023 /* ParentRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParentRootView.swift; sourceTree = "<group>"; };
 		CFDCFF95587B9B1C93392CB9 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		CFF12EEBA62C5D2DF0ACA4C6 /* ScreenTimeGrant.lottie */ = {isa = PBXFileReference; lastKnownFileType = file; path = ScreenTimeGrant.lottie; sourceTree = "<group>"; };
-		DEB584CD5AEDBED16CCF6A0E /* ContractSign.lottie */ = {isa = PBXFileReference; lastKnownFileType = file; path = ContractSign.lottie; sourceTree = "<group>"; };
+		CFF12EEBA62C5D2DF0ACA4C6 /* ScreenTimeGrant.lottie */ = {isa = PBXFileReference; path = ScreenTimeGrant.lottie; sourceTree = "<group>"; };
+		D1649C506DCAF2B417D8C70E /* ScreenTabletCalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletCalendar.swift; sourceTree = "<group>"; };
+		DEB584CD5AEDBED16CCF6A0E /* ContractSign.lottie */ = {isa = PBXFileReference; path = ContractSign.lottie; sourceTree = "<group>"; };
 		E2550BFA96ADB16E4610FB30 /* ScreenLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenLibrary.swift; sourceTree = "<group>"; };
 		E372C2D464BC26D17E9DD43E /* DataSecurity.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = DataSecurity.json; sourceTree = "<group>"; };
 		E412DA621462B4F83B57FF73 /* PlusJakartaSans-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-Medium.ttf"; sourceTree = "<group>"; };
@@ -274,14 +272,14 @@
 		AECF209188E4A9CA00140CDC /* Tablet */ = {
 			isa = PBXGroup;
 			children = (
+				0EA395A2576B1DCBBCC9CA19 /* KidAdaptive.swift */,
 				818BC70482046C9B2A75F3A3 /* ParentApprovalWaitingView.swift */,
+				D1649C506DCAF2B417D8C70E /* ScreenTabletCalendar.swift */,
 				EA6BD1B156CBB84E08FAA023 /* ScreenTabletHome.swift */,
 				68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */,
 				EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */,
 				EEB765EA0B6A70CD8AC83D0E /* TabletRootView.swift */,
 				90FD88DD9F5911F37061E2AB /* TaskDetailView.swift */,
-				08CD3A0227B34A839CB70D91 /* ScreenTabletCalendar.swift */,
-				2E7DDE4618BB0755EDC5810A /* KidAdaptive.swift */,
 			);
 			path = Tablet;
 			sourceTree = "<group>";
@@ -290,13 +288,12 @@
 			isa = PBXGroup;
 			children = (
 				52A3A4F008D897EF73D1585D /* AddFormComponents.swift */,
-				1D1594DE9444D5F5330C574B /* ComicReaderView.swift */,
 				4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */,
+				70F936FC0D519AF37A8CC44C /* ParentAdaptive.swift */,
 				C562974CCB5B5A4A2A533023 /* ParentRootView.swift */,
 				EFFF0CA102C1CCA42653C334 /* ScreenCalendar.swift */,
 				B126EFB0851C847E22CA77C7 /* ScreenChat.swift */,
 				752627A3153FA4BAC917E81A /* ScreenHome.swift */,
-				CA3DC0153E016AB0A78A53A8 /* ParentAdaptive.swift */,
 				E2550BFA96ADB16E4610FB30 /* ScreenLibrary.swift */,
 				96621E11FF6F30CF0A987182 /* ScreenProfile.swift */,
 				B1EAE71E90939074687633EC /* ScreenSettings.swift */,
@@ -346,6 +343,8 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
 			};
 			buildConfigurationList = 86A7F6C9207C41AD6BD6FA0F /* Build configuration list for PBXProject "Evlin" */;
 			developmentRegion = en;
@@ -404,11 +403,11 @@
 				07856DCD11AE81A41F73CFC4 /* AppCatalogData.swift in Sources */,
 				16524B858CD13115286832FF /* BillingData.swift in Sources */,
 				55D8223509D4076490266270 /* CalendarData.swift in Sources */,
-				EA589D35A0A1922B5AE85ED2 /* ComicReaderView.swift in Sources */,
 				93DD2562F31193DC22691A81 /* Components.swift in Sources */,
 				8981DFDD4250E877E419BE29 /* EvlinApp.swift in Sources */,
 				2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */,
 				DC41F1DF55F3583A080BD7F1 /* Keyboard.swift in Sources */,
+				6B003BDC3005E0D4F81CCCA9 /* KidAdaptive.swift in Sources */,
 				CB3EAC09260310DFC1B20DA2 /* LessonReaderView.swift in Sources */,
 				C895FB379F58FF4789EF58F4 /* LibraryData.swift in Sources */,
 				8819F6AB3C97E70A536C7F84 /* NotificationsData.swift in Sources */,
@@ -417,16 +416,17 @@
 				2C729D3AF8CE056AA0C5F437 /* OnboardingV2Coordinator.swift in Sources */,
 				B9AB0ADFCDB3DD160A09E316 /* OnboardingV2ParentSteps.swift in Sources */,
 				F3905F5F7712B14EBEF5AD9F /* OnboardingV2Theme.swift in Sources */,
+				BF1F029B64C057F9D75B7C8A /* ParentAdaptive.swift in Sources */,
 				1F33184BFBCF1E8D9D149BC8 /* ParentApprovalWaitingView.swift in Sources */,
 				BE203569B419A363FA541488 /* ParentRootView.swift in Sources */,
 				DD71A4DD17F3570749AD6DA2 /* RootView.swift in Sources */,
 				1CAC7371C19EB0230B7CCB3A /* ScreenCalendar.swift in Sources */,
 				5B274B0071D8E0E721100258 /* ScreenChat.swift in Sources */,
 				3FEF485A64930BED9F97B5C7 /* ScreenHome.swift in Sources */,
-				0A10E6705A75938779DE3624 /* ParentAdaptive.swift in Sources */,
 				DF3F65290A9265772F1A46B0 /* ScreenLibrary.swift in Sources */,
 				5A0B892A3BA07780A2C41BBD /* ScreenProfile.swift in Sources */,
 				604D927F992238271CCDAF57 /* ScreenSettings.swift in Sources */,
+				F20D199E2F2B8A6821912319 /* ScreenTabletCalendar.swift in Sources */,
 				BD538B4E14DDD3CB0BF7C6D3 /* ScreenTabletHome.swift in Sources */,
 				772ABBF2DA791D6E54546BC6 /* ScreenTabletLibrary.swift in Sources */,
 				4AACFAADF8DEB0286BD9011F /* ScreenTabletSettings.swift in Sources */,
@@ -440,8 +440,6 @@
 				AE9953D62A105427AFE39AF9 /* TaskDetailView.swift in Sources */,
 				9C9190CC48E4BD8845C27F9E /* TaskReviewDeck.swift in Sources */,
 				63EC9119F6DAA91C32857517 /* Theme.swift in Sources */,
-				6CAFFCB67D6230D6E89D3E1B /* ScreenTabletCalendar.swift in Sources */,
-				F73DCAA9E92717E6FF1FC1BD /* KidAdaptive.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -453,7 +451,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = D9FM36P37F;
 				INFOPLIST_FILE = Evlin/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -527,7 +524,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = D9FM36P37F;
 				INFOPLIST_FILE = Evlin/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

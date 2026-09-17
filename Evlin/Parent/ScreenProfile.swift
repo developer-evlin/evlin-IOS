@@ -9,12 +9,6 @@ struct ScreenProfile: View {
     // pushed over another screen — there's nowhere for the chevron to go
     // back to, so it's hidden instead of sitting there doing nothing.
     var hideBackButton: Bool = false
-    // Spotlight walkthrough shown the first time a parent reaches their
-    // (default) first child's profile after onboarding — see
-    // AddTaskTutorialOverlay below. Session-only, same convention as
-    // RootView's `onboarded`/`taskTutorialDone`.
-    var startInTutorial: Bool = false
-    var onTutorialCompleted: (() -> Void)? = nil
 
     @ObservedObject private var child: Child
     // A real Binding into TaskStore's cache, not a local copy — so an
@@ -34,7 +28,6 @@ struct ScreenProfile: View {
     // downtime) now come from chat instead, so the "+" goes straight to
     // adding a task, no intermediate menu with a single choice on it.
     @State private var showAddTask = false
-    @State private var tutorialActive: Bool
     @State private var showUnlockConfirm = false
     @State private var showGrantTimeSheet = false
     @State private var editingScreenTimeLimit = false
@@ -58,16 +51,13 @@ struct ScreenProfile: View {
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var adaptive: ParentAdaptive { ParentAdaptive(hSizeClass) }
 
-    init(childId: String, onBack: @escaping () -> Void, hideBackButton: Bool = false, startInTutorial: Bool = false, onTutorialCompleted: (() -> Void)? = nil) {
+    init(childId: String, onBack: @escaping () -> Void, hideBackButton: Bool = false) {
         self.childId = childId
         self.onBack = onBack
         self.hideBackButton = hideBackButton
-        self.startInTutorial = startInTutorial
-        self.onTutorialCompleted = onTutorialCompleted
         let c = FamilyStore.child(childId)
         _child = ObservedObject(wrappedValue: c)
         _tasks = TaskStore.binding(for: childId)
-        _tutorialActive = State(initialValue: startInTutorial)
     }
 
     // A task due on some other day (tomorrow, via the New Task date
@@ -107,7 +97,6 @@ struct ScreenProfile: View {
             default: break
             }
         }
-        child.tasksDone = child.tasksTotal
         child.status = .unlocked
         child.timeLeft = formatMinutes(child.dailyLimitMin)
         child.timePct = 100
@@ -234,15 +223,6 @@ struct ScreenProfile: View {
                 }
             }
         }
-        // Spotlight tutorial goes on top of everything else, including the
-        // unlock-confirm card above — it's the one thing allowed to be
-        // interactive while it's active.
-        .overlay {
-            if tutorialActive {
-                AddTaskTutorialOverlay(childName: child.name) { showAddTask = true }
-                    .transition(.opacity)
-            }
-        }
         .overlay {
             if showScreenTimeOffConfirm {
                 ScreenTimeOffConfirmCard(
@@ -295,8 +275,6 @@ struct ScreenProfile: View {
         .toolbar {
             if !hideBackButton {
                 ToolbarItem(placement: .topBarLeading) {
-                    // Locked out along with everything else until the first
-                    // task is created — leaving would defeat the walkthrough.
                     Button {
                         // onBack() dismisses the fullScreenCover this whole
                         // screen lives in (see ScreenHome's openChildId) — a
@@ -308,27 +286,33 @@ struct ScreenProfile: View {
                         backPending = true
                         onBack()
                     } label: { Image(systemName: "chevron.left") }
-                        .disabled(tutorialActive)
-                        .opacity(tutorialActive ? 0.3 : 1)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
             }
         }
         .fullScreenCover(isPresented: Binding(get: { reviewStartIndex != nil }, set: { if !$0 { reviewStartIndex = nil } })) {
-            TaskReviewDeckView(tasks: $tasks, childName: child.name, startIndex: reviewStartIndex ?? 0, onDismiss: { reviewStartIndex = nil })
+            TaskReviewDeckView(tasks: $tasks, childName: child.name, childId: childId, startIndex: reviewStartIndex ?? 0, onDismiss: { reviewStartIndex = nil })
         }
         .sheet(isPresented: $showAddTask) {
             AddTaskSheet(child: child, onCreate: { newTask in
+                // The child's very first task ever — flips the phone from
+                // .unlocked (nothing to gate yet) to .lockedTasks, a real
+                // consequence of assigning work instead of a status the
+                // child was just born with. dailyLimitMin (defaulted to 60
+                // at onboarding — see FamilyStore.addOnboardedChild) is
+                // deliberately left untouched here: a parent could already
+                // have customized it in Rules before ever assigning a task,
+                // and re-stomping it to the default here would be a bug.
+                let isFirstTask = tasks.isEmpty
                 let newId = (tasks.map(\.id).max() ?? 0) + 1
                 var t = newTask
                 t.id = newId
                 tasks.append(t)
-                showAddTask = false
-                if tutorialActive {
-                    withAnimation(.easeOut(duration: 0.25)) { tutorialActive = false }
-                    onTutorialCompleted?()
+                if isFirstTask {
+                    child.status = .lockedTasks
                 }
+                showAddTask = false
             }, onCancel: { showAddTask = false })
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .interactiveDismissDisabled()
@@ -453,7 +437,7 @@ struct ScreenProfile: View {
                                     .foregroundStyle(downtimeIndigo.opacity(0.8))
                             }
                         } else {
-                            Label(child.status == .lockedTasks ? "Locked · \(child.tasksDone)/\(child.tasksTotal) tasks" : "Locked", systemImage: "lock.fill")
+                            Label(child.status == .lockedTasks ? "Locked · \(doneCount)/\(todaysTasks.count) tasks" : "Locked", systemImage: "lock.fill")
                                 .font(Typography.font(10, weight: .bold))
                                 .foregroundStyle(EColor.danger)
                         }
@@ -1348,98 +1332,6 @@ private struct ScreenTimeOffConfirmCard: View {
         .buttonStyle(.plain)
     }
 }
-
-// MARK: - First-task spotlight tutorial
-
-// Punches a visual + interactive "hole" in a view, revealing whatever sits
-// beneath it instead of covering it — used below to spotlight the real FAB
-// through the dimming scrim rather than drawing a fake copy over it.
-private extension View {
-    func reverseMask<Mask: View>(alignment: Alignment = .center, @ViewBuilder _ mask: () -> Mask) -> some View {
-        self.mask {
-            Rectangle()
-                .overlay(alignment: alignment) { mask().blendMode(.destinationOut) }
-                .compositingGroup()
-        }
-    }
-}
-
-// Locks the rest of this screen (and, since it's presented as a
-// fullScreenCover over the whole tab bar, the rest of the app) behind a
-// dimmed scrim with one spotlighted hole over the "+" FAB, plus a callout
-// explaining what to do. Nothing here is skippable — the only way out is
-// tapping the hole and actually creating a task (see ScreenProfile's
-// showAddTask sheet, which clears `tutorialActive`).
-private struct AddTaskTutorialOverlay: View {
-    var childName: String
-    var onTapAddTask: () -> Void
-
-    // Mirrors the real FAB's geometry in ScreenProfile's safeAreaInset
-    // exactly (56pt circle, trailing 20 / bottom 16) so the spotlight lines
-    // up with the button underneath instead of approximating its position.
-    private let fabSize: CGFloat = 56
-    private let fabTrailing: CGFloat = 20
-    private let fabBottom: CGFloat = 16
-    private let holePad: CGFloat = 8
-    private var holeDiameter: CGFloat { fabSize + holePad * 2 }
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Color.black.opacity(0.62)
-                .ignoresSafeArea()
-                .reverseMask(alignment: .bottomTrailing) {
-                    Circle()
-                        .frame(width: holeDiameter, height: holeDiameter)
-                        .padding(.trailing, fabTrailing - holePad)
-                        .padding(.bottom, fabBottom - holePad)
-                }
-                // Absorbs every tap outside the hole so nothing underneath
-                // (rules, lock button, back button) is reachable.
-                .contentShape(Rectangle())
-                .onTapGesture {}
-
-            Circle()
-                .strokeBorder(Color.white, lineWidth: 3)
-                .frame(width: holeDiameter, height: holeDiameter)
-                .padding(.trailing, fabTrailing - holePad)
-                .padding(.bottom, fabBottom - holePad)
-                .allowsHitTesting(false)
-
-            // The real FAB shows through the hole unchanged; this invisible
-            // button sits in front of it so the tutorial controls exactly
-            // what tapping it does (jump straight to the task form, not the
-            // add-menu chooser).
-            Button(action: onTapAddTask) {
-                Color.clear.frame(width: holeDiameter, height: holeDiameter)
-            }
-            .padding(.trailing, fabTrailing - holePad)
-            .padding(.bottom, fabBottom - holePad)
-
-            calloutCard
-                .padding(.trailing, fabTrailing)
-                .padding(.bottom, fabBottom + holeDiameter + 16)
-        }
-    }
-
-    private var calloutCard: some View {
-        VStack(alignment: .trailing, spacing: 6) {
-            Text("Add \(childName)'s first task")
-                .font(Typography.font(15, weight: .heavy))
-                .foregroundStyle(.white)
-            Text("Tap + to create a chore or homework task — the rest of Evlin unlocks once \(childName) has something to do.")
-                .font(Typography.font(13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.88))
-                .multilineTextAlignment(.trailing)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(16)
-        .frame(maxWidth: 270, alignment: .trailing)
-        .background(EColor.primary)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
-    }
-}
-
 
 // MARK: - Rule type metadata
 

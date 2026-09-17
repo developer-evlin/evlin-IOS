@@ -87,57 +87,11 @@ enum TaskStore {
         )
     }
 
-    private static func generate(for childId: String) -> [ChildTask] {
-        if childId == "alex" {
-            return []
-        }
-        if childId == "ben" {
-            return [
-                ChildTask(id: 1, title: "Make Bed", state: .done, category: "Chore", description: "Straighten the sheets and pillows.", note: "Done first thing.", submittedAt: "7:30 AM", dueLabel: "Today, 8:00 AM", repeats: "sun,mon,tue,wed,thu,fri,sat"),
-                ChildTask(id: 2, title: "Spelling Practice", state: .done, category: "Homework", description: "Write each word 3 times, list on the fridge.", note: "All 10 words done.", submittedAt: "4:05 PM", dueLabel: "Today, 5:00 PM", photoCount: 1, repeats: "mon,tue,wed,thu,fri"),
-                ChildTask(id: 3, title: "Feed the Cat", state: .done, category: "Chore", description: "Fill the food and water bowls.", note: "Fed and watered.", submittedAt: "6:15 PM", dueLabel: "Today, 6:30 PM", repeats: "sun,mon,tue,wed,thu,fri,sat"),
-                ChildTask(id: 4, title: "Read for 20 minutes", state: .done, category: "Reading", description: "Any book, 20+ minutes.", note: "Finished a whole chapter.", submittedAt: "7:40 PM", dueLabel: "Today, 8:00 PM"),
-                ChildTask(id: 5, title: "Practice Piano", state: .done, category: "Chore", description: "15 minutes, scales then one song.", note: "Did scales and Ode to Joy.", submittedAt: "5:30 PM", dueLabel: "Today, 6:00 PM"),
-            ]
-        }
-        // Every task submitted — 4 in normal review, 1 asking to bypass —
-        // and nothing outstanding or overdue, so headerCard's Approve All
-        // button (see ScreenProfile.allTasksAwaitingReview) replaces the
-        // manual lock/unlock slider. A dedicated branch rather than
-        // folding this into the generic default below, which Noah and
-        // Mia also fall through — they still have real outstanding tasks
-        // and shouldn't pick up Leo's all-submitted scenario.
-        if childId == "leo" {
-            return [
-                ChildTask(id: 1, title: "Clean Table", state: .review, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),
-                ChildTask(id: 2, title: "Science Project", state: .review, category: "Homework", description: "Finish the volcano diagram, page 14. Photo when done.", note: "Took longer than expected.", submittedAt: "3:18 PM", dueLabel: "Today, 4:00 PM", photoCount: 1),
-                ChildTask(id: 3, title: "Math Practice", state: .review, category: "Homework", description: "Questions 1–8, page 24. Photo when done.", note: "Did all 8, #6 was tricky.", submittedAt: "5:40 PM", dueLabel: "Today, 6:00 PM", photoCount: 3, repeats: "mon,tue,wed,thu,fri"),
-                ChildTask(id: 4, title: "Walk Dog", state: .review, category: "Chore", description: "Walk around the block, 15+ minutes.", note: "Walked him around the block.", submittedAt: "5:20 PM", dueLabel: "Today, 5:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),
-                ChildTask(id: 6, title: "Reading Essay", state: .review, category: "Homework", description: "300-word essay on this week's chapter.", note: "Kept it short like you said.", submittedAt: "4:12 PM", dueLabel: "Today, 5:00 PM"),
-                ChildTask(id: 5, title: "Read for 20 minutes", state: .bypass, category: "Reading", description: "Any book, 20+ minutes.", note: "Had football practice, home too late. Can I double up tomorrow?", submittedAt: "7:42 PM", dueLabel: "Today, 8:00 PM", hasVoiceNote: true),
-            ]
-        }
-        if childId == "zoe" {
-            return [
-                ChildTask(id: 1, title: "Clean Table", state: .done, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),
-                ChildTask(id: 2, title: "Math Practice", state: .done, category: "Homework", description: "Questions 1–8, page 24.", note: "Finished before dinner.", submittedAt: "5:10 PM", dueLabel: "Today, 6:00 PM", repeats: "mon,tue,wed,thu,fri"),
-                ChildTask(id: 3, title: "Reading Essay", state: .done, category: "Homework", description: "300-word essay on this week's chapter.", note: "Turned in early.", submittedAt: "4:20 PM", dueLabel: "Today, 5:00 PM"),
-                ChildTask(id: 4, title: "Walk Dog", state: .done, category: "Chore", description: "Walk around the block, 15+ minutes.", note: "Done with Dad.", submittedAt: "5:45 PM", dueLabel: "Today, 5:00 PM", repeats: "sun,mon,tue,wed,thu,fri,sat"),
-                ChildTask(id: 5, title: "Read for 20 minutes", state: .done, category: "Reading", description: "Any book, 20+ minutes.", note: "Read a whole chapter.", submittedAt: "7:00 PM", dueLabel: "Today, 8:00 PM"),
-            ]
-        }
-        return [
-            ChildTask(id: 1, title: "Clean Table", state: .done, category: "Chore", description: "Wipe down the table and clear plates.", note: "All done!", submittedAt: "12:42 PM", dueLabel: "Today, 1:00 PM", photoCount: 1, repeats: "sun,mon,tue,wed,thu,fri,sat"),
-            ChildTask(id: 2, title: "Science Project", state: .review, category: "Homework", description: "Finish the volcano diagram, page 14. Photo when done.", note: "Took longer than expected.", submittedAt: "3:18 PM", dueLabel: "Today, 4:00 PM", photoCount: 1),
-            // Submitted with a photo of each worked page rather than one
-            // photo for the whole assignment — the multi-photo grid case
-            // (see TaskReviewDeck) most other tasks here don't exercise.
-            ChildTask(id: 3, title: "Math Practice", state: .review, category: "Homework", description: "Questions 1–8, page 24. Photo when done.", note: "Did all 8, #6 was tricky.", submittedAt: "5:40 PM", dueLabel: "Today, 6:00 PM", photoCount: 3, repeats: "mon,tue,wed,thu,fri"),
-            ChildTask(id: 6, title: "Reading Essay", state: .review, category: "Homework", description: "300-word essay on this week's chapter.", note: "Kept it short like you said.", submittedAt: "4:12 PM", dueLabel: "Today, 5:00 PM"),
-            ChildTask(id: 5, title: "Read for 20 minutes", state: .bypass, category: "Reading", description: "Any book, 20+ minutes.", note: "Had football practice, home too late. Can I double up tomorrow?", submittedAt: "7:42 PM", dueLabel: "Today, 8:00 PM", hasVoiceNote: true),
-            ChildTask(id: 4, title: "Walk Dog", state: .overdue, category: "Chore", description: "Walk around the block, 15+ minutes.", dueLabel: "Yesterday, 5:00 PM", repeats: "sun,mon,tue,wed,thu,fri,sat"),
-        ]
-    }
+    // Every real child (from onboarding, or Settings' "Add a child") starts
+    // with no tasks — the old per-id demo branches here (one hand-authored
+    // task list per status being showcased) are preserved in git history
+    // rather than left as unreachable dead code now that no such ids exist.
+    private static func generate(for childId: String) -> [ChildTask] { [] }
 
     // Takes the raw minutes rather than a whole Child — Child seeds its own
     // `rules` from this in its init, before `self` is fully constructed, so

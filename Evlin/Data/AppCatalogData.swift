@@ -25,23 +25,6 @@ let mockAppCatalog: [MockApp] = [
     MockApp(name: "Safari", bundleID: "com.apple.mobilesafari"),
 ]
 
-// Mirrors LockListManagerView's real Apps/Categories split (Views/Settings/
-// LockListManagerView.swift) — blocking a whole category, not just named
-// apps, is a real option there.
-struct MockCategory: Identifiable {
-    let id = UUID()
-    var name: String
-    var icon: String
-    var color: Color
-}
-
-let mockCategoryCatalog: [MockCategory] = [
-    MockCategory(name: "Social Media", icon: "person.2.fill", color: Color(hex: "E1306C")),
-    MockCategory(name: "Games", icon: "gamecontroller.fill", color: Color(hex: "00A2FF")),
-    MockCategory(name: "Entertainment", icon: "play.rectangle.fill", color: .red),
-    MockCategory(name: "Messaging", icon: "message.fill", color: .green),
-]
-
 // The App Store's own lookup endpoint — public, unauthenticated, just the
 // bundle ID as a query param — used to pull each app's real icon artwork
 // for the block-an-app picker. This is the one bit of networking anywhere

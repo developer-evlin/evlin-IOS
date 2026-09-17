@@ -71,8 +71,6 @@ enum CalendarData {
     static let people: [FamilyPerson] = [
         FamilyPerson(id: "family", name: "Alex Carter", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE")),
         FamilyPerson(id: "liam", name: "Liam", color: Color(hex: "2563EB"), bg: Color(hex: "DBEAFE")),
-        FamilyPerson(id: "maya", name: "Maya", color: Color(hex: "16A34A"), bg: Color(hex: "DCFCE7")),
-        FamilyPerson(id: "emma", name: "Emma", color: Color(hex: "F97316"), bg: Color(hex: "FFEDD5")),
     ]
 
     // The one abstract, non-lane entity: "everyone." An event tagged with
@@ -119,14 +117,10 @@ enum CalendarData {
         12: [
             CalEvent(personId: "family", title: "Work call", emoji: "💻", start: "09:00 AM", end: "10:00 AM", category: "Activity", location: "", note: "", repeats: weekdayCodes),
             CalEvent(personId: "liam", title: "Clean Table", emoji: "🧹", start: "08:00 AM", end: "08:30 AM", category: "Chore", location: "Kitchen", note: "Wipe down the kitchen table.", repeats: allDayCodes),
-            CalEvent(personId: "maya", title: "Piano Practice", emoji: "🎹", start: "10:00 AM", end: "11:30 AM", category: "Lesson", location: "Living Room", note: "Work on the new piece.", repeats: "thu"),
             CalEvent(personId: "everyone", title: "Family Lunch", emoji: "🍽️", start: "12:00 PM", end: "01:00 PM", category: "Family", location: "Dining Room", note: "No devices at the table.", repeats: "none"),
             CalEvent(personId: "liam", title: "Math Practice", emoji: "📐", start: "01:30 PM", end: "02:30 PM", category: "Study", location: "Study Room", note: "Chapter 7 exercises.", repeats: weekdayCodes),
-            CalEvent(personId: "emma", title: "Reading Time", emoji: "📚", start: "02:00 PM", end: "03:00 PM", category: "Study", location: "Bedroom", note: "Choose one book.", repeats: allDayCodes),
-            CalEvent(personId: "maya", title: "Art Class", emoji: "🎨", start: "03:30 PM", end: "05:00 PM", category: "Lesson", location: "Art Studio", note: "Bring watercolor set.", repeats: "thu"),
             CalEvent(personId: "liam", title: "Soccer Practice", emoji: "⚽", start: "04:00 PM", end: "05:30 PM", category: "Sport", location: "City Park", note: "Don't forget shin guards.", repeats: "thu"),
             CalEvent(personId: "everyone", title: "Family Dinner", emoji: "🍴", start: "06:00 PM", end: "07:00 PM", category: "Family", location: "Dining Room", note: "Everyone helps set the table.", repeats: allDayCodes),
-            CalEvent(personId: "emma", title: "Story Time", emoji: "🌙", start: "07:30 PM", end: "08:30 PM", category: "Routine", location: "Bedroom", note: "Two stories max.", repeats: allDayCodes),
 
             // Tasks — same store, category "Task", told apart on the
             // timeline by isAnytime (ANYTIME row vs a due-time slot on the
@@ -137,9 +131,6 @@ enum CalendarData {
             CalEvent(personId: "liam", title: "Make your bed", emoji: "🛏️", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done, linkedTaskId: 1),
             CalEvent(personId: "liam", title: "Clean your room", emoji: "🧹", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .submitted, linkedTaskId: 2),
             CalEvent(personId: "liam", title: "Homework", emoji: "📓", start: "05:00 PM", end: "05:30 PM", category: "Task", location: "", note: "Finish the worksheet.", repeats: "none", taskState: .pending, gatesUnlock: true, linkedTaskId: 3),
-            CalEvent(personId: "maya", title: "Feed the dog", emoji: "🐶", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done, linkedTaskId: 1),
-            CalEvent(personId: "maya", title: "Practice piano", emoji: "🎹", start: "07:00 PM", end: "07:30 PM", category: "Task", location: "", note: "15 minutes — scales, then a song.", repeats: "none", taskState: .pending, gatesUnlock: true, linkedTaskId: 3),
-            CalEvent(personId: "emma", title: "Reading", emoji: "📚", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .pending, gatesUnlock: true, linkedTaskId: 5),
         ],
     ]
 

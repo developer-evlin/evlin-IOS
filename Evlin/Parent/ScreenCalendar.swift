@@ -336,7 +336,7 @@ struct ScreenCalendar: View {
         // The direct jump: no ScreenProfile instance involved at all, so
         // dismissing this lands right back on the calendar.
         .fullScreenCover(isPresented: $showTaskReview) {
-            TaskReviewDeckView(tasks: $reviewTasks, childName: reviewChildName, startIndex: reviewStartIndex, onDismiss: {
+            TaskReviewDeckView(tasks: $reviewTasks, childName: reviewChildName, childId: reviewPersonId, startIndex: reviewStartIndex, onDismiss: {
                 syncReviewedTasks(reviewTasks, personId: reviewPersonId)
                 showTaskReview = false
             })
@@ -1340,7 +1340,7 @@ private struct TaskDueGroupSheet: View {
             }
         }
         .fullScreenCover(isPresented: $showTaskReview) {
-            TaskReviewDeckView(tasks: $reviewTasks, childName: reviewChildName, startIndex: reviewStartIndex, onDismiss: {
+            TaskReviewDeckView(tasks: $reviewTasks, childName: reviewChildName, childId: reviewPersonId, startIndex: reviewStartIndex, onDismiss: {
                 syncReviewedTasks()
                 showTaskReview = false
             })

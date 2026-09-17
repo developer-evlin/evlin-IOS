@@ -14,7 +14,12 @@ private enum ChatCardKind {
     // other, matching how a real back-and-forth conversation would ask them,
     // rather than both showing up on the same card at once.
     case blockDuration(apps: [String])
-    case addTask
+    // Carries the message that triggered it — AddTaskCard reads this to
+    // pre-fill Title/Due the same way inferredRepeats already reads typed
+    // text for a repeat cadence, so tapping a specific request ("...to
+    // clean his room every Saturday morning") hands back a drafted task to
+    // confirm/edit rather than a blank form the parent re-types by hand.
+    case addTask(prompt: String)
     // Read-only — what's done/pending/overdue for a child today, pulled
     // from the same TaskStore data their profile shows, not a mocked
     // separate figure.
@@ -173,13 +178,11 @@ private struct BlockAppCard: View {
     // (BlockDurationCard below), not a section tacked onto this same card.
     var onSelectTargets: ([String]) -> Void
 
-    @State private var tab: BlockTargetTab = .apps
     @State private var query = ""
     @State private var selectedApps: Set<UUID> = []
-    @State private var selectedCategories: Set<UUID> = []
     @State private var submitted = false
 
-    private var totalSelected: Int { selectedApps.count + selectedCategories.count }
+    private var totalSelected: Int { selectedApps.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -188,16 +191,15 @@ private struct BlockAppCard: View {
                 Text("Block an app").font(Typography.font(15, weight: .bold)).foregroundStyle(EColor.onSurface)
             }
 
-            BlockTargetPicker(tab: $tab, query: $query, selectedApps: $selectedApps, selectedCategories: $selectedCategories)
+            BlockTargetPicker(query: $query, selectedApps: $selectedApps)
                 .disabled(submitted)
 
             Button {
                 let appNames = mockAppCatalog.filter { selectedApps.contains($0.id) }.map(\.name)
-                let categoryNames = mockCategoryCatalog.filter { selectedCategories.contains($0.id) }.map(\.name)
                 submitted = true
-                onSelectTargets(appNames + categoryNames)
+                onSelectTargets(appNames)
             } label: {
-                Text(totalSelected == 0 ? "Select apps or categories to block" : "Block \(totalSelected) selected")
+                Text(totalSelected == 0 ? "Select apps to block" : "Block \(totalSelected) selected")
                     .font(Typography.font(13.5, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -300,13 +302,52 @@ private struct BlockDurationCard: View {
 // — a live, visible "reasoning" readout rather than a form field to fill
 // in, matching the "AI" framing of doing this from chat in the first
 // place.
+//
+// Fields start pre-filled from whatever the parent actually asked
+// (initialPrompt), not blank — the same "read the parent's own words"
+// spirit inferredRepeats already applies to frequency, just applied to
+// Title/Due too, so this reads as the AI having drafted a task rather than
+// handing back an empty form to fill in by hand.
 private struct AddTaskCard: View {
+    var initialPrompt: String = ""
     var onCreate: (_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) -> Void
 
-    @State private var title = ""
+    @State private var title: String
     @State private var whatToDo = ""
-    @State private var due = ""
+    @State private var due: String
     @State private var submitted = false
+
+    init(initialPrompt: String = "", onCreate: @escaping (_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) -> Void) {
+        self.initialPrompt = initialPrompt
+        self.onCreate = onCreate
+        let parsed = Self.parse(initialPrompt)
+        _title = State(initialValue: parsed.title)
+        _due = State(initialValue: parsed.due)
+    }
+
+    // Crude "...to <task> every/on/at <schedule>" extraction — good enough
+    // for the specific, realistic requests this card is actually shown
+    // from (the chat suggestion tile, or a parent's own typed request);
+    // anything that doesn't match this shape just leaves both fields
+    // blank, same as before this existed.
+    private static func parse(_ prompt: String) -> (title: String, due: String) {
+        guard let toRange = prompt.range(of: " to ", options: .caseInsensitive) else { return ("", "") }
+        let after = String(prompt[toRange.upperBound...])
+        let lower = after.lowercased()
+        for marker in ["every ", " on ", " at "] {
+            if let r = lower.range(of: marker) {
+                let titlePart = String(after[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
+                let duePart = String(after[r.lowerBound...]).trimmingCharacters(in: .whitespaces)
+                return (capitalizeFirst(titlePart), capitalizeFirst(duePart))
+            }
+        }
+        return (capitalizeFirst(after), "")
+    }
+
+    private static func capitalizeFirst(_ s: String) -> String {
+        guard let first = s.first else { return s }
+        return first.uppercased() + s.dropFirst()
+    }
 
     private var canCreate: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty && !submitted }
 
@@ -526,13 +567,34 @@ private struct ChatSuggestion: Identifiable {
     var title: String
     var prompt: String
     var card: ChatCardKind? = nil
+    // Only read when `card` is nil — a card-carrying tile's reply comes from
+    // its own intro text in sendSuggestion instead (see .blockApp/.addTask/
+    // .reviewCompliance there). Lets a plain-text suggestion (no structured
+    // follow-up) still land a reply tailored to what it actually asked,
+    // rather than every one of them collapsing onto the same generic
+    // "Got it — I'll take care of that." line.
+    var reply: String? = nil
 }
 
 private let welcomeSuggestions: [ChatSuggestion] = [
     ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review Liam's progress", prompt: "How is Liam doing with his tasks today?", card: .reviewCompliance(childId: "liam", childName: "Liam")),
     ChatSuggestion(icon: "gavel", title: "Set a bedtime rule", prompt: "Lock all apps at 9pm on school nights"),
-    ChatSuggestion(icon: "sf:checklist", title: "Add a task", prompt: "Add a task for Liam", card: .addTask),
+    ChatSuggestion(
+        icon: "sf:checklist", title: "Add a task",
+        prompt: "Add a task for Liam to clean his room every Saturday morning",
+        card: .addTask(prompt: "Add a task for Liam to clean his room every Saturday morning")
+    ),
     ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for Liam", card: .blockApp),
+    ChatSuggestion(
+        icon: "sf:lightbulb.fill", title: "Suggest an activity",
+        prompt: "Suggest something Liam can do instead of screen time",
+        reply: "A 20-minute LEGO build or a walk around the block both work well right after school — want me to add one to today's tasks?"
+    ),
+    ChatSuggestion(
+        icon: "sf:calendar", title: "Update the calendar",
+        prompt: "Add soccer practice to Liam's calendar every Thursday at 4pm",
+        reply: "Added — Soccer Practice now repeats every Thursday, 4:00–5:30 PM on Liam's calendar."
+    ),
 ]
 
 struct ScreenChat: View {
@@ -988,14 +1050,14 @@ struct ScreenChat: View {
                 let intro: String
                 switch card {
                 case .blockApp: intro = "Sure — which app should I block?"
-                case .addTask: intro = "Sure — what's the task?"
+                case .addTask: intro = "I've drafted this from what you asked — check it over and create it:"
                 case .blockDuration: intro = "" // never a tile's own card — only reached as a follow-up
                 case .reviewCompliance(_, let childName): intro = "Here's where \(childName) stands today:"
                 }
                 messages.append(ChatMessage(fromUser: false, text: intro, card: card))
             }
         } else {
-            respondAfterDelay(with: "Got it — I'll take care of that.")
+            respondAfterDelay(with: suggestion.reply ?? "Got it — I'll take care of that.")
         }
     }
 
@@ -1048,8 +1110,8 @@ struct ScreenChat: View {
             BlockAppCard(onSelectTargets: handleSelectTargets)
         case .blockDuration(let apps):
             BlockDurationCard(apps: apps) { minutes in handleBlockDuration(apps: apps, minutes: minutes) }
-        case .addTask:
-            AddTaskCard(onCreate: handleAddTask)
+        case .addTask(let prompt):
+            AddTaskCard(initialPrompt: prompt, onCreate: handleAddTask)
         case .reviewCompliance(let childId, let childName):
             ReviewComplianceCard(childId: childId, childName: childName)
         }

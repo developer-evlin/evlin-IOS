@@ -102,55 +102,47 @@ final class Child: Identifiable, ObservableObject {
 @MainActor
 enum FamilyStore {
     // Same shape the old init()-level fallback used to synthesize —
-    // pulled out here so every seeded demo child below can pass it
-    // explicitly and still read as already paired.
-    private static func demoDevice(_ childName: String) -> [RegisteredDevice] {
+    // kept around for addOnboardedChild below (used to read `private`
+    // when every demo child below passed it explicitly; now the real
+    // onboarding-created child is the only caller).
+    static func demoDevice(_ childName: String) -> [RegisteredDevice] {
         [RegisteredDevice(name: "\(childName)'s iPhone", model: "iPhone 14", osVersion: "iOS 17.4.1", pairedOn: "Sep 12, 2025", lastActive: "Active now")]
     }
 
-    static var children: [Child] = [
-        Child(id: "liam", name: "Liam", age: 12, dailyLimitMin: 120, color: Color(hex: "2563EB"), status: .unlocked, timeLeft: "1h 30m", timePct: 75, usageTodayMin: 96, subtitle: "Focused today · 3 of 5 tasks done", devices: demoDevice("Liam")),
-        Child(id: "maya", name: "Maya", age: 8, dailyLimitMin: 60, color: Color(hex: "3DAA5C"), status: .unlocked, timeLeft: "45m", timePct: 75, usageTodayMin: 22, subtitle: "On bedtime wind-down in 2h", devices: demoDevice("Maya")),
-        Child(id: "emma", name: "Emma", age: 6, dailyLimitMin: 30, color: Color(hex: "F97316"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 30, subtitle: "Quiet time · unlocks at 4:00 PM", devices: demoDevice("Emma")),
-        Child(id: "noah", name: "Noah", age: 9, dailyLimitMin: 45, color: Color(hex: "7C3AED"), status: .lockedTasks, timeLeft: "0m", timePct: 0, usageTodayMin: 0, tasksDone: 1, tasksTotal: 5, subtitle: "Locked · finish today's tasks to earn screen time", devices: demoDevice("Noah")),
-        Child(id: "sam", name: "Sam", age: 11, dailyLimitMin: 90, color: Color(hex: "0EA5E9"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 41, subtitle: "Reflection time in progress",
-              reflection: ChildReflection(minutes: 15, writtenText: "I felt frustrated when my time ran out — I was almost done with my level. Tomorrow I'll set a timer 10 minutes early so I can save first.", review: "pending"), devices: demoDevice("Sam")),
-        Child(id: "ava", name: "Ava", age: 10, dailyLimitMin: 90, color: downtimeIndigo, status: .downtime, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 0, subtitle: "Downtime · until 7:00 AM",
-              downtimeUntil: "7:00 AM", devices: demoDevice("Ava")),
-        // All tasks done, but the daily allowance ran out — distinct from
-        // Noah (locked, tasks still open) and Emma (locked, schedule-based).
-        // Unlocking here should be a deliberate "how much extra time" grant,
-        // not a plain confirm — see ScreenProfile's grantTimeSheet.
-        Child(id: "zoe", name: "Zoe", age: 9, dailyLimitMin: 75, color: Color(hex: "EC4899"), status: .locked, timeLeft: "0m", timePct: 0, usageTodayMin: 75, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · screen time used up for today", devices: demoDevice("Zoe")),
-        // Seeded already .pending so opening this profile shows
-        // approvalBanner (ScreenProfile) immediately — a way to see the
-        // parent-approval popup without first switching to Kid mode and
-        // tapping "Parent controls" there to generate a real request.
-        Child(id: "jake", name: "Jake", age: 13, dailyLimitMin: 90, color: Color(hex: "0891B2"), status: .unlocked, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 36, subtitle: "Requested Parent Controls access", parentApprovalStatus: .pending, devices: demoDevice("Jake")),
-        // Empty profile — no tasks assigned yet, for seeing what a brand-new
-        // kid's profile looks like before a parent adds anything.
-        Child(id: "alex", name: "Alex", age: 7, dailyLimitMin: 60, color: Color(hex: "6366F1"), status: .unlocked, timeLeft: "1h 0m", timePct: 100, usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet", devices: demoDevice("Alex")),
-        // Empty profile — for previewing the "free trial exhausted" upgrade
-        // nudge in place of the normal tasks section.
-        Child(id: "mia", name: "Mia", age: 6, dailyLimitMin: 45, color: Color(hex: "14B8A6"), status: .unlocked, timeLeft: "45m", timePct: 100, usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "Free trial ended", devices: demoDevice("Mia"), trialExhausted: true),
-        // Unlocked with time still left and every task done — unlike Zoe
-        // (same task state, but already locked with the allowance used up),
-        // this one starts in the "everything's fine" state so both
-        // directions of the Lock/Unlock button are easy to try: Lock locks
-        // instantly, then Unlock (tasks already done) opens the Grant Time
-        // sheet rather than the plain "unlock anyway" confirm.
-        Child(id: "ben", name: "Ben", age: 10, dailyLimitMin: 90, color: Color(hex: "D97706"), status: .unlocked, timeLeft: "1h 15m", timePct: 83, usageTodayMin: 20, tasksDone: 5, tasksTotal: 5, subtitle: "All tasks done · 1h 15m left today", devices: demoDevice("Ben")),
-        // Never finished the tamper-proofing step from onboarding — for
-        // previewing the "set a Screen Time PIN or enroll in Family
-        // Sharing" nudge (see ScreenProfile's ProtectionSetupNeededCard).
-        // Also the demo for "every task is submitted, nothing outstanding" —
-        // status .lockedTasks with tasksDone == tasksTotal (see
-        // TaskStore.generate's "leo" branch) previews headerCard's Approve
-        // All button in place of the manual lock/unlock slider.
-        Child(id: "leo", name: "Leo", age: 11, dailyLimitMin: 90, color: Color(hex: "059669"), status: .lockedTasks, timeLeft: "1h 30m", timePct: 100, usageTodayMin: 9, tasksDone: 6, tasksTotal: 6, subtitle: "Locked · waiting for your review", devices: demoDevice("Leo"), needsProtectionSetup: true),
-    ]
+    // Starts empty — real children only ever come from onboarding
+    // (RootView's onComplete calling addOnboardedChild below) or from
+    // Settings' "Add a child" flow. Used to be 12 hardcoded demo kids, one
+    // per status, kept around purely to preview how each status card
+    // looked — that reference state is preserved in git history (see the
+    // "Checkpoint" commit) now that the app always starts a real family
+    // from onboarding instead.
+    static var children: [Child] = []
 
-    static func child(_ id: String) -> Child { children.first { $0.id == id } ?? children[0] }
+    // What onboarding calls once pairing finishes — mirrors Settings' own
+    // "Add a child" defaults (dailyLimitMin: 60, status: .unlocked, no
+    // tasks yet) since that's the existing precedent for "what a brand-new
+    // child should look like." Locking the phone and any status change
+    // beyond this happens later, as a real consequence of the parent
+    // assigning that child's first task — see ScreenProfile's AddTaskSheet.
+    @discardableResult
+    static func addOnboardedChild(name: String) -> Child {
+        let child = Child(
+            id: "liam", name: name, age: 10, dailyLimitMin: 60,
+            color: childColorPalette[0], status: .unlocked,
+            timeLeft: formatMinutes(60), timePct: 100, usageTodayMin: 0,
+            tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet",
+            devices: demoDevice(name)
+        )
+        children.append(child)
+        return child
+    }
+
+    static func child(_ id: String) -> Child {
+        children.first { $0.id == id } ?? children.first ?? Child(
+            id: "none", name: "—", age: 0, dailyLimitMin: 60, color: .gray,
+            status: .unlocked, timeLeft: "0m", timePct: 0, usageTodayMin: 0, subtitle: ""
+        )
+    }
 
     static func removeChild(_ id: String) {
         children.removeAll { $0.id == id }

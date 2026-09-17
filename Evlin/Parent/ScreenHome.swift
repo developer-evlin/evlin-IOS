@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct ScreenHome: View {
-    @Binding var taskTutorialDone: Bool
     @State private var showNotifs = false
     @State private var openChildId: String?
     // A notification naming a specific task used to only ever get there via
@@ -19,71 +18,43 @@ struct ScreenHome: View {
         var taskId: Int
         var id: String { "\(childId)-\(taskId)" }
     }
-    // Fires once per Home appearance (not tied to taskTutorialDone) so
-    // parents land straight on their first child's profile by default,
-    // without permanently trapping them there — after this first auto-open,
-    // tapping back returns to the profile-picker grid normally.
-    @State private var didAutoOpen = false
     // FamilyStore.children is a static mock array, not @Published — bumping
     // this on appear is what makes Home pick up a child added/removed from
-    // Settings instead of showing a stale grid from its last render.
+    // Settings instead of showing a stale screen from its last render.
     @State private var familyRefreshTick = 0
-    @Environment(\.horizontalSizeClass) private var hSizeClass
-    private var adaptive: ParentAdaptive { ParentAdaptive(hSizeClass) }
 
     private var unreadCount: Int { NotificationsData.notifs.filter(\.unread).count }
 
     var body: some View {
         NavigationStack {
             Group {
-                // Demo-only preview: with exactly one child there's nothing
-                // to actually choose between, so tapping a single bubble
-                // just to get where you're already headed is a pointless
-                // extra step. Home becomes that child's own space directly
-                // instead — and because this still lives inline in Home's
-                // own NavigationStack rather than behind the usual
-                // fullScreenCover (see openChildId below), the app's
-                // persistent tab bar stays visible under it, unlike the
-                // normal multi-child flow where the covering profile hides
-                // the tab bar entirely.
-                if FamilyStore.children.count == 1, let onlyChild = FamilyStore.children.first {
+                // Onboarding always produces exactly one child before
+                // ParentRootView (and therefore Home) ever renders, so this
+                // is Home's entire content — no picker to choose between,
+                // no fullScreenCover to hide the tab bar behind. Settings'
+                // "Add a child" can add more later (multi-child support
+                // isn't gone), but that's a deliberate opt-in, not the
+                // default onboarding output this screen needs to plan for.
+                if let onlyChild = FamilyStore.children.first {
                     ScreenProfile(
                         childId: onlyChild.id,
                         onBack: {},
-                        hideBackButton: true,
-                        startInTutorial: !taskTutorialDone,
-                        onTutorialCompleted: { taskTutorialDone = true }
+                        hideBackButton: true
                     )
                 } else {
-                    ZStack {
-                        EColor.surface.ignoresSafeArea()
-
-                        VStack {
-                            // A single Spacer above only, not one on both sides —
-                            // two flexible Spacers around a short, fixed-size grid
-                            // read fine on an iPhone's short screen (grid sits a
-                            // beat above true center) but on an iPad's much taller
-                            // canvas both absorb all the extra height and strand a
-                            // handful of small circles adrift in a sea of blank
-                            // space with no visual anchor. Pinning the grid nearer
-                            // the top instead reads as a deliberate page of
-                            // profiles, not a phone screen floating in the middle
-                            // of a bigger one.
-                            if !adaptive.isRegular { Spacer() }
-                            LazyVGrid(
-                                columns: [GridItem(.adaptive(minimum: adaptive.of(96, 132), maximum: adaptive.of(108, 150)), spacing: adaptive.of(18, 28))],
-                                spacing: adaptive.of(18, 28)
-                            ) {
-                                ForEach(FamilyStore.children) { child in
-                                    ProfileBubble(child: child, adaptive: adaptive) { openChildId = child.id }
-                                }
-                            }
-                            .padding(.horizontal, 24)
-                            .padding(.top, adaptive.isRegular ? 32 : 0)
-                            .parentContentColumn(adaptive.isRegular ? 960 : nil)
-                            if !adaptive.isRegular { Spacer(); Spacer() }
-                        }
+                    // Not normally reachable — onboarding creates the child
+                    // before this screen can ever appear — but Settings lets
+                    // a parent remove their only child, so this needs a real
+                    // state instead of force-unwrapping into a crash.
+                    VStack(spacing: 8) {
+                        Image(systemName: "person.crop.circle.badge.plus")
+                            .font(.system(size: 40)).foregroundStyle(EColor.onSurfaceVariant)
+                        Text("No child yet").font(Typography.font(17, weight: .heavy)).foregroundStyle(EColor.onSurface)
+                        Text("Add a child from Settings to get started.")
+                            .font(Typography.font(13, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(EColor.surface)
                 }
             }
             // Same bug as ScreenSettings' own familyRefreshTick: bumping it
@@ -139,6 +110,7 @@ struct ScreenHome: View {
             TaskReviewDeckView(
                 tasks: TaskStore.binding(for: target.childId),
                 childName: FamilyStore.child(target.childId).name,
+                childId: target.childId,
                 startIndex: TaskStore.tasks(for: target.childId).firstIndex(where: { $0.id == target.taskId }) ?? 0,
                 onDismiss: {
                     directReview = nil
@@ -150,29 +122,8 @@ struct ScreenHome: View {
         // centered card by default; this is a real screen, not a modal.
         .fullScreenCover(item: Binding(get: { openChildId.map { IdentifiedString(value: $0) } }, set: { openChildId = $0?.value })) { wrapped in
             NavigationStack {
-                ScreenProfile(
-                    childId: wrapped.value,
-                    onBack: { openChildId = nil },
-                    startInTutorial: !taskTutorialDone && wrapped.value == FamilyStore.children.first?.id,
-                    onTutorialCompleted: { taskTutorialDone = true }
-                )
+                ScreenProfile(childId: wrapped.value, onBack: { openChildId = nil })
             }
-        }
-        .task {
-            // The single-child demo path above already shows that child's
-            // profile inline — auto-opening it a second time here as a
-            // fullScreenCover on top of itself would just be a pointless
-            // covering duplicate.
-            guard FamilyStore.children.count != 1 else { return }
-            guard !didAutoOpen, let first = FamilyStore.children.first else { return }
-            didAutoOpen = true
-            // Same beat NotificationPanel's onOpenChild already uses below —
-            // setting openChildId in the same transaction as this view's
-            // first appearance gives fullScreenCover no "before" frame to
-            // animate from, so it just pops in instantly instead of
-            // sliding up like every other profile open.
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            openChildId = first.id
         }
     }
 
@@ -186,82 +137,6 @@ struct ScreenHome: View {
 }
 
 struct IdentifiedString: Identifiable { var value: String; var id: String { value } }
-
-// Netflix-style profile "bubble" — big circular avatar + name.
-private struct ProfileBubble: View {
-    @ObservedObject var child: Child
-    var adaptive: ParentAdaptive
-    var onTap: () -> Void
-
-    private var statusText: String {
-        if let r = child.reflection { return "Reflection · \(r.minutes)m" }
-        switch child.status {
-        case .unlocked: return child.timeLeft
-        case .lockedTasks: return "\(child.tasksDone)/\(child.tasksTotal) tasks"
-        case .locked: return "Locked"
-        case .downtime: return "Downtime · \(child.downtimeUntil ?? "")"
-        }
-    }
-
-    private var statusColor: Color {
-        if child.reflection != nil { return Color(hex: "6E4F26") }
-        switch child.status {
-        case .unlocked: return Color(hex: "25924A")
-        case .lockedTasks: return EColor.danger
-        case .locked: return EColor.onSurfaceVariant
-        case .downtime: return downtimeIndigo
-        }
-    }
-
-    // Fixed brand green rather than the child's own avatar color (which
-    // varies per kid) — "time remaining" reads as one consistent signal
-    // across every card instead of doubling as a second, redundant use of
-    // each kid's identity color.
-    private var barColor: Color { child.status == .unlocked ? Color(hex: "25924A") : Color(hex: "CBD5E1") }
-
-    // "Time pool" — dailyLimitMin split into 30-min blocks (a trailing
-    // partial block absorbs the remainder, e.g. 1h45m -> 3×30 + 1×15), each
-    // lit up if it falls within the child's remaining allowance
-    // (timePct, the *unused* portion per FamilyData's doc comment). Locked
-    // states show the same block structure fully unlit, matching the old
-    // plain-gray ring's "nothing available right now" read.
-    private var timePoolFilledMinutes: Int {
-        guard child.status == .unlocked else { return 0 }
-        return Int((Double(child.dailyLimitMin) * Double(child.timePct) / 100).rounded())
-    }
-
-    // Downtime gets a crescent moon, not a padlock — this badge names WHY
-    // the phone is locked, and a schedule lock isn't a manual one.
-    private var badgeIcon: String {
-        if child.reflection != nil { return "figure.mind.and.body" }
-        if child.status == .downtime { return "moon.fill" }
-        return "lock.fill"
-    }
-
-    var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: adaptive.of(10, 14)) {
-                ZStack(alignment: .bottomTrailing) {
-                    Circle()
-                        .fill(child.color)
-                        .frame(width: adaptive.of(92, 128), height: adaptive.of(92, 128))
-                        .overlay(Text(String(child.name.prefix(1))).font(Typography.font(adaptive.of(36, 50), weight: .heavy)).foregroundStyle(.white))
-                        .shadow(color: .black.opacity(0.14), radius: 8, y: 4)
-                    if child.status != .unlocked {
-                        Circle().fill(.white).frame(width: adaptive.of(26, 34), height: adaptive.of(26, 34))
-                            .overlay(Image(systemName: badgeIcon).font(.system(size: adaptive.of(13, 17))).foregroundStyle(statusColor))
-                            .shadow(color: .black.opacity(0.18), radius: 3)
-                    }
-                }
-                VStack(spacing: 1) {
-                    Text(child.name).font(Typography.font(adaptive.of(15, 19), weight: .heavy)).foregroundStyle(child.color)
-                    Text(statusText.uppercased()).font(Typography.font(adaptive.of(10, 12), weight: .bold)).tracking(0.6).foregroundStyle(statusColor)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-}
 
 // The child's daily allowance split into discrete 30-minute blocks (a
 // trailing partial block covers any remainder, e.g. 105min -> three 30s +

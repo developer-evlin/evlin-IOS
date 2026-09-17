@@ -23,22 +23,6 @@ struct SlideLesson: Identifiable {
     var slides: [LessonSlide]
 }
 
-struct ComicPanel: Identifiable {
-    let id = UUID()
-    var imageName: String
-    var caption: String
-}
-
-struct ComicSeries: Identifiable {
-    let id: String
-    var author: String
-    var role: String
-    var title: String
-    var excerpt: String
-    var accent: Color
-    var panels: [ComicPanel]
-}
-
 struct TopicCategory: Identifiable {
     let id = UUID()
     var count: String
@@ -83,22 +67,6 @@ enum LibraryData {
                 LessonSlide(kicker: "Step one", headline: "Connect before you correct", body: "Get low, soften your voice, name the feeling: \"You really wanted that.\" Safety comes before any lesson.", icon: "heart.fill", gradient: EGradient.tantrum),
                 LessonSlide(kicker: "Step two", headline: "Be the calm they borrow", body: "Children co-regulate. Your steady breathing and slow tone are the signal their nervous system is waiting for.", icon: "figure.mind.and.body", gradient: EGradient.tantrum),
                 LessonSlide(kind: "takeaway", kicker: "In the moment", headline: "Your meltdown kit", points: ["Lower your body and your voice", "Name the feeling out loud", "Wait for calm before the lesson"], icon: "lightbulb.fill", gradient: EGradient.tantrum),
-            ]
-        ),
-    ]
-
-    static let comics: [ComicSeries] = [
-        ComicSeries(
-            id: "weathering-the-meltdown", author: "Dr. Julian Vance", role: "Pediatric Neuropsychologist",
-            title: "Weathering the Meltdown", excerpt: "A calm-brain guide to the big meltdown — told as a comic.",
-            accent: Color(hex: "B45309"),
-            panels: [
-                ComicPanel(imageName: "TantrumCalmPanel1", caption: "One tower toppled, and the whole world ended."),
-                ComicPanel(imageName: "TantrumCalmPanel2", caption: "First, she reminded herself: this wasn't defiance. It was a brain overloaded."),
-                ComicPanel(imageName: "TantrumCalmPanel3", caption: "Step one: connect before you correct. Name the feeling, don't fix it yet."),
-                ComicPanel(imageName: "TantrumCalmPanel4", caption: "Step two: be the calm they borrow. Kids' nervous systems copy ours."),
-                ComicPanel(imageName: "TantrumCalmPanel5", caption: "She waited for calm to arrive before any lesson began."),
-                ComicPanel(imageName: "TantrumCalmPanel6", caption: "The tower went back up. So did little Evlin's trust that big feelings are survivable."),
             ]
         ),
     ]

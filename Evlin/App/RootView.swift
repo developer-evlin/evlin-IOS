@@ -16,11 +16,6 @@ struct RootView: View {
     // (no persistence): a fresh app launch always re-onboards both.
     @State private var parentOnboarded = false
     @State private var childOnboarded = false
-    // Gates the first-task spotlight tutorial (see ScreenProfile) — starts
-    // false so the very first entry into parent mode after onboarding walks
-    // the parent through adding a task before anything else is reachable.
-    // Like `onboarded`, this is session-only and never persists.
-    @State private var taskTutorialDone = false
     // Brief brand splash before the mode picker, matching the reference
     // flow's full-bleed logo screen ahead of onboarding.
     @State private var showSplash = true
@@ -36,12 +31,25 @@ struct RootView: View {
                     ModePickerView(mode: $mode)
                 case .parent:
                     if parentOnboarded {
-                        ParentRootView(onSwitchMode: { mode = nil }, taskTutorialDone: $taskTutorialDone)
+                        ParentRootView(onSwitchMode: { mode = nil })
                     } else {
                         OnboardingV2Coordinator(
                             role: .parent,
                             onExitToModePicker: { mode = nil },
-                            onComplete: { parentOnboarded = true }
+                            onComplete: {
+                                // Onboarding itself never touches FamilyStore
+                                // (it's all mocked pairing/copy) — this is the
+                                // one real side effect: finishing it is what
+                                // actually creates the family's one child, with
+                                // sensible new-child defaults (see
+                                // addOnboardedChild) rather than the app just
+                                // always starting with the same pre-seeded demo
+                                // kid regardless of what onboarding did.
+                                if FamilyStore.children.isEmpty {
+                                    FamilyStore.addOnboardedChild(name: "Liam")
+                                }
+                                parentOnboarded = true
+                            }
                         )
                     }
                 case .tablet:

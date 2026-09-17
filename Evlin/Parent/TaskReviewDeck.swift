@@ -8,6 +8,16 @@ import SwiftUI
 struct TaskReviewDeckView: View {
     @Binding var tasks: [ChildTask]
     var childName: String
+    // Only used to unlock the phone once every task this deck knows about
+    // is resolved (see approve() below) — ScreenProfile's own "Approve All"
+    // button already does this in one shot, but approving one at a time
+    // through this deck used to leave the child stuck on .lockedTasks even
+    // after every task was actually done, since nothing here ever touched
+    // Child.status. Optional because a couple of call sites review a
+    // same-day subset of events rather than a specific child's full task
+    // list — auto-unlock only makes sense when there's a real Child to
+    // unlock and this deck can see everything relevant to that decision.
+    var childId: String? = nil
     var startIndex: Int
     var onDismiss: () -> Void
 
@@ -22,9 +32,10 @@ struct TaskReviewDeckView: View {
     @State private var showRedoCompose = false
     @State private var editingTask: ChildTask?
 
-    init(tasks: Binding<[ChildTask]>, childName: String, startIndex: Int, onDismiss: @escaping () -> Void) {
+    init(tasks: Binding<[ChildTask]>, childName: String, childId: String? = nil, startIndex: Int, onDismiss: @escaping () -> Void) {
         self._tasks = tasks
         self.childName = childName
+        self.childId = childId
         self.startIndex = startIndex
         self.onDismiss = onDismiss
         _index = State(initialValue: startIndex)
@@ -222,7 +233,25 @@ struct TaskReviewDeckView: View {
         if let i = tasks.firstIndex(where: { $0.id == task.id }) {
             tasks[i].state = task.state == .bypass ? .bypassed : .done
         }
+        unlockIfEverythingResolved()
         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
+    }
+
+    // Mirrors ScreenProfile's approveAllPendingReview() — approving the
+    // last outstanding task one at a time through this deck should earn
+    // the same automatic unlock that bulk-approving everything at once
+    // does, not leave the child stuck locked with nothing actually left to
+    // do. Only fires while genuinely locked *for* tasks — a parent's own
+    // manual lock (.locked) is a separate, deliberate decision that
+    // approving a task was never meant to override.
+    private func unlockIfEverythingResolved() {
+        guard let childId, FamilyStore.child(childId).status == .lockedTasks else { return }
+        let stillOutstanding = tasks.contains { $0.state == .pending || $0.state == .review || $0.state == .overdue || $0.state == .bypass }
+        guard !stillOutstanding else { return }
+        let child = FamilyStore.child(childId)
+        child.status = .unlocked
+        child.timeLeft = formatMinutes(child.dailyLimitMin)
+        child.timePct = 100
     }
 
     private func applyRedo(note: String, hasVoice: Bool) {

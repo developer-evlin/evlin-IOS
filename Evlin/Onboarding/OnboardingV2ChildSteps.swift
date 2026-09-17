@@ -224,7 +224,21 @@ struct ChildScreenTimeStep: View {
 
     private enum Stage: Equatable { case initial, requesting, granted, denied(String) }
     @State private var stage: Stage = .initial
-    @State private var authStatus: AuthorizationStatus = AuthorizationCenter.shared.authorizationStatus
+    // Was `= AuthorizationCenter.shared.authorizationStatus` — a live read
+    // of FamilyControls' system authorization state used directly as this
+    // @State's default value, which runs synchronously while SwiftUI is
+    // still constructing this view (i.e. on the main thread, before this
+    // screen has drawn anything at all). On a genuinely fresh install,
+    // that's this process's first-ever touch of the FamilyControls system
+    // daemon, which is a real, sometimes-slow XPC round-trip to spin up —
+    // exactly the kind of "blocking work in view init" that stalls the
+    // whole app right at this screen. Force-quitting and relaunching
+    // "fixed" it only because the daemon connection was already warm on
+    // the second attempt. Reading it in .task below instead defers that
+    // same call until after this screen has already appeared, matching
+    // this project's own established pattern of deferring possibly-slow
+    // first-run work off the construction path.
+    @State private var authStatus: AuthorizationStatus = .notDetermined
 
     var body: some View {
         OnboardingV2ScreenContainer(
@@ -247,7 +261,8 @@ struct ChildScreenTimeStep: View {
             footer: {            }
         )
         .animation(.easeOut(duration: 0.2), value: stage)
-        .onAppear {
+        .task {
+            authStatus = AuthorizationCenter.shared.authorizationStatus
             if authStatus == .approved {
                 stage = .granted
             }
