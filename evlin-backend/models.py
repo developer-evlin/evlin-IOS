@@ -1,0 +1,204 @@
+import uuid
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+from database import Base
+
+class Parent(Base):
+    __tablename__ = "parents"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, nullable=False)
+    plan = Column(String, nullable=False, default="free")
+    terms_accepted_at = Column(DateTime(timezone=True))
+    terms_version = Column(Integer)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class Child(Base):
+    __tablename__ = "children"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String, nullable=False)
+    birth_year = Column(Integer)
+    color_index = Column(Integer, nullable=False, default=0)
+    avatar_url = Column(String)
+    activated_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class ParentChild(Base):
+    __tablename__ = "parent_children"
+    __table_args__ = {"schema": "app"}
+
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), primary_key=True)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), primary_key=True)
+    role = Column(String, nullable=False, default="primary")
+    invited_at = Column(DateTime(timezone=True))
+    accepted_at = Column(DateTime(timezone=True))
+
+class Device(Base):
+    __tablename__ = "devices"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    platform = Column(String, nullable=False)
+    token_hash = Column(String, nullable=False)
+    push_token = Column(String)
+    desired_version = Column(Integer, nullable=False, default=0)
+    acked_version = Column(Integer, nullable=False, default=0)
+    paired_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    revoked_at = Column(DateTime(timezone=True))
+
+class PairingCode(Base):
+    __tablename__ = "pairing_codes"
+    __table_args__ = {"schema": "app"}
+
+    code = Column(String, primary_key=True)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class Task(Base):
+    __tablename__ = "tasks"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String, nullable=False)
+    instructions = Column(String)
+    bucket = Column(String, nullable=False, default="anytime")
+    due_time = Column(Time)
+    recurrence = Column(String, nullable=False, default="daily")
+    gates_apps = Column(Boolean, nullable=False, default=True)
+    points = Column(Integer, nullable=False, default=0)
+    submission_kind = Column(String, nullable=False, default="none")
+    active = Column(Boolean, nullable=False, default=True)
+    comic_id = Column(UUID(as_uuid=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class Occurrence(Base):
+    __tablename__ = "occurrences"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("app.tasks.id", ondelete="CASCADE"), nullable=False)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    due_date = Column(Date, nullable=False)
+    due_time = Column(Time)
+    status = Column(String, nullable=False, default="pending")
+    gates_apps = Column(Boolean, nullable=False)
+    points = Column(Integer, nullable=False, default=0)
+    completed_at = Column(DateTime(timezone=True))
+    approved_at = Column(DateTime(timezone=True))
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
+    rejection_note = Column(String)
+    bypass_requested = Column(Boolean, nullable=False, default=False)
+    bypass_note = Column(String)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class Submission(Base):
+    __tablename__ = "submissions"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    occurrence_id = Column(UUID(as_uuid=True), ForeignKey("app.occurrences.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String, nullable=False)
+    r2_key = Column(String, nullable=False)
+    content_type = Column(String, nullable=False)
+    bytes_size = Column("bytes", Integer) # Maps the 'bytes' db column to bytes_size to avoid python keyword conflict
+    duration_seconds = Column(Integer)
+    status = Column(String, nullable=False, default="pending")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    uploaded_at = Column(DateTime(timezone=True))
+
+class ChildRule(Base):
+    __tablename__ = "child_rules"
+    __table_args__ = {"schema": "app"}
+
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), primary_key=True)
+    daily_limit_minutes = Column(Integer, nullable=False, default=60)
+    downtime_enabled = Column(Boolean, nullable=False, default=False)
+    downtime_start = Column(Time)
+    downtime_end = Column(Time)
+    bedtime_enabled = Column(Boolean, nullable=False, default=False)
+    bedtime_start = Column(Time)
+    bedtime_end = Column(Time)
+    blocked_categories = Column(ARRAY(String), nullable=False, default=[])
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class ChildState(Base):
+    __tablename__ = "child_state"
+    __table_args__ = {"schema": "app"}
+
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), primary_key=True)
+    manual_lock = Column(Boolean, nullable=False, default=False)
+    task_gate_override = Column(Boolean, nullable=False, default=False)
+    last_tripwire_minutes = Column(Integer)
+    last_tripwire_at = Column(DateTime(timezone=True))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class ICSFeed(Base):
+    __tablename__ = "ics_feeds"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), nullable=False)
+    feed_url = Column(String, nullable=False)
+    last_synced_at = Column(DateTime(timezone=True))
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class Event(Base):
+    __tablename__ = "events"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE")) # null = family-wide
+    title = Column(String, nullable=False)
+    start_at = Column(DateTime(timezone=True), nullable=False)
+    end_at = Column(DateTime(timezone=True), nullable=False)
+    gates_apps = Column(Boolean, nullable=False, default=False)
+    location_or_link = Column(String)
+    source = Column(String, nullable=False, default="manual")
+    ics_feed_id = Column(UUID(as_uuid=True), ForeignKey("app.ics_feeds.id", ondelete="CASCADE"))
+    external_uid = Column(String)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class EventProposal(Base):
+    __tablename__ = "event_proposals"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String, nullable=False)
+    start_at = Column(DateTime(timezone=True), nullable=False)
+    end_at = Column(DateTime(timezone=True), nullable=False)
+    recurrence = Column(String)
+    conflicts = Column(JSON)
+    status = Column(String, nullable=False, default="pending")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class Consent(Base):
+    __tablename__ = "consent"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"), nullable=False)
+    toggle_key = Column(String, nullable=False)
+    granted = Column(Boolean, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    granted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id"))
+    kind = Column(String, nullable=False)
+    metadata_json = Column("metadata", JSON)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

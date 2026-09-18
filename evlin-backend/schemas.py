@@ -180,3 +180,12 @@ class ChildStateResponse(ChildStateBase):
     class Config:
         from_attributes = True
 
+class ConsentCreate(BaseModel):
+    toggle_key: str
+    granted: bool
+    version: int = 1
+
+class AuditLogCreate(BaseModel):
+    kind: str
+    metadata: Optional[dict] = None
+
