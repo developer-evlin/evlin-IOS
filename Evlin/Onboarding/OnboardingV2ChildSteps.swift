@@ -91,19 +91,15 @@ struct ChildProfileStep: View {
     }
 }
 
-// MARK: - 5/6 · Show code (kid)
+// MARK: - 5/// MARK: - 6 · Enter Code (kid)
 
-struct ChildShowCodeStep: View {
-    /// Mocked "family create" — mints a fixed fake code + a real QR after a
-    /// short simulated delay, then auto-advances (there's no second device to
-    /// scan it in this local-only prototype).
-    @Binding var pairingCode: String
+struct ChildEnterCodeStep: View {
     let onConnected: () -> Void
     var onBack: (() -> Void)? = nil
 
-    private var spacedCode: String {
-        pairingCode.map(String.init).joined(separator: " ")
-    }
+    @State private var code = ""
+    @State private var isPairing = false
+    @State private var errorText: String?
 
     var body: some View {
         OnboardingV2ScreenContainer(
@@ -115,64 +111,74 @@ struct ChildShowCodeStep: View {
             subtitle: nil,
             onBack: onBack,
             content: {
-                VStack(spacing: 12) {
-                    OnboardingV2Card {
-                        HStack {
-                            Spacer(minLength: 0)
-                            if pairingCode.isEmpty {
-                                OnboardingV2FauxQR()
-                            } else {
-                                OnboardingV2QRImage(
-                                    string: OnboardingV2PairPayload.encode(code: pairingCode))
-                            }
-                            Spacer(minLength: 0)
-                        }
-                    }
-
-                    OnboardingV2Card {
-                        VStack(spacing: 4) {
-                            Text("OR TYPE THIS CODE")
-                                .font(OnboardingV2Theme.Typography.bodyXS)
-                                .tracking(1)
-                                .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
-                                .frame(maxWidth: .infinity)
-                            if pairingCode.isEmpty {
-                                ProgressView().controlSize(.small)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 2)
-                            } else {
-                                Text(spacedCode)
-                                    .font(Evlin.Typography.font(24, weight: .bold).monospacedDigit())
-                                    .tracking(5)
-                                    .foregroundStyle(OnboardingV2Theme.Palette.primary)
-                                    .frame(maxWidth: .infinity)
-                            }
-                        }
-                    }
-
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(OnboardingV2Theme.Palette.tertiary)
-                            .frame(width: 8, height: 8)
-                        Text(pairingCode.isEmpty ? "Generating your code…"
-                                                 : "Waiting for parent to scan…")
+                VStack(spacing: 24) {
+                    VStack(spacing: 8) {
+                        Text("Link to Parent")
+                            .onboardingV2TitleL()
+                            .fontWeight(.bold)
+                            .multilineTextAlignment(.center)
+                        
+                        Text("Ask your parent for the 6-digit code shown on their Evlin app.")
                             .onboardingV2Body()
+                            .multilineTextAlignment(.center)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 4)
+
+                    OnboardingV2CodeField(code: $code)
+                        .onChange(of: code) { _, newVal in
+                            // Native iOS 17 onChange, completely crash-free layout filtering
+                            let filtered = String(newVal.filter { $0.isNumber }.prefix(6))
+                            if filtered != newVal {
+                                code = filtered
+                            }
+                            errorText = nil
+                            if code.count == 6 && !isPairing {
+                                Task { await pairDevice() }
+                            }
+                        }
+
+                    if isPairing {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Pairing device...")
+                                .onboardingV2BodyXS()
+                        }
+                    }
+
+                    if let errorText {
+                        Text(errorText)
+                            .font(OnboardingV2Theme.Typography.bodyXS)
+                            .foregroundStyle(OnboardingV2Theme.Palette.error)
+                            .multilineTextAlignment(.center)
+                    }
                 }
             },
             footer: {
+                OnboardingV2PrimaryButton(isPairing ? "Pairing..." : "Pair Device", role: .child) {
+                    Task { await pairDevice() }
+                }
+                .disabled(code.count != 6 || isPairing)
             }
         )
-        .task {
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            guard !Task.isCancelled else { return }
-            pairingCode = "482910"
-            try? await Task.sleep(nanoseconds: 2_200_000_000)
-            guard !Task.isCancelled else { return }
-            onConnected()
+    }
+
+    @MainActor
+    private func pairDevice() async {
+        guard code.count == 6, !isPairing else { return }
+        isPairing = true
+        errorText = nil
+        
+        do {
+            let success = try await APIClient.shared.pairChildDevice(pairingCode: code)
+            if success {
+                onConnected()
+            } else {
+                errorText = "Invalid or expired code."
+            }
+        } catch {
+            errorText = "Network error. Please try again."
         }
+        
+        isPairing = false
     }
 }
 

@@ -100,10 +100,8 @@ struct OnboardingV2Coordinator: View {
                 )
 
             case .parentPairScan:
-                ParentPairScanStep(
-                    onPaired: { code in await pairWithKidCode(code) },
-                    pairedSucceeded: pairedSucceeded,
-                    onAdvance: { step = .parentConnected },
+                ParentShowCodeStep(
+                    onContinue: { step = .parentConnected },
                     onBack: { step = .parentBetaAgreement }
                 )
 
@@ -146,8 +144,7 @@ struct OnboardingV2Coordinator: View {
                 )
 
             case .childShowCode:
-                ChildShowCodeStep(
-                    pairingCode: $myPairingCode,
+                ChildEnterCodeStep(
                     onConnected: { step = .childConnected },
                     onBack: { step = .childProfile }
                 )

@@ -590,23 +590,16 @@ enum BetaAgreementContent {
     static let privacySections: [Section] = [sections[3]]
 }
 
-// MARK: - 6 · Scan to pair
+// MARK: - 6 · Show Code to Pair
 
-struct ParentPairScanStep: View {
-    /// Mocked: any 6-digit code "pairs" successfully after a short delay.
-    let onPaired: (String) async -> String?
-    let pairedSucceeded: Bool
-    let onAdvance: () -> Void
+struct ParentShowCodeStep: View {
+    let onContinue: () -> Void
     var onBack: (() -> Void)? = nil
 
-    @State private var code = ""
-    @State private var busy = false
+    @State private var code = "------"
+    @State private var expiresAt = ""
+    @State private var busy = true
     @State private var errorText: String?
-    // A real, decodable QR (same encode(code:) payload ChildShowCodeStep
-    // writes on the kid side), not OnboardingV2FauxQR's decorative noise —
-    // stands in for the child device's own generated code in this
-    // single-device prototype.
-    @State private var demoChildCode = String(format: "%06d", Int.random(in: 0...999999))
 
     var body: some View {
         OnboardingV2ScreenContainer(
@@ -626,51 +619,33 @@ struct ParentPairScanStep: View {
                             .onboardingV2TitleL()
                             .fontWeight(.bold)
                             .multilineTextAlignment(.center)
-                        Text("Scan the QR code shown on the app, or enter the 6-digit code manually below.")
+                        Text("Enter this 6-digit code on your child's iPad to link it to your account.")
                             .onboardingV2Body()
                             .multilineTextAlignment(.center)
                     }
 
-                    HStack {
-                        Spacer(minLength: 0)
-                        ZStack {
-                            OnboardingV2QRImage(string: OnboardingV2PairPayload.encode(code: demoChildCode), side: 168)
-                            OnboardingV2ScanLine(size: 200)
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color.white.opacity(0.9), lineWidth: 3)
-                                .padding(18)
-                        }
-                        .frame(width: 240, height: 240)
-                        .background(OnboardingV2Theme.Palette.darkScreen)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .overlay(alignment: .bottom) {
-                            Text("Camera preview (demo)")
-                                .font(OnboardingV2Theme.Typography.bodyXS)
-                                .foregroundStyle(.white.opacity(0.9))
-                                .padding(.bottom, 10)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    OnboardingV2CodeField(code: $code)
-                        .onChange(of: code) { _, newValue in
-                            // See ParentSignUpStep's confirmCode onChange —
-                            // same deferred-rewrite fix for the same crash.
-                            let digits = String(newValue.filter(\.isNumber).prefix(6))
-                            if digits != newValue {
-                                DispatchQueue.main.async { code = digits }
-                            }
-                            errorText = nil
-                            if digits.count == 6 && !busy { Task { await submit() } }
-                        }
-
                     if busy {
-                        HStack(spacing: Spacing.md) {
-                            ProgressView().controlSize(.small)
-                            Text("Pairing…").onboardingV2BodyXS()
+                        ProgressView("Generating secure code...")
+                            .padding(.vertical, Spacing.xl)
+                    } else {
+                        Text(code)
+                            .font(.system(size: 48, weight: .bold, design: .monospaced))
+                            .tracking(8)
+                            .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
+                            .padding(.vertical, Spacing.xl)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.fieldCornerRadius, style: .continuous)
+                                    .fill(OnboardingV2Theme.Palette.surfaceContainer)
+                            )
+                        
+                        if !expiresAt.isEmpty {
+                            Text("Expires at \(expiresAt)")
+                                .font(OnboardingV2Theme.Typography.bodyXS)
+                                .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
                         }
                     }
+
                     if let errorText {
                         Text(errorText)
                             .font(OnboardingV2Theme.Typography.bodyXS)
@@ -678,28 +653,30 @@ struct ParentPairScanStep: View {
                             .multilineTextAlignment(.center)
                     }
 
-                    OnboardingV2PrimaryButton(busy ? "Pairing…" : "Pair", role: .parent) {
-                        Task { await submit() }
+                    OnboardingV2PrimaryButton("Continue", role: .parent) {
+                        onContinue()
                     }
-                    .disabled(busy || code.count != 6)
+                    .disabled(busy)
                 }
             },
-            footer: {            }
+            footer: { }
         )
-        .onChange(of: pairedSucceeded) { _, ok in
-            if ok { onAdvance() }
+        .task {
+            await fetchCode()
         }
     }
 
     @MainActor
-    private func submit() async {
-        guard !busy, code.count == 6 else { return }
+    private func fetchCode() async {
         busy = true
         errorText = nil
-        if let err = await onPaired(code) {
-            errorText = err
-        } else {
-            onAdvance()
+        do {
+            // Using a mock child UUID for the UI prototype until user profile creation is fully wired
+            let result = try await APIClient.shared.generatePairingCode(childId: "123e4567-e89b-12d3-a456-426614174000")
+            code = result.code
+            expiresAt = result.expiresAt
+        } catch {
+            errorText = "Failed to generate pairing code. Please try again."
         }
         busy = false
     }
