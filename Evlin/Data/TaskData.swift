@@ -5,7 +5,7 @@ enum TaskState: String {
 }
 
 struct ChildTask: Identifiable {
-    var id: Int
+    var id: String
     var title: String
     var state: TaskState
     var category: String

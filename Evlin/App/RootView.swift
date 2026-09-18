@@ -49,6 +49,7 @@ struct RootView: View {
                                     FamilyStore.addOnboardedChild(name: "Liam")
                                 }
                                 parentOnboarded = true
+                                Task { await AppSync.shared.syncBackendData() }
                             }
                         )
                     }
@@ -59,7 +60,10 @@ struct RootView: View {
                         OnboardingV2Coordinator(
                             role: .child,
                             onExitToModePicker: { mode = nil },
-                            onComplete: { childOnboarded = true }
+                            onComplete: { 
+                                childOnboarded = true 
+                                Task { await AppSync.shared.syncBackendData() }
+                            }
                         )
                     }
                 }
@@ -84,6 +88,10 @@ struct RootView: View {
             // stall.
             try? await Task.sleep(nanoseconds: 450_000_000)
             withAnimation(.easeInOut(duration: 0.2)) { showSplash = false }
+            
+            if parentOnboarded || childOnboarded {
+                await AppSync.shared.syncBackendData()
+            }
         }
     }
 }

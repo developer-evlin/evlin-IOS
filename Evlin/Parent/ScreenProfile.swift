@@ -1792,7 +1792,7 @@ private struct AddTaskSheet: View {
             canSave: canSave, onCancel: onCancel, onSave: {
                 let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
                 onCreate(ChildTask(
-                    id: 0, title: title, state: .pending, category: category,
+                    id: UUID().uuidString, title: title, state: .pending, category: category,
                     description: description, note: nil, submittedAt: nil,
                     dueLabel: hasDueDate ? formatted(dueDate) : nil, dueDate: hasDueDate ? dueDate : nil, photoCount: 0,
                     repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
