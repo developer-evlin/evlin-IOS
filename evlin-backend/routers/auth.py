@@ -119,30 +119,33 @@ def generate_unique_pairing_code(db: Session) -> str:
             return code
 
 @router.post("/generate-pairing-code", response_model=schemas.GeneratePairingCodeResponse)
-def generate_pairing_code(request: schemas.GeneratePairingCodeRequest, 
-                          current_parent: models.Parent = Depends(get_current_parent),
+def generate_pairing_code(current_parent: models.Parent = Depends(get_current_parent),
                           db: Session = Depends(get_db)):
-    """Parent generates a pairing code for a specific child"""
-    # Verify this parent has access to this child
-    parent_child = db.query(models.ParentChild).filter(
-        models.ParentChild.parent_id == current_parent.id,
-        models.ParentChild.child_id == request.child_id
-    ).first()
+    """Parent generates a pairing code. This auto-creates a placeholder child if needed."""
     
-    # If not found, maybe they haven't been linked. 
-    # For MVP, we might just assume they are, or check it.
-    # We will just log it or enforce it if we had a proper linking flow.
-    # Let's enforce it securely. Wait, if there are no children, we should create one.
-    if not parent_child:
-        child = db.query(models.Child).filter(models.Child.id == request.child_id).first()
-        if not child:
-            raise HTTPException(status_code=404, detail="Child not found")
-        # Enforce that parent owns this child, or this is a demo environment where they might not be linked yet.
-        # Ideally, we require the link. Let's create the link if this is the first child (for easy testing)
-        # Actually, let's just create the code and assume the parent created the child beforehand.
-        pass # In production, enforce parent_child relation here.
+    # Check if parent already has a child
+    parent_child = db.query(models.ParentChild).filter(models.ParentChild.parent_id == current_parent.id).first()
+    
+    if parent_child:
+        child_id = parent_child.child_id
+    else:
+        # Create a default placeholder child
+        new_child = models.Child(name="Liam", birth_year=2012, color_index=0, avatar_url="")
+        db.add(new_child)
+        db.commit()
+        db.refresh(new_child)
+        
+        # Link it to the parent
+        parent_link = models.ParentChild(parent_id=current_parent.id, child_id=new_child.id, role="primary")
+        db.add(parent_link)
+        
+        # Create default rules & state
+        db.add(models.ChildRule(child_id=new_child.id, daily_limit_minutes=60, downtime_enabled=False, bedtime_enabled=False, blocked_categories=[]))
+        db.add(models.ChildState(child_id=new_child.id, manual_lock=False, task_gate_override=False))
+        db.commit()
+        
+        child_id = new_child.id
 
-    # Delete any expired codes to keep the table clean
     now = datetime.now(timezone.utc)
     db.query(models.PairingCode).filter(models.PairingCode.expires_at < now).delete()
     
@@ -151,7 +154,7 @@ def generate_pairing_code(request: schemas.GeneratePairingCodeRequest,
     
     pairing_code = models.PairingCode(
         code=code,
-        child_id=request.child_id,
+        child_id=child_id,
         parent_id=current_parent.id,
         expires_at=expires_at
     )
