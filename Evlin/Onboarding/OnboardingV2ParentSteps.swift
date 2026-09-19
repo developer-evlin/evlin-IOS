@@ -722,7 +722,7 @@ struct ParentShowCodeStep: View {
                 try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
                 if Task.isCancelled { break }
                 
-                let result = (try? await APIClient.shared.checkPairingStatus(code: code)) ?? (false, nil)
+                let result = (try? await APIClient.shared.checkPairingStatus(code: code)) ?? (paired: false, kidName: nil)
                 if result.paired {
                     await MainActor.run {
                         // Pass the kidName string along through a NotificationCenter notification 
