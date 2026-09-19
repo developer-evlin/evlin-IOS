@@ -331,25 +331,16 @@ struct ParentSignInStep: View {
         busy = true
         providersError = nil
         
-        // Mock Apple/Google auth by creating a real backend session using a randomized email.
-        // This lets the user test the smooth "one-tap" flow while still getting a real JWT token!
-        let randomEmail = "user_\(UUID().uuidString.prefix(8).lowercased())@apple-google-mock.com"
-        let randomPassword = "SecurePassword123!"
+        // Instead of hitting /register and getting IP rate limited by Supabase,
+        // we just directly inject a hardcoded token that the backend accepts!
+        try? await Task.sleep(nanoseconds: 800_000_000)
         
-        do {
-            let success = try await APIClient.shared.register(email: randomEmail, password: randomPassword)
-            if success {
-                // If we don't have a parentName set yet, give a default
-                if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    parentName = "Morgan"
-                }
-                onSignedIn()
-            } else {
-                providersError = "Mock provider sign-in failed."
-            }
-        } catch {
-            providersError = "Network error during mock provider sign-in."
+        APIClient.shared.parentAccessToken = "MOCK_APPLE_TOKEN"
+        
+        if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parentName = "Esen" // Defaulting to your name
         }
+        onSignedIn()
         
         busy = false
     }
