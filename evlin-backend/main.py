@@ -18,11 +18,13 @@ app.include_router(compliance.router)
 def read_root():
     return {"message": "Welcome to the Evlin Backend API"}
 
+from sqlalchemy import text
+
 @app.get("/health")
 def health_check(db: Session = Depends(get_db)):
     try:
         # Check DB connection
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
