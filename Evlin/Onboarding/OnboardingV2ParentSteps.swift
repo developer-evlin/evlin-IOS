@@ -681,8 +681,8 @@ struct ParentShowCodeStep: View {
         busy = true
         errorText = nil
         do {
-            // Using a mock child UUID for the UI prototype until user profile creation is fully wired
-            let result = try await APIClient.shared.generatePairingCode(childId: "123e4567-e89b-12d3-a456-426614174000")
+            // Generates a live pairing code and auto-creates a Child record on the backend
+            let result = try await APIClient.shared.generatePairingCode()
             code = result.code
             expiresAt = result.expiresAt
         } catch {
