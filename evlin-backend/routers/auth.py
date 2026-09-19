@@ -24,6 +24,14 @@ security = HTTPBearer()
 
 def get_current_parent(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> models.Parent:
     """Dependency to verify the Supabase JWT token and return the current Parent."""
+    
+    # Bypass for mock accounts
+    if credentials.credentials.startswith("mock_token_"):
+        mock_id = credentials.credentials.replace("mock_token_", "")
+        parent = db.query(models.Parent).filter(models.Parent.id == mock_id).first()
+        if parent:
+            return parent
+            
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not configured")
         
@@ -47,6 +55,16 @@ class VerifyTokenRequest(BaseModel):
 
 @router.post("/register", response_model=schemas.AuthResponse)
 def register(request: schemas.EmailAuthRequest, db: Session = Depends(get_db)):
+    # Bypass for mock accounts
+    if request.email.endswith("@apple-google-mock.com"):
+        import uuid
+        mock_id = uuid.uuid4()
+        parent = models.Parent(id=mock_id, email=request.email, plan="free")
+        db.add(parent)
+        db.commit()
+        db.refresh(parent)
+        return {"access_token": f"mock_token_{mock_id}", "parent": parent}
+
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not configured")
     try:
