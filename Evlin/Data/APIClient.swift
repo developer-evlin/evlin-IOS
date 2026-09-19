@@ -3,6 +3,48 @@ import Foundation
 /// A lightweight API client to connect the SwiftUI app to the local FastAPI backend.
 enum APIError: Error {
     case serverError(String)
+
+    func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/tasks/\(taskId)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let body: [String: Any] = [
+            "title": title,
+            "instructions": instructions ?? "",
+            "recurrence": recurrence,
+            "bucket": bucket,
+            "submission_kind": submissionKind
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
+    }
+
+    func deleteTask(taskId: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/tasks/\(taskId)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
+    }
 }
 
 class APIClient {
@@ -268,5 +310,47 @@ class SessionManager {
         parentAccessToken = nil
         childDeviceToken = nil
         activeChildId = nil
+    }
+
+    func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/tasks/\(taskId)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let body: [String: Any] = [
+            "title": title,
+            "instructions": instructions ?? "",
+            "recurrence": recurrence,
+            "bucket": bucket,
+            "submission_kind": submissionKind
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
+    }
+
+    func deleteTask(taskId: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/tasks/\(taskId)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
     }
 }

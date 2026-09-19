@@ -267,6 +267,17 @@ struct TaskReviewDeckView: View {
     }
 
     private func applyEdit(_ updated: ChildTask) {
+        Task {
+            try? await APIClient.shared.updateTask(
+                taskId: updated.id,
+                title: updated.title,
+                instructions: updated.description,
+                recurrence: updated.repeats,
+                bucket: updated.category,
+                submissionKind: updated.photoCount > 0 ? "photo" : "button"
+            )
+            await AppSync.shared.syncBackendData()
+        }
         if let i = tasks.firstIndex(where: { $0.id == updated.id }) {
             tasks[i] = updated
         }
@@ -274,6 +285,10 @@ struct TaskReviewDeckView: View {
     }
 
     private func applyDelete(_ task: ChildTask) {
+        Task {
+            try? await APIClient.shared.deleteTask(taskId: task.id)
+            await AppSync.shared.syncBackendData()
+        }
         tasks.removeAll { $0.id == task.id }
         editingTask = nil
     }
