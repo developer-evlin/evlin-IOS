@@ -164,7 +164,10 @@ class APIClient {
     }
     
     func fetchOccurrences(childId: String) async throws -> [ApiOccurrence] {
-        try await fetch(endpoint: "/children/\(childId)/occurrences")
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let dateString = formatter.string(from: Date())
+        return try await fetch(endpoint: "/children/\(childId)/occurrences?target_date=\(dateString)")
     }
     
     func fetchRules(childId: String) async throws -> ApiChildRule {
