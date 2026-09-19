@@ -44,6 +44,48 @@ def get_current_parent(credentials: HTTPAuthorizationCredentials = Depends(secur
 class VerifyTokenRequest(BaseModel):
     access_token: str
 
+
+@router.post("/register", response_model=schemas.AuthResponse)
+def register(request: schemas.EmailAuthRequest, db: Session = Depends(get_db)):
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Supabase client not configured")
+    try:
+        res = supabase.auth.sign_up({"email": request.email, "password": request.password})
+        if not res.user:
+            raise HTTPException(status_code=400, detail="Failed to create user")
+        
+        # Create local parent record
+        parent = db.query(models.Parent).filter(models.Parent.id == res.user.id).first()
+        if not parent:
+            parent = models.Parent(id=res.user.id, email=res.user.email, plan="free")
+            db.add(parent)
+            db.commit()
+            db.refresh(parent)
+            
+        return {"access_token": res.session.access_token, "parent": parent}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/login", response_model=schemas.AuthResponse)
+def login(request: schemas.EmailAuthRequest, db: Session = Depends(get_db)):
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Supabase client not configured")
+    try:
+        res = supabase.auth.sign_in_with_password({"email": request.email, "password": request.password})
+        if not res.user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+            
+        parent = db.query(models.Parent).filter(models.Parent.id == res.user.id).first()
+        if not parent:
+            parent = models.Parent(id=res.user.id, email=res.user.email, plan="free")
+            db.add(parent)
+            db.commit()
+            db.refresh(parent)
+            
+        return {"access_token": res.session.access_token, "parent": parent}
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
 @router.post("/verify-parent", response_model=schemas.ParentResponse)
 def verify_parent(request: VerifyTokenRequest, db: Session = Depends(get_db)):
     """Used initially to sync the Supabase auth user into our local database"""

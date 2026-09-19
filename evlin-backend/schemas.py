@@ -189,3 +189,11 @@ class AuditLogCreate(BaseModel):
     kind: str
     metadata: Optional[dict] = None
 
+
+class EmailAuthRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class AuthResponse(BaseModel):
+    access_token: str
+    parent: ParentResponse
