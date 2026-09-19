@@ -189,7 +189,6 @@ def generate_pairing_code(current_parent: models.Parent = Depends(get_current_pa
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
-@router.post("/pair-child", response_model=schemas.PairChildResponse)
 @router.get("/check-pairing/{code}")
 def check_pairing(code: str, db: Session = Depends(get_db)):
     # If the code is gone, it was either used or expired.
