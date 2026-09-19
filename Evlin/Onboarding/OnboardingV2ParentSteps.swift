@@ -328,21 +328,7 @@ struct ParentSignInStep: View {
 
     
     private func signInWithProvider() async {
-        busy = true
-        providersError = nil
-        
-        // Instead of hitting /register and getting IP rate limited by Supabase,
-        // we just directly inject a hardcoded token that the backend accepts!
-        try? await Task.sleep(nanoseconds: 800_000_000)
-        
-        APIClient.shared.parentAccessToken = "MOCK_APPLE_TOKEN"
-        
-        if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            parentName = "Esen" // Defaulting to your name
-        }
-        onSignedIn()
-        
-        busy = false
+        providersError = "Apple & Google Auth require setup in the Apple Developer / Google Cloud portals. Please tap 'Continue with Email' to use real Supabase authentication."
     }
 }
 
