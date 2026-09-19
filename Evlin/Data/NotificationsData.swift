@@ -8,7 +8,7 @@ struct Notif: Identifiable {
     var body: String
     var time: String
     var unread: Bool
-    var taskId: Int? = nil
+    var taskId: String? = nil
 }
 
 struct ChildEvent: Identifiable {
@@ -22,17 +22,24 @@ struct ChildEvent: Identifiable {
 
 enum NotificationsData {
     static let notifs: [Notif] = [
-        Notif(id: 1, child: "liam", icon: "task_alt", title: "Science Project — needs review", body: "Tap to review and approve.", time: "2m ago", unread: true, taskId: 2),
+        Notif(id: 1, child: "liam", icon: "task_alt", title: "Science Project — needs review", body: "Tap to review and approve.", time: "2m ago", unread: true, taskId: "2"),
         // No taskId: TaskStore has no "Piano Practice" task for any child
         // (id 2 in the default list is "Science Project") — jumping straight
         // to a same-numbered but wrongly-titled task would be worse than
         // just opening the profile, so this one falls back to that instead.
-        Notif(id: 2, child: "maya", icon: "music_note", title: "Piano Practice — needs review", body: "45-min session, clip uploaded.", time: "18m ago", unread: true),
-        Notif(id: 6, child: "liam", icon: "priority_high", title: "Walk Dog — overdue", body: "Not checked off since yesterday.", time: "12h ago", unread: true, taskId: 4),
-        Notif(id: 7, child: "liam", icon: "task_alt", title: "Math Practice — needs review", body: "3 photos submitted.", time: "30m ago", unread: false, taskId: 3),
-        Notif(id: 8, child: "liam", icon: "pan_tool", title: "Bypass requested — Read for 20 minutes", body: "\"Had football practice, home late. Can I double up tomorrow?\"", time: "5m ago", unread: true, taskId: 5),
+        // child was "maya" — a demo-gallery id from before the single-child
+        // restructure that FamilyStore.children never contains any more, so
+        // NotificationPanel.onOpenChild's fallback (FamilyStore.child(_:))
+        // silently opened Liam's profile anyway. Made that explicit instead
+        // of relying on the fallback to paper over a notification for a
+        // child that doesn't exist.
+        Notif(id: 2, child: "liam", icon: "music_note", title: "Piano Practice — needs review", body: "45-min session, clip uploaded.", time: "18m ago", unread: true),
+        Notif(id: 6, child: "liam", icon: "priority_high", title: "Walk Dog — overdue", body: "Not checked off since yesterday.", time: "12h ago", unread: true, taskId: "4"),
+        Notif(id: 7, child: "liam", icon: "task_alt", title: "Math Practice — needs review", body: "3 photos submitted.", time: "30m ago", unread: false, taskId: "3"),
+        Notif(id: 8, child: "liam", icon: "pan_tool", title: "Bypass requested — Read for 20 minutes", body: "\"Had football practice, home late. Can I double up tomorrow?\"", time: "5m ago", unread: true, taskId: "5"),
         Notif(id: 3, child: "liam", icon: "sports_soccer", title: "Soccer Practice", body: "Starts in 30 min at City Park.", time: "1h ago", unread: false),
-        Notif(id: 4, child: "emma", icon: "menu_book", title: "Reading Goal Reached", body: "60 minutes today — new best!", time: "2h ago", unread: false),
+        // child was "emma" — same stale demo-gallery id issue as id 2 above.
+        Notif(id: 4, child: "liam", icon: "menu_book", title: "Reading Goal Reached", body: "60 minutes today — new best!", time: "2h ago", unread: false),
         Notif(id: 5, child: "family", icon: "dinner_dining", title: "Family Dinner Reminder", body: "In 1 hour.", time: "3h ago", unread: false),
     ]
 }

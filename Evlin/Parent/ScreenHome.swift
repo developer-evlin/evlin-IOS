@@ -15,7 +15,7 @@ struct ScreenHome: View {
 
     private struct DirectReviewTarget: Identifiable {
         var childId: String
-        var taskId: Int
+        var taskId: String
         var id: String { "\(childId)-\(taskId)" }
     }
     // FamilyStore.children is a static mock array, not @Published — bumping
@@ -223,15 +223,18 @@ struct SegmentedTimeBar: View {
 }
 
 private struct NotificationPanel: View {
-    var onOpenChild: (String, Int?) -> Void
+    var onOpenChild: (String, String?) -> Void
     @State private var notifs = NotificationsData.notifs
     @Environment(\.dismiss) private var dismiss
 
+    // "maya"/"emma" cases used to live here too — dead along with the
+    // notif entries that used to carry those old demo-gallery ids (see
+    // NotificationsData.swift). Any child besides "liam" (multi-child via
+    // Settings' "Add a child" gets a real UUID) falls through to the
+    // default tint rather than a hardcoded per-id color.
     private func color(for childId: String) -> Color {
         switch childId {
         case "liam": return Color(hex: "2563EB")
-        case "maya": return Color(hex: "3DAA5C")
-        case "emma": return Color(hex: "F97316")
         default: return EColor.primary
         }
     }

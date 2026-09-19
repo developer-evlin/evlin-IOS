@@ -49,7 +49,7 @@ struct RootView: View {
                                     FamilyStore.addOnboardedChild(name: "Liam")
                                 }
                                 parentOnboarded = true
-                                Task { @MainActor in await AppSync.shared.syncBackendData() }
+                                Task { await AppSync.shared.syncBackendData() }
                             }
                         )
                     }
@@ -62,7 +62,7 @@ struct RootView: View {
                             onExitToModePicker: { mode = nil },
                             onComplete: { 
                                 childOnboarded = true 
-                                Task { @MainActor in await AppSync.shared.syncBackendData() }
+                                Task { await AppSync.shared.syncBackendData() }
                             }
                         )
                     }

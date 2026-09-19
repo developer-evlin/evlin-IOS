@@ -46,7 +46,7 @@ struct CalEvent: Identifiable {
     // onSelect) instead of landing on the plain profile. Only the seeded
     // demo tasks below set it — a task a parent adds through the "+" flow
     // has no real counterpart to jump to, so it falls back to the profile.
-    var linkedTaskId: Int? = nil
+    var linkedTaskId: String? = nil
 }
 
 // A day-in-context view of an event: `day` is which day it's being shown as
@@ -128,9 +128,9 @@ enum CalendarData {
             // start/end on an anytime task is a nominal placeholder — it's
             // excluded from grid layout entirely, so the value itself is
             // never shown.
-            CalEvent(personId: "liam", title: "Make your bed", emoji: "🛏️", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done, linkedTaskId: 1),
-            CalEvent(personId: "liam", title: "Clean your room", emoji: "🧹", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .submitted, linkedTaskId: 2),
-            CalEvent(personId: "liam", title: "Homework", emoji: "📓", start: "05:00 PM", end: "05:30 PM", category: "Task", location: "", note: "Finish the worksheet.", repeats: "none", taskState: .pending, gatesUnlock: true, linkedTaskId: 3),
+            CalEvent(personId: "liam", title: "Make your bed", emoji: "🛏️", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: allDayCodes, isAnytime: true, taskState: .done, linkedTaskId: "1"),
+            CalEvent(personId: "liam", title: "Clean your room", emoji: "🧹", start: "12:00 AM", end: "12:00 AM", category: "Task", location: "", note: "", repeats: "none", isAnytime: true, taskState: .submitted, linkedTaskId: "2"),
+            CalEvent(personId: "liam", title: "Homework", emoji: "📓", start: "05:00 PM", end: "05:30 PM", category: "Task", location: "", note: "Finish the worksheet.", repeats: "none", taskState: .pending, gatesUnlock: true, linkedTaskId: "3"),
         ],
     ]
 
