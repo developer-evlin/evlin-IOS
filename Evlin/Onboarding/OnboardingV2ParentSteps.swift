@@ -223,17 +223,9 @@ struct ParentSignInStep: View {
 
             OnboardingV2CodeField(code: $confirmCode)
                 .onChange(of: confirmCode) { _, newValue in
-                    // Rewriting a TextField's own bound text synchronously,
-                    // from inside its own onChange, while the keyboard's
-                    // input session for that same keystroke is still live,
-                    // is a known crash trigger (RTIInputSystemClient /
-                    // NSTaggedPointerString — a real device crash traced to
-                    // exactly this pattern). Deferring the rewrite to the
-                    // next run loop tick lets that keystroke's transaction
-                    // finish first.
                     let digits = String(newValue.filter(\.isNumber).prefix(6))
                     if digits != newValue {
-                        DispatchQueue.main.async { confirmCode = digits }
+                        confirmCode = digits
                     }
                     codeError = nil
                     if digits.count == 6 && !busy { Task { await finishSignUp() } }
@@ -358,11 +350,9 @@ struct ParentProfileStep: View {
 
                         OnboardingV2EditableField(label: "AGE", text: $ageText, placeholder: "e.g. 35", keyboardType: .numberPad)
                             .onChange(of: ageText) { _, newValue in
-                                // See the confirmCode onChange above — same
-                                // deferred-rewrite fix for the same crash.
                                 let digits = String(newValue.filter(\.isNumber).prefix(2))
                                 if digits != newValue {
-                                    DispatchQueue.main.async { ageText = digits }
+                                    ageText = digits
                                 }
                             }
 

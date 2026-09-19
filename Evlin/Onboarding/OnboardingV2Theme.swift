@@ -601,6 +601,11 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
     // it to an iPhone's own width.
     private var screenBody: some View {
         VStack(alignment: .leading, spacing: Spacing.xl) {
+            // Top Progress Bar
+            ProgressView(value: Double(min(stepIndex, stepTotal)), total: Double(max(1, stepTotal)))
+                .progressViewStyle(LinearProgressViewStyle(tint: role.accent))
+                .padding(.bottom, Spacing.xs)
+
             if onBack != nil {
                 backButton().padding(.bottom, Spacing.xs)
             }
@@ -662,10 +667,6 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
                     .padding(.top, Spacing.section)
                 VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
                     footer()
-                    if let dotsCount, let dotsCurrent {
-                        OnboardingV2DotsNav(count: dotsCount, current: dotsCurrent, activeColor: role.accent)
-                            .padding(.top, Spacing.sm)
-                    }
                 }
                 .padding(.top, Spacing.section)
             } else {
@@ -677,10 +678,6 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
 
                 VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
                     footer()
-                    if let dotsCount, let dotsCurrent {
-                        OnboardingV2DotsNav(count: dotsCount, current: dotsCurrent, activeColor: role.accent)
-                            .padding(.top, Spacing.sm)
-                    }
                 }
             }
         }
