@@ -689,10 +689,15 @@ struct ParentShowCodeStep: View {
                             .multilineTextAlignment(.center)
                     }
 
-                    OnboardingV2PrimaryButton("Continue", role: .parent) {
-                        onContinue()
+                    if !busy {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Waiting for child device to connect...")
+                                .font(OnboardingV2Theme.Typography.bodyXS)
+                                .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+                        }
+                        .padding(.top, Spacing.md)
                     }
-                    .disabled(busy)
                 }
             },
             footer: { }
@@ -703,6 +708,8 @@ struct ParentShowCodeStep: View {
     }
 
     
+    @State private var pollingTask: Task<Void, Never>? = nil
+
     private func fetchCode() async {
         busy = true
         errorText = nil
@@ -711,10 +718,29 @@ struct ParentShowCodeStep: View {
             let result = try await APIClient.shared.generatePairingCode()
             code = result.code
             expiresAt = result.expiresAt
+            startPolling()
         } catch {
             errorText = "Failed to generate pairing code. Please try again."
         }
         busy = false
+    }
+    
+    private func startPolling() {
+        pollingTask?.cancel()
+        pollingTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+                if Task.isCancelled { break }
+                
+                let isPaired = (try? await APIClient.shared.checkPairingStatus(code: code)) ?? false
+                if isPaired {
+                    await MainActor.run {
+                        onContinue()
+                    }
+                    break
+                }
+            }
+        }
     }
 }
 

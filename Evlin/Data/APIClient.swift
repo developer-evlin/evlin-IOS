@@ -109,6 +109,28 @@ class APIClient {
         }
     }
     
+        func checkPairingStatus(code: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/auth/check-pairing/\(code)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        
+        if let token = parentAccessToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                return false
+            }
+            
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            return json?["paired"] as? Bool ?? false
+        } catch {
+            return false
+        }
+    }
+    
     // MARK: - API Fetching
     
     private func fetch<T: Codable>(endpoint: String) async throws -> T {
