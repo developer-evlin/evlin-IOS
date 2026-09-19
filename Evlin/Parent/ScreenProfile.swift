@@ -194,7 +194,8 @@ struct ScreenProfile: View {
                     onGrant: { minutes in
                         child.status = .unlocked
                         child.timeLeft = formatMinutes(minutes)
-                        child.timePct = min(100, Int(Double(minutes) / Double(max(child.dailyLimitMin, 1)) * 100))
+                        let pct = (Double(minutes) / Double(max(child.dailyLimitMin, 1))) * 100
+                        child.timePct = min(100, Int(pct))
                         withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = false }
                     },
                     onCancel: { withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = false } }
@@ -291,7 +292,7 @@ struct ScreenProfile: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: Binding(get: { reviewStartIndex != nil }, set: { if !$0 { reviewStartIndex = nil } })) {
+        .fullScreenCover(isPresented: Binding<Bool>(get: { reviewStartIndex != nil }, set: { if !$0 { reviewStartIndex = nil } })) {
             TaskReviewDeckView(tasks: $tasks, childName: child.name, childId: childId, startIndex: reviewStartIndex ?? 0, onDismiss: { reviewStartIndex = nil })
         }
         .sheet(isPresented: $showAddTask) {
@@ -305,9 +306,8 @@ struct ScreenProfile: View {
                 // have customized it in Rules before ever assigning a task,
                 // and re-stomping it to the default here would be a bug.
                 let isFirstTask = tasks.isEmpty
-                let newId = (tasks.map(\.id).max() ?? 0) + 1
                 var t = newTask
-                t.id = newId
+                t.id = UUID().uuidString
                 tasks.append(t)
                 if isFirstTask {
                     child.status = .lockedTasks
