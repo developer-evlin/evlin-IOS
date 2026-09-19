@@ -50,7 +50,19 @@ def register(request: schemas.EmailAuthRequest, db: Session = Depends(get_db)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not configured")
     try:
-        res = supabase.auth.sign_up({"email": request.email, "password": request.password})
+        # Check if already registered by trying to log in first?
+        # Supabase throws "User already registered" on sign_up.
+        try:
+            res = supabase.auth.sign_up({"email": request.email, "password": request.password})
+        except Exception as e:
+            error_str = str(e)
+            if hasattr(e, 'message'):
+                error_str = e.message
+            if "User already registered" in error_str:
+                # If they are already registered, just log them in
+                return login(request, db)
+            raise e
+            
         if not res.user:
             raise HTTPException(status_code=400, detail="Failed to create user")
         
