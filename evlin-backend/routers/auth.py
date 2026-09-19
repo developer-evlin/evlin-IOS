@@ -24,14 +24,6 @@ security = HTTPBearer()
 
 def get_current_parent(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> models.Parent:
     """Dependency to verify the Supabase JWT token and return the current Parent."""
-    
-    # Super bypass for the Apple/Google mock flow to completely avoid Supabase rate limits
-    if credentials.credentials == "MOCK_APPLE_TOKEN":
-        # Just return the one user we know exists in the DB
-        parent = db.query(models.Parent).filter(models.Parent.email == "esen.dashnyam@gmail.com").first()
-        if parent:
-            return parent
-            
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not configured")
         
