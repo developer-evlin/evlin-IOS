@@ -292,8 +292,10 @@ class APIClient {
 import Foundation
 import SwiftUI
 
+import Observation
+
 @Observable
-class SessionManager {
+public class SessionManager {
     static let shared = SessionManager()
     
     var parentAccessToken: String?
