@@ -37,6 +37,7 @@ struct ParentSignInStep: View {
     @State private var authMode: AuthMode = .signUp
     @State private var email = ""
     @State private var emailError: String?
+    @State private var passwordError: String?
     @State private var password = ""
     @State private var busy = false
     @State private var confirmCode = ""
@@ -196,6 +197,14 @@ struct ParentSignInStep: View {
                 placeholder: "At least 6 characters",
                 isSecure: true
             )
+            .onChange(of: password) { _, _ in passwordError = nil }
+
+            if let passwordError {
+                Text(passwordError)
+                    .onboardingV2BodyXS()
+                    .foregroundStyle(OnboardingV2Theme.Palette.error)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             OnboardingV2PrimaryButton(
                 busy ? (authMode == .signUp ? "Creating account…" : "Signing in…")
@@ -254,7 +263,7 @@ struct ParentSignInStep: View {
         }
     }
 
-    @MainActor
+    
     private func resendEmail() async {
         resending = true
         try? await Task.sleep(nanoseconds: 500_000_000)
@@ -264,7 +273,7 @@ struct ParentSignInStep: View {
         justResent = false
     }
 
-    @MainActor
+    
     private func finishSignUp() async {
         busy = true
         try? await Task.sleep(nanoseconds: 500_000_000)
@@ -278,26 +287,37 @@ struct ParentSignInStep: View {
         onSignedIn()
     }
 
-    @MainActor
+    
+    
     private func submitEmailAuth() async {
         busy = true
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        let success: Bool
+        
+        do {
+            if authMode == .signUp {
+                success = try await APIClient.shared.register(email: email, password: password)
+            } else {
+                success = try await APIClient.shared.login(email: email, password: password)
+            }
+        } catch {
+            success = false
+        }
+        
         busy = false
-        // Signing in to an existing (already-verified) account skips
-        // confirmation — that step only applies the first time an email is
-        // registered.
-        guard authMode == .signUp else {
+        
+        if success {
             if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let local = email.split(separator: "@").first.map(String.init) ?? "Morgan"
                 parentName = local.capitalized
             }
+            // Skip the mocked confirm email phase entirely now that backend auth is wired up
             onSignedIn()
-            return
+        } else {
+            passwordError = authMode == .signUp ? "Failed to create account. Email might be in use or password is too weak." : "Incorrect email or password."
         }
-        phase = .confirmEmail
     }
 
-    @MainActor
+    
     private func signInWithProvider() async {
         busy = true
         try? await Task.sleep(nanoseconds: 500_000_000)
@@ -372,7 +392,7 @@ struct ParentProfileStep: View {
         )
     }
 
-    @MainActor
+    
     private func save() async {
         busy = true
         try? await Task.sleep(nanoseconds: 400_000_000)
@@ -656,7 +676,7 @@ struct ParentShowCodeStep: View {
         }
     }
 
-    @MainActor
+    
     private func fetchCode() async {
         busy = true
         errorText = nil
@@ -1028,7 +1048,7 @@ struct ParentNotificationsAskStep: View {
         )
     }
 
-    @MainActor
+    
     private func requestThenAdvance() async {
         requesting = true
         try? await Task.sleep(nanoseconds: 400_000_000)

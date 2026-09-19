@@ -13,6 +13,53 @@ class APIClient {
     
     // MARK: - Authentication & Pairing
     
+    
+    // MARK: - Email Auth
+    
+    func register(email: String, password: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/auth/register")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = ["email": email, "password": password]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            return false
+        }
+        
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if let token = json?["access_token"] as? String {
+            self.parentAccessToken = token
+            return true
+        }
+        return false
+    }
+    
+    func login(email: String, password: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/auth/login")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = ["email": email, "password": password]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            return false
+        }
+        
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if let token = json?["access_token"] as? String {
+            self.parentAccessToken = token
+            return true
+        }
+        return false
+    }
+
     func generatePairingCode(childId: String) async throws -> (code: String, expiresAt: String) {
         // Simulating the request for now if no token is present, 
         // otherwise this will hit POST /auth/generate-pairing-code
