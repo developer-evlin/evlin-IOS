@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
 
@@ -13,6 +13,7 @@ app.include_router(submissions.router)
 app.include_router(rules.router)
 app.include_router(calendar.router)
 app.include_router(compliance.router)
+app.include_router(content.router)
 
 @app.get("/")
 def read_root():

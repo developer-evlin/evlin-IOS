@@ -24,16 +24,18 @@ def get_s3_client():
         region_name="auto",
     )
 
-def generate_presigned_upload_url(object_name: str, content_type: str, expiration=3600):
+def generate_presigned_upload_url(object_name: str, content_type: str, expiration=3600, bucket_name=None):
     """
     Generate a presigned URL to upload a file directly to R2.
     """
+    if bucket_name is None:
+        bucket_name = R2_BUCKET_NAME
     s3_client = get_s3_client()
     try:
         response = s3_client.generate_presigned_url(
             'put_object',
             Params={
-                'Bucket': R2_BUCKET_NAME,
+                'Bucket': bucket_name,
                 'Key': object_name,
                 'ContentType': content_type
             },
@@ -44,16 +46,18 @@ def generate_presigned_upload_url(object_name: str, content_type: str, expiratio
         print(f"Error generating presigned upload URL: {e}")
         return None
 
-def generate_presigned_download_url(object_name: str, expiration=3600):
+def generate_presigned_download_url(object_name: str, expiration=3600, bucket_name=None):
     """
     Generate a presigned URL to securely download a file from R2.
     """
+    if bucket_name is None:
+        bucket_name = R2_BUCKET_NAME
     s3_client = get_s3_client()
     try:
         response = s3_client.generate_presigned_url(
             'get_object',
             Params={
-                'Bucket': R2_BUCKET_NAME,
+                'Bucket': bucket_name,
                 'Key': object_name
             },
             ExpiresIn=expiration
