@@ -287,7 +287,9 @@ class APIClient {
         }
         return false
     }
-}import Foundation
+}
+
+import Foundation
 import SwiftUI
 
 @Observable
