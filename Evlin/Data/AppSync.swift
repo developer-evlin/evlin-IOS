@@ -78,17 +78,28 @@ class AppSync {
             }
             
             // 4. Update FamilyStore & TaskStore
-            TaskStore.binding(for: "liam").wrappedValue = uiTasks // "liam" is the hardcoded mock ID in RootView right now
+            // Since the UI still heavily relies on the hardcoded "liam" ID in navigation and bindings,
+            // we keep the ID as "liam" for the prototype but overwrite its contents with the real backend data.
+            TaskStore.binding(for: "liam").wrappedValue = uiTasks
             
             let childStatus: ChildStatus = uiTasks.contains(where: { $0.state == .pending }) ? .lockedTasks : .unlocked
             
-            // If the FamilyStore already has the mock kid, update it
             if let existingChild = FamilyStore.children.first {
+                existingChild.name = firstApiChild.name
                 existingChild.rules = childRules
                 existingChild.dailyLimitMin = rules.dailyLimitMinutes
                 existingChild.tasksTotal = uiTasks.count
                 existingChild.tasksDone = uiTasks.filter { $0.state == .done }.count
                 existingChild.status = state.manualLock ? .locked : childStatus
+            } else {
+                // If it was somehow empty, inject the real child using the mock ID for UI compat
+                FamilyStore.children.append(Child(
+                    id: "liam", name: firstApiChild.name, age: 10, dailyLimitMin: rules.dailyLimitMinutes,
+                    color: childColorPalette[0], status: childStatus,
+                    timeLeft: formatMinutes(rules.dailyLimitMinutes), timePct: 100, usageTodayMin: 0,
+                    tasksDone: uiTasks.filter { $0.state == .done }.count, tasksTotal: uiTasks.count, subtitle: "No tasks yet",
+                    devices: demoDevice(firstApiChild.name)
+                ))
             }
             
             print("AppSync: Successfully synced backend data into UI state!")

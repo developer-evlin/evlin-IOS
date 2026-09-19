@@ -37,14 +37,10 @@ struct RootView: View {
                             role: .parent,
                             onExitToModePicker: { mode = nil },
                             onComplete: {
-                                // Onboarding itself never touches FamilyStore
-                                // (it's all mocked pairing/copy) — this is the
-                                // one real side effect: finishing it is what
-                                // actually creates the family's one child, with
-                                // sensible new-child defaults (see
-                                // addOnboardedChild) rather than the app just
-                                // always starting with the same pre-seeded demo
-                                // kid regardless of what onboarding did.
+                                // Now that backend auth and pairing is wired, AppSync will pull the real child
+                                // that was generated during the code pairing step. We still add the mock
+                                // if the network fails so the UI doesn't break, but AppSync will overwrite it
+                                // if the real data exists.
                                 if FamilyStore.children.isEmpty {
                                     FamilyStore.addOnboardedChild(name: "Liam")
                                 }
