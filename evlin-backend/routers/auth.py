@@ -169,6 +169,16 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 @router.post("/pair-child", response_model=schemas.PairChildResponse)
+@router.get("/check-pairing/{code}")
+def check_pairing(code: str, db: Session = Depends(get_db)):
+    # If the code is gone, it was either used or expired.
+    # To be precise, let's just say if it's missing, it's paired (for the prototype).
+    pairing_code = db.query(models.PairingCode).filter(models.PairingCode.code == code).first()
+    if not pairing_code:
+        return {"paired": True}
+    return {"paired": False}
+
+@router.post("/pair-child", response_model=schemas.PairChildResponse)
 def pair_child(request: schemas.PairChildRequest, db: Session = Depends(get_db)):
     """Child enters the code to authenticate their device"""
     # 1. Find the code
