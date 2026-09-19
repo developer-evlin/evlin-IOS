@@ -44,6 +44,7 @@ struct ParentSignInStep: View {
     @State private var codeError: String?
     @State private var resending = false
     @State private var justResent = false
+    @State private var providersError: String?
 
     private var isValidEmail: Bool {
         guard let at = email.firstIndex(of: "@") else { return false }
@@ -141,6 +142,14 @@ struct ParentSignInStep: View {
                     Text("Signing in…").onboardingV2BodyXS()
                 }
                 .padding(.top, Spacing.sm)
+            }
+            
+            if let providersError {
+                Text(providersError)
+                    .onboardingV2BodyXS()
+                    .foregroundStyle(OnboardingV2Theme.Palette.error)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, Spacing.sm)
             }
         }
     }
@@ -320,12 +329,29 @@ struct ParentSignInStep: View {
     
     private func signInWithProvider() async {
         busy = true
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        busy = false
-        if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            parentName = "Morgan"
+        providersError = nil
+        
+        // Mock Apple/Google auth by creating a real backend session using a randomized email.
+        // This lets the user test the smooth "one-tap" flow while still getting a real JWT token!
+        let randomEmail = "user_\(UUID().uuidString.prefix(8).lowercased())@apple-google-mock.com"
+        let randomPassword = "SecurePassword123!"
+        
+        do {
+            let success = try await APIClient.shared.register(email: randomEmail, password: randomPassword)
+            if success {
+                // If we don't have a parentName set yet, give a default
+                if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    parentName = "Morgan"
+                }
+                onSignedIn()
+            } else {
+                providersError = "Mock provider sign-in failed."
+            }
+        } catch {
+            providersError = "Network error during mock provider sign-in."
         }
-        onSignedIn()
+        
+        busy = false
     }
 }
 
