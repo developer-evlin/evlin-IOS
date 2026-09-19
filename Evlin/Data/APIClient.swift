@@ -1,6 +1,10 @@
 import Foundation
 
 /// A lightweight API client to connect the SwiftUI app to the local FastAPI backend.
+enum APIError: Error {
+    case serverError(String)
+}
+
 class APIClient {
     static let shared = APIClient()
     

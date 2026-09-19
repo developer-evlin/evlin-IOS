@@ -309,14 +309,22 @@ struct ParentSignInStep: View {
         busy = true
         let success: Bool
         
+        var actualError: String? = nil
         do {
             if authMode == .signUp {
                 success = try await APIClient.shared.register(email: email, password: password)
             } else {
                 success = try await APIClient.shared.login(email: email, password: password)
             }
+        } catch let apiError as APIError {
+            success = false
+            switch apiError {
+            case .serverError(let msg): actualError = msg
+            default: actualError = apiError.localizedDescription
+            }
         } catch {
             success = false
+            actualError = error.localizedDescription
         }
         
         busy = false
@@ -329,7 +337,7 @@ struct ParentSignInStep: View {
             // Skip the mocked confirm email phase entirely now that backend auth is wired up
             onSignedIn()
         } else {
-            passwordError = authMode == .signUp ? "Failed to create account. Email might be in use or password is too weak." : "Incorrect email or password."
+            passwordError = actualError ?? (authMode == .signUp ? "Failed to create account." : "Incorrect email or password.")
         }
     }
 
