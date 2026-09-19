@@ -722,9 +722,14 @@ struct ParentShowCodeStep: View {
                 try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
                 if Task.isCancelled { break }
                 
-                let isPaired = (try? await APIClient.shared.checkPairingStatus(code: code)) ?? false
-                if isPaired {
+                let result = (try? await APIClient.shared.checkPairingStatus(code: code)) ?? (false, nil)
+                if result.paired {
                     await MainActor.run {
+                        // Pass the kidName string along through a NotificationCenter notification 
+                        // so the Coordinator can update its @State kidName before transitioning
+                        if let kidName = result.kidName {
+                            NotificationCenter.default.post(name: NSNotification.Name("EvlinKidPaired"), object: kidName)
+                        }
                         onContinue()
                     }
                     break

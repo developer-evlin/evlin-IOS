@@ -113,7 +113,7 @@ class APIClient {
         }
     }
     
-        func checkPairingStatus(code: String) async throws -> Bool {
+        func checkPairingStatus(code: String) async throws -> (paired: Bool, kidName: String?) {
         let url = URL(string: "\(baseURL)/auth/check-pairing/\(code)")!
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -125,13 +125,15 @@ class APIClient {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                return false
+                return (false, nil)
             }
             
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            return json?["paired"] as? Bool ?? false
+            let paired = json?["paired"] as? Bool ?? false
+            let kidName = json?["kid_name"] as? String
+            return (paired, kidName)
         } catch {
-            return false
+            return (false, nil)
         }
     }
     

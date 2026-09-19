@@ -202,12 +202,19 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 @router.get("/check-pairing/{code}")
-def check_pairing(code: str, db: Session = Depends(get_db)):
-    # If the code is gone, it was either used or expired.
-    # To be precise, let's just say if it's missing, it's paired (for the prototype).
+def check_pairing(code: str, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    # First, let's check if the parent actually has a paired child right now
+    parent_child = db.query(models.ParentChild).filter(models.ParentChild.parent_id == current_parent.id).first()
+    kid_name = "Liam"
+    if parent_child:
+        child = db.query(models.Child).filter(models.Child.id == parent_child.child_id).first()
+        if child and child.name:
+            kid_name = child.name
+            
+    # Check if the code is gone
     pairing_code = db.query(models.PairingCode).filter(models.PairingCode.code == code).first()
     if not pairing_code:
-        return {"paired": True}
+        return {"paired": True, "kid_name": kid_name}
     return {"paired": False}
 
 @router.post("/pair-child", response_model=schemas.PairChildResponse)
