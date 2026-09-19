@@ -192,11 +192,11 @@ struct ParentSignInStep: View {
         VStack(spacing: 11) {
             HStack(spacing: 6) {
                 Text(email)
-                    .onboardingV2BodyXS()
+                    .font(OnboardingV2Theme.Typography.bodyStrong(false))
                     .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
                 Spacer()
                 Button("Edit") { phase = .emailAddress }
-                    .font(OnboardingV2Theme.Typography.bodyXS)
+                    .font(OnboardingV2Theme.Typography.bodyStrong(false))
                     .foregroundStyle(OnboardingV2Theme.Palette.primary)
             }
 
