@@ -4,9 +4,8 @@ import Foundation
 class APIClient {
     static let shared = APIClient()
     
-    // Using localhost for simulator testing. 
-    // If testing on a physical device, this would change to the Mac's local IP (e.g., http://192.168.x.x:8000)
-    let baseURL = "http://127.0.0.1:8000"
+    // Switch to your Render URL:
+    let baseURL = "https://evlin-ios.onrender.com"
     
     // Store tokens in memory for the prototype MVP (normally this would be Keychain)
     var parentAccessToken: String?
