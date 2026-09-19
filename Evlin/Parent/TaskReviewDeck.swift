@@ -230,6 +230,12 @@ struct TaskReviewDeckView: View {
     }
 
     private func approve(_ task: ChildTask) {
+        if let occId = task.occurrenceId {
+            Task {
+                try? await APIClient.shared.approveTask(occurrenceId: occId, reject: false)
+                await AppSync.shared.syncBackendData()
+            }
+        }
         if let i = tasks.firstIndex(where: { $0.id == task.id }) {
             tasks[i].state = task.state == .bypass ? .bypassed : .done
         }

@@ -11,9 +11,7 @@ class APIClient {
     // Switch to your Render URL:
     let baseURL = "https://evlin-ios.onrender.com"
     
-    // Store tokens in memory for the prototype MVP (normally this would be Keychain)
-    var parentAccessToken: String?
-    var childDeviceToken: String?
+    // Tokens and active child state are now managed by SessionManager
     
     // MARK: - Authentication & Pairing
     
@@ -36,7 +34,7 @@ class APIClient {
         
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         if let token = json?["access_token"] as? String {
-            self.parentAccessToken = token
+            SessionManager.shared.parentAccessToken = token
             return true
         }
         return false
@@ -58,7 +56,7 @@ class APIClient {
         
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         if let token = json?["access_token"] as? String {
-            self.parentAccessToken = token
+            SessionManager.shared.parentAccessToken = token
             return true
         }
         return false
@@ -70,7 +68,7 @@ class APIClient {
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        if let token = parentAccessToken {
+        if let token = SessionManager.shared.parentAccessToken {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
@@ -102,13 +100,13 @@ class APIClient {
             
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             if let token = json?["access_token"] as? String {
-                self.childDeviceToken = token
+                SessionManager.shared.childDeviceToken = token
                 return true
             }
             return false
         } catch {
             print("APIClient Fallback: Backend unreachable, simulating successful pairing.")
-            self.childDeviceToken = "mock_device_token"
+            SessionManager.shared.childDeviceToken = "mock_device_token"
             return true
         }
     }
@@ -118,7 +116,7 @@ class APIClient {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         
-        if let token = parentAccessToken {
+        if let token = SessionManager.shared.parentAccessToken {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
@@ -143,7 +141,7 @@ class APIClient {
         let url = URL(string: "\(baseURL)\(endpoint)")!
         var request = URLRequest(url: url)
         
-        if let token = parentAccessToken ?? childDeviceToken {
+        if let token = SessionManager.shared.activeToken {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
@@ -175,5 +173,73 @@ class APIClient {
     
     func fetchState(childId: String) async throws -> ApiChildState {
         try await fetch(endpoint: "/children/\(childId)/state")
+    }
+
+    // MARK: - Task Management (Bi-directional Sync)
+    
+    func createTask(childId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/children/\(childId)/tasks")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let body: [String: Any] = [
+            "title": title,
+            "instructions": instructions ?? "",
+            "recurrence": recurrence,
+            "bucket": bucket,
+            "submission_kind": submissionKind
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
+    }
+    
+    func submitTask(occurrenceId: String, bypassNote: String? = nil) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/tasks/occurrences/\(occurrenceId)/submit")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        var body: [String: Any] = [:]
+        if let bypassNote = bypassNote {
+            body["bypass_note"] = bypassNote
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
+    }
+    
+    func approveTask(occurrenceId: String, reject: Bool = false) async throws -> Bool {
+        let endpoint = reject ? "reject" : "approve"
+        let url = URL(string: "\(baseURL)/tasks/occurrences/\(occurrenceId)/\(endpoint)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
     }
 }

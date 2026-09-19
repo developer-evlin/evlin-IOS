@@ -6,6 +6,7 @@ enum TaskState: String {
 
 struct ChildTask: Identifiable {
     var id: String
+    var occurrenceId: String? // Added to support bi-directional API sync
     var title: String
     var state: TaskState
     var category: String

@@ -577,7 +577,7 @@ private struct ChatSuggestion: Identifiable {
 }
 
 private let welcomeSuggestions: [ChatSuggestion] = [
-    ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review Liam's progress", prompt: "How is Liam doing with his tasks today?", card: .reviewCompliance(childId: "liam", childName: "Liam")),
+    ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review Liam's progress", prompt: "How is Liam doing with his tasks today?", card: .reviewCompliance(childId: session.activeChildId ?? "", childName: "Liam")),
     ChatSuggestion(icon: "gavel", title: "Set a bedtime rule", prompt: "Lock all apps at 9pm on school nights"),
     ChatSuggestion(
         icon: "sf:checklist", title: "Add a task",
@@ -598,6 +598,8 @@ private let welcomeSuggestions: [ChatSuggestion] = [
 ]
 
 struct ScreenChat: View {
+    @Environment(SessionManager.self) private var session
+
     // No canned "I'm Evlin" bubble seeded in — the empty state's welcomeGrid
     // already carries that greeting, so the transcript itself only ever
     // holds real exchanges the user actually sent/received.
@@ -1085,7 +1087,7 @@ struct ScreenChat: View {
         // object itself (not this screen's own state), so it's actually
         // there the next time Liam's profile is opened, not just in this
         // chat transcript.
-        FamilyStore.child("liam").rules.append(ChildRule(
+        FamilyStore.child(session.activeChildId ?? "").rules.append(ChildRule(
             id: UUID().uuidString,
             kind: .custom,
             icon: "sf:nosign",
@@ -1244,8 +1246,8 @@ private let chatHistoryMock: [ChatHistoryEntry] = [
         title: "Weekly usage check-in",
         time: "Monday", section: "Previous 7 Days",
         transcript: [
-            (true, "How's everyone's screen time trending this week?"),
-            (false, "Screen time was down 12% from last week across the family. Maya's the only one trending up — mostly reading apps, so nothing to flag."),
+            (true, "How's Liam's screen time trending this week?"),
+            (false, "Liam's screen time was down 12% from last week — mostly less time in reading apps, so nothing to flag."),
         ]
     ),
 ]

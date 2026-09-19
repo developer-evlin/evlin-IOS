@@ -298,21 +298,22 @@ struct ScreenProfile: View {
         }
         .sheet(isPresented: $showAddTask) {
             AddTaskSheet(child: child, onCreate: { newTask in
-                // The child's very first task ever — flips the phone from
-                // .unlocked (nothing to gate yet) to .lockedTasks, a real
-                // consequence of assigning work instead of a status the
-                // child was just born with. dailyLimitMin (defaulted to 60
-                // at onboarding — see FamilyStore.addOnboardedChild) is
-                // deliberately left untouched here: a parent could already
-                // have customized it in Rules before ever assigning a task,
-                // and re-stomping it to the default here would be a bug.
-                let isFirstTask = tasks.isEmpty
-                var t = newTask
-                t.id = UUID().uuidString
-                tasks.append(t)
-                if isFirstTask {
-                }
                 showAddTask = false
+                Task {
+                    do {
+                        _ = try await APIClient.shared.createTask(
+                            childId: childId,
+                            title: newTask.title,
+                            instructions: newTask.description,
+                            recurrence: newTask.repeats,
+                            bucket: newTask.category,
+                            submissionKind: "button" // Default to button for MVP
+                        )
+                        await AppSync.shared.syncBackendData()
+                    } catch {
+                        print("Failed to save task to backend: \(error)")
+                    }
+                }
             }, onCancel: { showAddTask = false })
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .interactiveDismissDisabled()
@@ -1792,7 +1793,7 @@ private struct AddTaskSheet: View {
             canSave: canSave, onCancel: onCancel, onSave: {
                 let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
                 onCreate(ChildTask(
-                    id: UUID().uuidString, title: title, state: .pending, category: category,
+                    id: UUID().uuidString, occurrenceId: nil, title: title, state: .pending, category: category,
                     description: description, note: nil, submittedAt: nil,
                     dueLabel: hasDueDate ? formatted(dueDate) : nil, dueDate: hasDueDate ? dueDate : nil, photoCount: 0,
                     repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")

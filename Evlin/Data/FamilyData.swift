@@ -141,7 +141,7 @@ enum FamilyStore {
     @discardableResult
     static func addOnboardedChild(name: String) -> Child {
         let child = Child(
-            id: "liam", name: name, age: 10, dailyLimitMin: 60,
+            id: SessionManager.shared.activeChildId ?? "unknown", name: name, age: 10, dailyLimitMin: 60,
             color: childColorPalette[0], manualLock: false, taskGateOverride: false,
             timeLeft: formatMinutes(60), timePct: 100, usageTodayMin: 0,
             subtitle: "No tasks yet",

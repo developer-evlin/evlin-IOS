@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ScreenHome: View {
+    @Environment(SessionManager.self) private var session
+
     @State private var showNotifs = false
     @State private var openChildId: String?
     // A notification naming a specific task used to only ever get there via

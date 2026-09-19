@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct TabletRootView: View {
+    @Environment(SessionManager.self) private var session
+
     var onSwitchMode: () -> Void
     @State private var tab = 0
     @State private var tasks = TabletData.tasks
@@ -94,6 +96,17 @@ struct TabletRootView: View {
         }
         .fullScreenCover(item: $selectedTask) { task in
             TaskDetailView(task: task, onComplete: { photoCount, note, hasVoiceNote in
+                Task {
+                    if let occId = task.occurrenceId {
+                        do {
+                            _ = try await APIClient.shared.submitTask(occurrenceId: occId, bypassNote: note)
+                            await AppSync.shared.syncBackendData()
+                        } catch {
+                            print("Submit failed", error)
+                        }
+                    }
+                }
+                
                 if let i = tasks.firstIndex(where: { $0.id == task.id }) {
                     tasks[i].done = true
                     tasks[i].submittedPhotoCount = photoCount

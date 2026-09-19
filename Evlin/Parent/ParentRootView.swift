@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ParentRootView: View {
+    @Environment(SessionManager.self) private var session
+
     var onSwitchMode: () -> Void
     @State private var tab = 0
 

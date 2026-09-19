@@ -7,6 +7,8 @@ enum AppMode: String, CaseIterable, Identifiable {
 }
 
 struct RootView: View {
+    @State private var session = SessionManager.shared
+
     @State private var mode: AppMode? = nil
     // Separate per role — a parent and a kid go through entirely different
     // onboarding chains (accounts/PIN/pairing vs. consent/permissions), so
@@ -32,6 +34,7 @@ struct RootView: View {
                 case .parent:
                     if parentOnboarded {
                         ParentRootView(onSwitchMode: { mode = nil })
+                            .environment(session)
                     } else {
                         OnboardingV2Coordinator(
                             role: .parent,
@@ -52,6 +55,7 @@ struct RootView: View {
                 case .tablet:
                     if childOnboarded {
                         TabletRootView(onSwitchMode: { mode = nil })
+                            .environment(session)
                     } else {
                         OnboardingV2Coordinator(
                             role: .child,

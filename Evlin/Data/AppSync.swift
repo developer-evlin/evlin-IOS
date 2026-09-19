@@ -66,6 +66,7 @@ class AppSync {
                 
                 uiTasks.append(ChildTask(
                     id: task.id,
+                    occurrenceId: occurrence?.id,
                     title: task.title,
                     state: uiState,
                     category: task.bucket,
@@ -77,21 +78,22 @@ class AppSync {
                 ))
             }
             
-            // 4. Update FamilyStore & TaskStore
-            // Since the UI still heavily relies on the hardcoded "liam" ID in navigation and bindings,
-            // we keep the ID as "liam" for the prototype but overwrite its contents with the real backend data.
-            TaskStore.binding(for: "liam").wrappedValue = uiTasks
+            // 4. Update Session, FamilyStore, & TaskStore
+            SessionManager.shared.activeChildId = childIdStr
+            TaskStore.binding(for: childIdStr).wrappedValue = uiTasks
             
-            if let existingChild = FamilyStore.children.first {
+            // Check if the actual child is already in FamilyStore
+            if let existingChild = FamilyStore.children.first(where: { $0.id == childIdStr }) {
                 existingChild.name = firstApiChild.name
                 existingChild.rules = childRules
                 existingChild.dailyLimitMin = rules.dailyLimitMinutes
                 existingChild.manualLock = state.manualLock
-                // status, tasksDone, and tasksTotal are now dynamically computed from TaskStore
             } else {
-                // If it was somehow empty, inject the real child using the mock ID for UI compat
+                // Remove the mock "liam" if it exists, or just clear the list if we only support one kid for MVP
+                FamilyStore.children.removeAll()
+                
                 FamilyStore.children.append(Child(
-                    id: "liam", name: firstApiChild.name, age: 10, dailyLimitMin: rules.dailyLimitMinutes,
+                    id: childIdStr, name: firstApiChild.name, age: 10, dailyLimitMin: rules.dailyLimitMinutes,
                     color: FamilyStore.childColorPalette[0], manualLock: state.manualLock, taskGateOverride: state.taskGateOverride,
                     timeLeft: formatMinutes(rules.dailyLimitMinutes), timePct: 100, usageTodayMin: 0,
                     subtitle: "No tasks yet",
