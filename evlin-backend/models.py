@@ -202,3 +202,52 @@ class AuditLog(Base):
     kind = Column(String, nullable=False)
     metadata_json = Column("metadata", JSON)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class ComicGuide(Base):
+    __tablename__ = "comic_guides"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String, nullable=False)
+    blurb = Column(String)
+    emoji = Column(String)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class ComicPanel(Base):
+    __tablename__ = "comic_panels"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    guide_id = Column(UUID(as_uuid=True), ForeignKey("app.comic_guides.id", ondelete="CASCADE"), nullable=False)
+    step = Column(Integer, nullable=False)
+    r2_key = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class SlideLesson(Base):
+    __tablename__ = "slide_lessons"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    category = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    subtitle = Column(String, nullable=False)
+    cover_r2_key = Column(String)
+    accent_hex = Column(String)
+    icon = Column(String)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class LessonSlide(Base):
+    __tablename__ = "lesson_slides"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    lesson_id = Column(UUID(as_uuid=True), ForeignKey("app.slide_lessons.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String, nullable=False, default="body")
+    step = Column(Integer, nullable=False)
+    kicker = Column(String, nullable=False)
+    headline = Column(String, nullable=False)
+    body = Column(String)
+    sub = Column(String)
+    points = Column(ARRAY(String))
+    icon = Column(String)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
