@@ -82,23 +82,20 @@ class AppSync {
             // we keep the ID as "liam" for the prototype but overwrite its contents with the real backend data.
             TaskStore.binding(for: "liam").wrappedValue = uiTasks
             
-            let childStatus: ChildStatus = uiTasks.contains(where: { $0.state == .pending }) ? .lockedTasks : .unlocked
-            
             if let existingChild = FamilyStore.children.first {
                 existingChild.name = firstApiChild.name
                 existingChild.rules = childRules
                 existingChild.dailyLimitMin = rules.dailyLimitMinutes
-                existingChild.tasksTotal = uiTasks.count
-                existingChild.tasksDone = uiTasks.filter { $0.state == .done }.count
-                existingChild.status = state.manualLock ? .locked : childStatus
+                existingChild.manualLock = state.manualLock
+                // status, tasksDone, and tasksTotal are now dynamically computed from TaskStore
             } else {
                 // If it was somehow empty, inject the real child using the mock ID for UI compat
                 FamilyStore.children.append(Child(
                     id: "liam", name: firstApiChild.name, age: 10, dailyLimitMin: rules.dailyLimitMinutes,
-                    color: childColorPalette[0], status: childStatus,
+                    color: FamilyStore.childColorPalette[0], manualLock: state.manualLock, taskGateOverride: state.taskGateOverride,
                     timeLeft: formatMinutes(rules.dailyLimitMinutes), timePct: 100, usageTodayMin: 0,
-                    tasksDone: uiTasks.filter { $0.state == .done }.count, tasksTotal: uiTasks.count, subtitle: "No tasks yet",
-                    devices: demoDevice(firstApiChild.name)
+                    subtitle: "No tasks yet",
+                    devices: FamilyStore.demoDevice(firstApiChild.name)
                 ))
             }
             

@@ -97,7 +97,6 @@ struct ScreenProfile: View {
             default: break
             }
         }
-        child.status = .unlocked
         child.timeLeft = formatMinutes(child.dailyLimitMin)
         child.timePct = 100
     }
@@ -172,7 +171,8 @@ struct ScreenProfile: View {
                     childName: child.name,
                     remaining: todaysTasks.count - doneCount,
                     onUnlock: {
-                        child.status = .unlocked
+                        child.manualLock = false
+                        child.taskGateOverride = true
                         child.timeLeft = formatMinutes(child.dailyLimitMin)
                         child.timePct = 100
                         withAnimation(.easeOut(duration: 0.2)) { showUnlockConfirm = false }
@@ -192,7 +192,8 @@ struct ScreenProfile: View {
                     dailyLimitMin: child.dailyLimitMin,
                     usageTodayMin: child.usageTodayMin,
                     onGrant: { minutes in
-                        child.status = .unlocked
+                        child.manualLock = false
+                        child.taskGateOverride = true
                         child.timeLeft = formatMinutes(minutes)
                         let pct = (Double(minutes) / Double(max(child.dailyLimitMin, 1))) * 100
                         child.timePct = min(100, Int(pct))
@@ -310,7 +311,6 @@ struct ScreenProfile: View {
                 t.id = UUID().uuidString
                 tasks.append(t)
                 if isFirstTask {
-                    child.status = .lockedTasks
                 }
                 showAddTask = false
             }, onCancel: { showAddTask = false })
@@ -468,7 +468,7 @@ struct ScreenProfile: View {
                             // above only reads it in the .unlocked branch)
                             // and comes back as-is on unlock instead of
                             // being reported as used up.
-                            child.status = .locked
+                            child.manualLock = true
                         } else if todaysTasks.count - doneCount > 0 {
                             // Unlocking (unlike locking) needs a confirm — it's
                             // the easy-to-regret direction, especially with
@@ -482,7 +482,6 @@ struct ScreenProfile: View {
                             // directly instead of running the "how much
                             // extra" Grant Time flow, which frames this as
                             // bonus time beyond an exhausted limit.
-                            child.status = .unlocked
                         } else {
                             // Tasks are done and the daily allowance is
                             // genuinely used up — the question here isn't
@@ -504,7 +503,8 @@ struct ScreenProfile: View {
     // exitDowntimeIfActive.
     private func exitDowntimeIfActive() {
         guard child.status == .downtime else { return }
-        child.status = .unlocked
+        child.manualLock = false
+        child.taskGateOverride = true
         child.timeLeft = formatMinutes(child.dailyLimitMin)
         child.timePct = 100
         child.downtimeUntil = nil

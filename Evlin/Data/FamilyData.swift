@@ -43,12 +43,26 @@ final class Child: Identifiable, ObservableObject {
     @Published var age: Int
     @Published var dailyLimitMin: Int
     @Published var color: Color
-    @Published var status: ChildStatus
+    @Published var manualLock: Bool
+    @Published var taskGateOverride: Bool
     @Published var timeLeft: String
     @Published var timePct: Int
     @Published var usageTodayMin: Int
-    @Published var tasksDone: Int
-    @Published var tasksTotal: Int
+
+    var tasksTotal: Int { TaskStore.tasks(for: id).count }
+    var tasksDone: Int { TaskStore.tasks(for: id).filter { $0.state == .done }.count }
+    
+    var status: ChildStatus {
+        if manualLock { return .locked }
+        if downtimeUntil != nil { return .downtime }
+        
+        if !taskGateOverride {
+            let pending = TaskStore.tasks(for: id).filter { $0.state == .pending || $0.state == .review }
+            if !pending.isEmpty { return .lockedTasks }
+        }
+        
+        return .unlocked
+    }
     @Published var subtitle: String
     @Published var reflection: ChildReflection?
     /// Set only when status == .downtime — the schedule's end time, e.g.
@@ -79,10 +93,10 @@ final class Child: Identifiable, ObservableObject {
     // profile instead of only existing in that one screen's local state.
     @Published var rules: [ChildRule]
 
-    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, status: ChildStatus, timeLeft: String, timePct: Int, usageTodayMin: Int, tasksDone: Int = 0, tasksTotal: Int = 5, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false, avatar: UIImage? = nil, rules: [ChildRule] = []) {
+    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, manualLock: Bool = false, taskGateOverride: Bool = false, timeLeft: String, timePct: Int, usageTodayMin: Int, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false, avatar: UIImage? = nil, rules: [ChildRule] = []) {
         self.id = id; self.name = name; self.age = age; self.dailyLimitMin = dailyLimitMin
-        self.color = color; self.status = status; self.timeLeft = timeLeft; self.timePct = timePct
-        self.usageTodayMin = usageTodayMin; self.tasksDone = tasksDone; self.tasksTotal = tasksTotal
+        self.color = color; self.manualLock = manualLock; self.taskGateOverride = taskGateOverride; self.timeLeft = timeLeft; self.timePct = timePct
+        self.usageTodayMin = usageTodayMin;
         self.subtitle = subtitle; self.reflection = reflection; self.downtimeUntil = downtimeUntil
         self.parentApprovalStatus = parentApprovalStatus
         self.trialExhausted = trialExhausted
@@ -128,9 +142,9 @@ enum FamilyStore {
     static func addOnboardedChild(name: String) -> Child {
         let child = Child(
             id: "liam", name: name, age: 10, dailyLimitMin: 60,
-            color: childColorPalette[0], status: .unlocked,
+            color: childColorPalette[0], manualLock: false, taskGateOverride: false,
             timeLeft: formatMinutes(60), timePct: 100, usageTodayMin: 0,
-            tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet",
+            subtitle: "No tasks yet",
             devices: demoDevice(name)
         )
         children.append(child)
@@ -140,7 +154,7 @@ enum FamilyStore {
     static func child(_ id: String) -> Child {
         children.first { $0.id == id } ?? children.first ?? Child(
             id: "none", name: "—", age: 0, dailyLimitMin: 60, color: .gray,
-            status: .unlocked, timeLeft: "0m", timePct: 0, usageTodayMin: 0, subtitle: ""
+            manualLock: false, timeLeft: "0m", timePct: 0, usageTodayMin: 0, subtitle: ""
         )
     }
 

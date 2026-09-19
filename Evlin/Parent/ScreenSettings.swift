@@ -170,8 +170,8 @@ struct ScreenSettings: View {
                         // this list.
                         newlyAddedChild = Child(
                             id: UUID().uuidString, name: "New Child", age: 8, dailyLimitMin: 60,
-                            color: FamilyStore.nextChildColor(), status: .unlocked, timeLeft: formatMinutes(60), timePct: 100,
-                            usageTodayMin: 0, tasksDone: 0, tasksTotal: 0, subtitle: "No tasks yet"
+                            color: FamilyStore.nextChildColor(), manualLock: false, taskGateOverride: false, timeLeft: formatMinutes(60), timePct: 100,
+                            usageTodayMin: 0, subtitle: "No tasks yet"
                         )
                     } label: { addChildCard }
                         .buttonStyle(.plain)

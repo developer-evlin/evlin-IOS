@@ -249,7 +249,6 @@ struct TaskReviewDeckView: View {
         let stillOutstanding = tasks.contains { $0.state == .pending || $0.state == .review || $0.state == .overdue || $0.state == .bypass }
         guard !stillOutstanding else { return }
         let child = FamilyStore.child(childId)
-        child.status = .unlocked
         child.timeLeft = formatMinutes(child.dailyLimitMin)
         child.timePct = 100
     }
