@@ -74,7 +74,10 @@ struct OnboardingV2Coordinator: View {
     /// SwiftUI recreates that step's own @State from scratch each time the
     /// switch below re-selects its case, since other cases render in
     /// between.
-    @State private var lockableAppSelection = FamilyActivitySelection()
+    // Removed lockableAppSelection from here because instantiating FamilyActivitySelection()
+    // at the root level of the coordinator triggers an XPC call to the FamilyControls daemon
+    // which causes a synchronous block and a Swift Concurrency panic (unsafeForcedSync)
+    // when the user simply switches to the Kid mode.
 
     var body: some View {
         Group {
@@ -169,7 +172,6 @@ struct OnboardingV2Coordinator: View {
 
             case .childLockableHub:
                 ChildLockableHubStep(
-                    selection: $lockableAppSelection,
                     onContinue: { step = .childFamilySharingAsk },
                     onBack: { step = .childNotifications }
                 )

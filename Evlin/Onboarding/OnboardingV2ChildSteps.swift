@@ -425,10 +425,9 @@ struct ChildNotificationsStep: View {
 // MARK: - 12 · Choose what to lock
 
 struct ChildLockableHubStep: View {
-    // Owned by OnboardingV2Coordinator, not local @State — so backing up to
-    // an earlier step and returning here doesn't reset an already-made
-    // selection back to empty.
-    @Binding var selection: FamilyActivitySelection
+    // Moved back to local @State to prevent the Coordinator from instantiating it
+    // too early and causing an unsafeForcedSync XPC deadlock on launch.
+    @State private var selection = FamilyActivitySelection()
     let onContinue: () -> Void
     var onBack: (() -> Void)? = nil
 
