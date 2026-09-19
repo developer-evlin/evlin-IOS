@@ -177,12 +177,12 @@ struct ParentSignInStep: View {
             }
             .padding(.top, Spacing.xs)
 
-            Button(authMode == .signUp ? "Already have an account? Sign in" : "New here? Create an account") {
+            Button(authMode == .signUp ? "Already have an account? Sign In" : "New here? Create an account") {
                 authMode = authMode == .signUp ? .signIn : .signUp
             }
-            .font(OnboardingV2Theme.Typography.bodyXS)
+            .font(OnboardingV2Theme.Typography.bodyStrong(false))
             .foregroundStyle(OnboardingV2Theme.Palette.primary)
-            .padding(.top, Spacing.xs)
+            .padding(.top, Spacing.md)
         }
     }
 
@@ -223,6 +223,13 @@ struct ParentSignInStep: View {
             )
             .disabled(!canSubmitPassword)
             .padding(.top, Spacing.xs)
+
+            Button(authMode == .signUp ? "Already have an account? Sign In" : "New here? Create an account") {
+                authMode = authMode == .signUp ? .signIn : .signUp
+            }
+            .font(OnboardingV2Theme.Typography.bodyStrong(false))
+            .foregroundStyle(OnboardingV2Theme.Palette.primary)
+            .padding(.top, Spacing.md)
         }
     }
 
@@ -653,9 +660,7 @@ struct ParentShowCodeStep: View {
                             )
                         
                         if !expiresAt.isEmpty {
-                            Text("Expires at \(expiresAt)")
-                                .font(OnboardingV2Theme.Typography.bodyXS)
-                                .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+                            CountdownView(expiresAtISO: expiresAt)
                         }
                     }
 
@@ -1086,3 +1091,40 @@ struct ParentNotificationsAskStep: View {
     }
 }
 
+
+struct CountdownView: View {
+    let expiresAtISO: String
+    @State private var timeRemaining: String = "Calculating..."
+    
+    var body: some View {
+        Text(timeRemaining)
+            .font(OnboardingV2Theme.Typography.bodyStrong(false))
+            .foregroundStyle(OnboardingV2Theme.Palette.primary)
+            .padding(.top, Spacing.xs)
+            .onAppear(perform: updateTimer)
+    }
+    
+    private func updateTimer() {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fallbackFormatter = ISO8601DateFormatter()
+        
+        guard let expiryDate = formatter.date(from: expiresAtISO) ?? fallbackFormatter.date(from: expiresAtISO) else {
+            timeRemaining = "Expires soon"
+            return
+        }
+        
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+            let now = Date()
+            let diff = Int(expiryDate.timeIntervalSince(now))
+            if diff <= 0 {
+                timeRemaining = "Code expired"
+                timer.invalidate()
+            } else {
+                let mins = diff / 60
+                let secs = diff % 60
+                timeRemaining = String(format: "Expires in %d:%02d", mins, secs)
+            }
+        }
+    }
+}
