@@ -267,10 +267,19 @@ struct ChildScreenTimeStep: View {
             footer: {            }
         )
         .animation(.easeOut(duration: 0.2), value: stage)
-        .task {
-            authStatus = AuthorizationCenter.shared.authorizationStatus
-            if authStatus == .approved {
-                stage = .granted
+        .onAppear {
+            // Check status without spinning up a Task, as AuthorizationCenter
+            // synchronously calls out via XPC and causes 'unsafeForcedSync'
+            // concurrency warnings and system gesture timeouts if executed
+            // inside a cooperative Swift Concurrency Task.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let status = AuthorizationCenter.shared.authorizationStatus
+                DispatchQueue.main.async {
+                    self.authStatus = status
+                    if status == .approved {
+                        self.stage = .granted
+                    }
+                }
             }
         }
     }
