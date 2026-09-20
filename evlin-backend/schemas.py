@@ -183,8 +183,17 @@ class ChildRuleBase(BaseModel):
     bedtime_end: Optional[str] = None
     blocked_categories: List[str]
 
-class ChildRuleUpdate(ChildRuleBase):
-    pass
+class ChildRuleUpdate(BaseModel):
+    # Only the daily limit and downtime switch are required: the app doesn't
+    # send bedtime/blocked categories, and omitting them must leave them as-is.
+    daily_limit_minutes: int
+    downtime_enabled: bool
+    downtime_start: Optional[str] = None
+    downtime_end: Optional[str] = None
+    bedtime_enabled: Optional[bool] = None
+    bedtime_start: Optional[str] = None
+    bedtime_end: Optional[str] = None
+    blocked_categories: Optional[List[str]] = None
 
 class ChildRuleResponse(ChildRuleBase):
     child_id: UUID
@@ -225,4 +234,13 @@ class EmailAuthRequest(BaseModel):
 
 class AuthResponse(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
     parent: ParentResponse
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    refresh_token: Optional[str] = None

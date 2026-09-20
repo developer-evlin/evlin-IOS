@@ -5,6 +5,7 @@ import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
 from access import assert_parent_owns_child
+from routers.auth import get_current_device
 
 router = APIRouter(tags=["children"])
 
@@ -97,3 +98,14 @@ def delete_child(child_id: UUID, current_parent: models.Parent = Depends(get_cur
     db.query(models.Child).filter(models.Child.id == child_id).delete()
     db.commit()
     return {"detail": "Child removed"}
+
+
+@router.get("/device/me", response_model=schemas.ChildResponse)
+def get_my_child(device: models.Device = Depends(get_current_device), db: Session = Depends(get_db)):
+    """The child profile a paired device belongs to (so the kid's app can show
+    the name their parent sees, and learn their id)."""
+    child = db.query(models.Child).filter(models.Child.id == device.child_id).first()
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    child.is_paired = True
+    return child

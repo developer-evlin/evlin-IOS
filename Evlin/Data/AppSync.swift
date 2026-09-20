@@ -31,7 +31,27 @@ class AppSync {
         inflightSync = nil
     }
 
+    /// A kid's phone only holds a device token (no parent login), so it syncs
+    /// just its own child through the device endpoints.
+    private var isKidDevice: Bool {
+        SessionManager.shared.parentAccessToken == nil && SessionManager.shared.childDeviceToken != nil
+    }
+
+    private func syncKidDevice() async {
+        do {
+            let me = try await APIClient.shared.fetchMyChild()
+            let existing = FamilyStore.children.first(where: { $0.id == me.id })
+            let (child, _) = try await syncChild(me, index: 0, existing: existing)
+            FamilyStore.children = [child]
+            SessionManager.shared.activeChildId = me.id
+            SyncState.shared.version += 1
+        } catch {
+            print("AppSync (kid) failed: \(error.localizedDescription)")
+        }
+    }
+
     private func _syncBackendData() async {
+        if isKidDevice { await syncKidDevice(); return }
         do {
             let apiChildren = try await APIClient.shared.fetchChildren()
 

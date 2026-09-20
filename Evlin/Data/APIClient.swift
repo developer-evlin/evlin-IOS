@@ -6,6 +6,37 @@ enum APIError: Error {
 
 }
 
+/// A non-2xx answer from the backend, with the status and FastAPI's `detail`.
+struct APIFailure: Error, LocalizedError {
+    let status: Int
+    let detail: String?
+    var errorDescription: String? { "HTTP \(status)\(detail.map { ": \($0)" } ?? "")" }
+}
+
+extension Error {
+    /// Plain-language reason for an alert. Tells "no network" apart from "the
+    /// server said no" so a 401/500 isn't reported as a connection problem.
+    var apiUserMessage: String {
+        if let f = self as? APIFailure {
+            switch f.status {
+            case 401: return "Your session expired. Sign out and sign in again."
+            case 404: return "The server couldn't find that child or item (\(f.detail ?? "not found"))."
+            default: return "The server rejected that (\(f.status)\(f.detail.map { ": \($0)" } ?? ""))."
+            }
+        }
+        if let u = self as? URLError {
+            switch u.code {
+            case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed:
+                return "No internet connection."
+            case .timedOut:
+                return "The server took too long to answer. It may be waking up — try again in a moment."
+            default: return "Couldn't reach the server (\(u.code.rawValue))."
+            }
+        }
+        return "Unexpected error: \(localizedDescription)"
+    }
+}
+
 @MainActor
 class APIClient {
     static let shared = APIClient()
@@ -45,6 +76,7 @@ class APIClient {
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         if let token = json?["access_token"] as? String {
             SessionManager.shared.parentAccessToken = token
+            SessionManager.shared.parentRefreshToken = json?["refresh_token"] as? String
             return true
         }
         return false
@@ -86,6 +118,7 @@ class APIClient {
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         if let token = json?["access_token"] as? String {
             SessionManager.shared.parentAccessToken = token
+            SessionManager.shared.parentRefreshToken = json?["refresh_token"] as? String
             return true
         }
         return false
@@ -139,23 +172,19 @@ class APIClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                return false
-            }
-            
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            if let token = json?["access_token"] as? String {
-                SessionManager.shared.childDeviceToken = token
-                return true
-            }
+        // A network failure throws (the caller shows "Network error") instead
+        // of pretending pairing worked with a fake token.
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             return false
-        } catch {
-            print("APIClient Fallback: Backend unreachable, simulating successful pairing.")
-            SessionManager.shared.childDeviceToken = "mock_device_token"
+        }
+        
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if let token = json?["access_token"] as? String {
+            SessionManager.shared.childDeviceToken = token
             return true
         }
+        return false
     }
     
         func checkPairingStatus(code: String, childId: String? = nil) async throws -> (paired: Bool, kidName: String?) {
@@ -186,21 +215,13 @@ class APIClient {
     // MARK: - API Fetching
     
     private func fetch<T: Codable>(endpoint: String) async throws -> T {
-        let url = URL(string: "\(baseURL)\(endpoint)")!
-        var request = URLRequest(url: url)
-        
-        if let token = SessionManager.shared.activeToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw URLError(.badServerResponse)
-        }
-        
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(T.self, from: data)
+        try decode(try await send("GET", endpoint))
+    }
+
+    /// The kid's own profile (device token), used to show the name the
+    /// parent sees.
+    func fetchMyChild() async throws -> ApiChild {
+        try await fetch(endpoint: "/device/me")
     }
     
     func fetchChildren() async throws -> [ApiChild] {
@@ -233,6 +254,17 @@ class APIClient {
     /// write for a saved one.
     @discardableResult
     private func send(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> Data {
+        do {
+            return try await sendOnce(method, path, body: body)
+        } catch let failure as APIFailure where failure.status == 401 {
+            // Supabase access tokens last about an hour: trade the refresh
+            // token for a new one and retry once before giving up.
+            guard SessionManager.shared.parentAccessToken != nil, await refreshParentToken() else { throw failure }
+            return try await sendOnce(method, path, body: body)
+        }
+    }
+
+    private func sendOnce(_ method: String, _ path: String, body: [String: Any]?) async throws -> Data {
         var request = URLRequest(url: URL(string: "\(baseURL)\(path)")!)
         request.httpMethod = method
         if let token = SessionManager.shared.activeToken {
@@ -243,10 +275,39 @@ class APIClient {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"]
+            throw APIFailure(status: http.statusCode, detail: detail.map { "\($0)" })
         }
         return data
+    }
+
+    private var refreshInFlight: Task<Bool, Never>?
+
+    /// Exchanges the stored refresh token for a new access token. Concurrent
+    /// callers share one request (refresh tokens are single-use).
+    @discardableResult
+    func refreshParentToken() async -> Bool {
+        if let inFlight = refreshInFlight { return await inFlight.value }
+        guard let refresh = SessionManager.shared.parentRefreshToken else { return false }
+        let task = Task { () -> Bool in
+            var request = URLRequest(url: URL(string: "\(baseURL)/auth/refresh")!)
+            request.httpMethod = "POST"
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": refresh])
+            guard let (data, response) = try? await session.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let access = json["access_token"] as? String else { return false }
+            SessionManager.shared.parentAccessToken = access
+            if let newRefresh = json["refresh_token"] as? String { SessionManager.shared.parentRefreshToken = newRefresh }
+            return true
+        }
+        refreshInFlight = task
+        let ok = await task.value
+        refreshInFlight = nil
+        return ok
     }
 
     private func decode<T: Decodable>(_ data: Data) throws -> T {
@@ -315,15 +376,6 @@ class APIClient {
     /// Creates the task on the backend and returns the saved row, so callers
     /// can use the real database id instead of a locally generated one.
     func createTask(childId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> ApiTask {
-        let url = URL(string: "\(baseURL)/children/\(childId)/tasks")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if let token = SessionManager.shared.activeToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
         var body: [String: Any] = [
             "title": title,
             "instructions": instructions ?? "",
@@ -333,56 +385,21 @@ class APIClient {
         ]
         if let dueTime { body["due_time"] = dueTime }
         if let dueDate { body["due_date"] = dueDate }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw URLError(.badServerResponse)
-        }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(ApiTask.self, from: data)
+        return try decode(try await send("POST", "/children/\(childId)/tasks", body: body))
     }
     
     func submitTask(occurrenceId: String, bypassNote: String? = nil) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/tasks/occurrences/\(occurrenceId)/submit")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if let token = SessionManager.shared.activeToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
         var body: [String: Any] = [:]
-        if let bypassNote = bypassNote {
-            body["bypass_note"] = bypassNote
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        let (_, response) = try await session.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            return true
-        }
-        return false
+        if let bypassNote { body["bypass_note"] = bypassNote }
+        try await send("POST", "/tasks/occurrences/\(occurrenceId)/submit", body: body)
+        return true
     }
     
     func approveTask(occurrenceId: String, reject: Bool = false) async throws -> Bool {
-        let endpoint = reject ? "reject" : "approve"
-        let url = URL(string: "\(baseURL)/tasks/occurrences/\(occurrenceId)/\(endpoint)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        
-        if let token = SessionManager.shared.activeToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let (_, response) = try await session.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            return true
-        }
-        return false
+        try await send("POST", "/tasks/occurrences/\(occurrenceId)/\(reject ? "reject" : "approve")")
+        return true
     }
+
     func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> Bool {
         var body: [String: Any] = [
             "title": title,
@@ -398,65 +415,24 @@ class APIClient {
     }
 
     func deleteTask(taskId: String) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/tasks/\(taskId)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        
-        if let token = SessionManager.shared.activeToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let (_, response) = try await session.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            return true
-        }
-        return false
+        try await send("DELETE", "/tasks/\(taskId)")
+        return true
     }
 
     func updateChildRules(childId: String, dailyLimitMin: Int, downtimeEnabled: Bool) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/children/\(childId)/rules")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if let token = SessionManager.shared.activeToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let body: [String: Any] = [
+        try await send("PUT", "/children/\(childId)/rules", body: [
             "daily_limit_minutes": dailyLimitMin,
             "downtime_enabled": downtimeEnabled
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        let (_, response) = try await session.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            return true
-        }
-        return false
+        ])
+        return true
     }
 
     func updateChildState(childId: String, manualLock: Bool, taskGateOverride: Bool) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/children/\(childId)/state")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if let token = SessionManager.shared.activeToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let body: [String: Any] = [
+        try await send("PUT", "/children/\(childId)/state", body: [
             "manual_lock": manualLock,
             "task_gate_override": taskGateOverride
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        let (_, response) = try await session.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            return true
-        }
-        return false
+        ])
+        return true
     }
 
 }
@@ -471,6 +447,7 @@ public class SessionManager {
     static let shared = SessionManager()
     
     var parentAccessToken: String?
+    var parentRefreshToken: String?
     var childDeviceToken: String?
     
     // The UUID of the child whose data is currently being viewed/managed.
@@ -484,6 +461,7 @@ public class SessionManager {
     
     func clear() {
         parentAccessToken = nil
+        parentRefreshToken = nil
         childDeviceToken = nil
         activeChildId = nil
     }

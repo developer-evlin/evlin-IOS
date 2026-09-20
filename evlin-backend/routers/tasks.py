@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta, time, date
 import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
-from access import assert_parent_owns_child, get_task_for_parent
+from access import assert_parent_owns_child, assert_child_access, get_task_for_parent
 
 router = APIRouter(tags=["tasks"])
 
@@ -28,9 +28,8 @@ def _parse_due(task: schemas.TaskCreate):
 
 
 @router.get("/children/{child_id}/tasks", response_model=list[schemas.TaskResponse])
-def get_child_tasks(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
-    """Fetch all tasks for a specific child (Parent only)"""
-    assert_parent_owns_child(db, current_parent, child_id)
+def get_child_tasks(child_id: UUID, db: Session = Depends(get_db), _access: None = Depends(assert_child_access)):
+    """Fetch all tasks for a child (that child's device, or their parent)"""
     tasks = db.query(models.Task).filter(models.Task.child_id == child_id).all()
     return tasks
 

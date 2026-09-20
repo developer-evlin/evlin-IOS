@@ -29,6 +29,7 @@ struct ScreenProfile: View {
     // adding a task, no intermediate menu with a single choice on it.
     @State private var showAddTask = false
     @State private var taskSaveFailed = false
+    @State private var taskSaveError = ""
     @State private var showUnlockConfirm = false
     @State private var showGrantTimeSheet = false
     @State private var editingScreenTimeLimit = false
@@ -309,7 +310,7 @@ struct ScreenProfile: View {
         .alert("Couldn't save task", isPresented: $taskSaveFailed) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Check your connection and try again.")
+            Text(taskSaveError)
         }
         .sheet(isPresented: $showAddTask) {
             AddTaskSheet(child: child, onCreate: { newTask in
@@ -334,6 +335,7 @@ struct ScreenProfile: View {
                         await AppSync.shared.syncBackendData()
                     } catch {
                         print("Failed to save task to backend: \(error)")
+                        taskSaveError = error.apiUserMessage
                         taskSaveFailed = true
                     }
                 }

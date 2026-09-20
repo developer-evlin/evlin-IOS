@@ -22,6 +22,8 @@ struct RootView: View {
     // Brief brand splash before the mode picker, matching the reference
     // flow's full-bleed logo screen ahead of onboarding.
     @State private var showSplash = true
+    // Filled by the parent's pairing poll (see ParentShowCodeStep).
+    @State private var pairedKidName: String?
 
     var body: some View {
         Group {
@@ -41,15 +43,19 @@ struct RootView: View {
                             role: .parent,
                             onExitToModePicker: { mode = nil },
                             onComplete: {
-                                // Now that backend auth and pairing is wired, AppSync will pull the real child
-                                // that was generated during the code pairing step. We still add the mock
-                                // if the network fails so the UI doesn't break, but AppSync will overwrite it
-                                // if the real data exists.
-                                if FamilyStore.children.isEmpty {
-                                    FamilyStore.addOnboardedChild(name: "Child")
+                                // Load the real family before showing Home, so
+                                // the parent lands on their child's actual name
+                                // instead of a placeholder that gets swapped a
+                                // moment later. The name typed on the child's
+                                // device (announced when pairing finished) is
+                                // the fallback if the sync can't complete.
+                                Task {
+                                    await AppSync.shared.syncBackendData()
+                                    if FamilyStore.children.isEmpty {
+                                        FamilyStore.addOnboardedChild(name: pairedKidName ?? "Your child")
+                                    }
+                                    parentOnboarded = true
                                 }
-                                parentOnboarded = true
-                                Task { await AppSync.shared.syncBackendData() }
                             }
                         )
                     }
@@ -71,6 +77,9 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: mode)
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("EvlinKidPaired"))) { note in
+            if let name = note.object as? String, !name.isEmpty { pairedKidName = name }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, parentOnboarded || childOnboarded {
                 Task { await AppSync.shared.syncBackendData() }

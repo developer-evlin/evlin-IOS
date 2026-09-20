@@ -9,6 +9,10 @@ class OAuthManager: NSObject, ASWebAuthenticationPresentationContextProviding {
             .first { $0.isKeyWindow } ?? ASPresentationAnchor()
     }
 
+    /// The refresh token from the last Google sign-in redirect (the callback
+    /// runs off the main actor, so it's handed over through this static).
+    nonisolated(unsafe) static var lastRefreshToken: String?
+
     func signInWithGoogle() async throws -> String {
         let supabaseURL = "https://czvuqumlmuarcltgsxag.supabase.co"
         let redirect = "evlin://auth-callback"
@@ -31,6 +35,7 @@ class OAuthManager: NSObject, ASWebAuthenticationPresentationContextProviding {
                 let dummyURL = URL(string: "http://dummy?\(fragment)")
                 let fragmentComponents = URLComponents(url: dummyURL ?? URL(string: "http://dummy")!, resolvingAgainstBaseURL: false)
                 
+                OAuthManager.lastRefreshToken = fragmentComponents?.queryItems?.first(where: { $0.name == "refresh_token" })?.value
                 if let token = fragmentComponents?.queryItems?.first(where: { $0.name == "access_token" })?.value {
                     continuation.resume(returning: token)
                 } else if let token = components?.queryItems?.first(where: { $0.name == "access_token" })?.value {
@@ -414,6 +419,7 @@ struct ParentSignInStep: View {
             let token = try await manager.signInWithGoogle()
             let success = try await APIClient.shared.verifyParent(token: token)
             if success {
+                SessionManager.shared.parentRefreshToken = OAuthManager.lastRefreshToken
                 await checkBackendAndProceed()
             } else {
                 providersError = "Failed to sync Google login with backend."

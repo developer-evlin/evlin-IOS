@@ -52,6 +52,27 @@ struct TabletRootView: View {
     private var minutesLeft: Int { max(0, limitMin - usedMin) }
     private var onBreak: Bool { if let until = onBreakUntil { return Date() < until } else { return false } }
 
+    /// Today's synced tasks -> the kid list, keeping any kid-only state
+    /// (bypass request, submitted evidence) already held for the same task.
+    private func loadTasksFromStore() {
+        guard let childId = session.activeChildId else { return }
+        let existing = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
+        tasks = TaskStore.tasks(for: childId)
+            .filter { $0.dueDate == nil || Calendar.current.isDateInToday($0.dueDate!) }
+            .map { t in
+                var k = existing[t.id] ?? KidTask(occurrenceId: t.occurrenceId, id: t.id, title: t.title,
+                                                 iconTaskId: t.id, due: t.dueLabel, done: false, desc: t.description)
+                k.occurrenceId = t.occurrenceId
+                k.title = t.title
+                k.desc = t.description
+                k.due = t.dueLabel
+                k.done = t.state == .done || t.state == .review
+                k.pendingApproval = t.state == .review
+                k.approved = t.state == .done
+                return k
+            }
+    }
+
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
@@ -111,6 +132,15 @@ struct TabletRootView: View {
                 withAnimation(.easeInOut(duration: 0.25)) { celebrationStage = .congrats }
             } else if newValue < tasks.count {
                 didCelebrateThisCompletion = false
+            }
+        }
+        // Load what the parent assigned, now and whenever a sync lands.
+        .onAppear { loadTasksFromStore() }
+        .onChange(of: SyncState.shared.version) { _, _ in loadTasksFromStore() }
+        .task {
+            while !Task.isCancelled {
+                await AppSync.shared.syncBackendData()
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
             }
         }
         .fullScreenCover(item: $selectedTask) { task in

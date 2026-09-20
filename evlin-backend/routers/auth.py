@@ -80,7 +80,7 @@ def register(request: schemas.EmailAuthRequest, db: Session = Depends(get_db)):
             db.commit()
             db.refresh(parent)
             
-        return {"access_token": access_token, "parent": parent}
+        return {"access_token": access_token, "refresh_token": login_res.session.refresh_token, "parent": parent}
     except Exception as e:
         # Pass up specific supabase errors
         error_msg = str(e)
@@ -104,7 +104,23 @@ def login(request: schemas.EmailAuthRequest, db: Session = Depends(get_db)):
             db.commit()
             db.refresh(parent)
             
-        return {"access_token": res.session.access_token, "parent": parent}
+        return {"access_token": res.session.access_token, "refresh_token": res.session.refresh_token, "parent": parent}
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+@router.post("/refresh", response_model=schemas.RefreshResponse)
+def refresh(request: schemas.RefreshRequest):
+    """Trade a Supabase refresh token for a fresh access token. Access tokens
+    only live about an hour, so without this every session died after that."""
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Supabase client not configured")
+    try:
+        res = supabase.auth.refresh_session(request.refresh_token)
+        if not res.session:
+            raise HTTPException(status_code=401, detail="Session expired")
+        return {"access_token": res.session.access_token, "refresh_token": res.session.refresh_token}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 

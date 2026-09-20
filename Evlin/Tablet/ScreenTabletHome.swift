@@ -12,6 +12,14 @@ struct ScreenTabletHome: View {
     // content was this one request, so it's a toolbar icon here instead,
     // out of the kid's main navigation entirely (see TabletRootView).
     @State private var showSettings = false
+    @Environment(SessionManager.self) private var session
+    // The name the parent sees for this child (synced from the backend);
+    // TabletData.child is a fixed mock that always said "Child".
+    private var childName: String {
+        _ = SyncState.shared.version
+        let kids = FamilyStore.children
+        return kids.first(where: { $0.id == session.activeChildId })?.name ?? kids.first?.name ?? "there"
+    }
     // This screen used to render identically on iPhone and iPad — same
     // fixed sizing just stretched across whatever width it landed on, which
     // read as an oversized phone layout with a lot of dead margin rather
@@ -51,7 +59,7 @@ struct ScreenTabletHome: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Good \(greeting)").font(Typography.font(greetingFont, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
-                    Text("Hey \(TabletData.child.name)! 👋").font(Typography.display(nameFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                    Text("Hey \(childName)! 👋").font(Typography.display(nameFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
 
                     HStack {
                         Text("Today").font(Typography.display(sectionTitleFont, weight: .heavy)).foregroundStyle(KidTheme.ink)

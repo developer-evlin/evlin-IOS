@@ -5,13 +5,12 @@ from datetime import datetime, timezone, time
 import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
-from access import assert_parent_owns_child
+from access import assert_parent_owns_child, assert_child_access
 
 router = APIRouter(tags=["rules", "state"])
 
 @router.get("/children/{child_id}/rules", response_model=schemas.ChildRuleResponse)
-def get_child_rules(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
-    assert_parent_owns_child(db, current_parent, child_id)
+def get_child_rules(child_id: UUID, db: Session = Depends(get_db), _access: None = Depends(assert_child_access)):
     rules = db.query(models.ChildRule).filter(models.ChildRule.child_id == child_id).first()
     if not rules:
         # Default fallback if missing
@@ -36,13 +35,15 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
     if rules_update.downtime_end:
         rules.downtime_end = time.fromisoformat(rules_update.downtime_end)
         
-    rules.bedtime_enabled = rules_update.bedtime_enabled
+    if rules_update.bedtime_enabled is not None:
+        rules.bedtime_enabled = rules_update.bedtime_enabled
     if rules_update.bedtime_start:
         rules.bedtime_start = time.fromisoformat(rules_update.bedtime_start)
     if rules_update.bedtime_end:
         rules.bedtime_end = time.fromisoformat(rules_update.bedtime_end)
 
-    rules.blocked_categories = rules_update.blocked_categories
+    if rules_update.blocked_categories is not None:
+        rules.blocked_categories = rules_update.blocked_categories
     rules.updated_at = datetime.now(timezone.utc)
     
     db.commit()
@@ -50,8 +51,7 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
     return rules
 
 @router.get("/children/{child_id}/state", response_model=schemas.ChildStateResponse)
-def get_child_state(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
-    assert_parent_owns_child(db, current_parent, child_id)
+def get_child_state(child_id: UUID, db: Session = Depends(get_db), _access: None = Depends(assert_child_access)):
     state = db.query(models.ChildState).filter(models.ChildState.child_id == child_id).first()
     if not state:
         state = models.ChildState(child_id=child_id)

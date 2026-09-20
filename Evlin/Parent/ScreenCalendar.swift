@@ -172,6 +172,7 @@ struct ScreenCalendar: View {
     // the backend, and the next sync replaces it with the saved rows.
     @State private var eventsByDay: [Int: [CalEvent]] = CalendarData.eventsByDay
     @State private var saveFailed = false
+    @State private var saveError = ""
     @State private var activeDayEvent: CalDayEvent?
     // Every timed task due at the same moment for the same kid opens as
     // one group sheet, not a per-task detail — see TaskDueGroupSheet.
@@ -298,6 +299,9 @@ struct ScreenCalendar: View {
             } catch {
                 print("Calendar save failed: \(error)")
                 reloadFromStore()
+                saveError = (error as? URLError)?.code == .badURL
+                    ? "Tasks can only be assigned to a child, not to the Parent lane."
+                    : error.apiUserMessage
                 saveFailed = true
             }
         }
@@ -450,7 +454,7 @@ struct ScreenCalendar: View {
         .alert("Couldn't save", isPresented: $saveFailed) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("That change wasn't saved. Check your connection (and that the task is for a child) and try again.")
+            Text(saveError)
         }
         .sheet(isPresented: $showDatePicker) {
             MonthPickerSheet(selectedDay: selectedDay, eventsByDay: eventsByDay, onPickDay: { d in
