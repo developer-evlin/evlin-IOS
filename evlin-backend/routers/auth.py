@@ -50,46 +50,34 @@ def register(request: schemas.EmailAuthRequest, db: Session = Depends(get_db)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not configured")
     try:
-        # Check if already registered by trying to log in first?
-        # Supabase throws "User already registered" on sign_up.
         try:
-            res = supabase.auth.sign_up({"email": request.email, "password": request.password})
+            # MVP: Use the admin API to bypass Supabase's strict email rate limits and auto-confirm the user
+            res = supabase.auth.admin.create_user({
+                "email": request.email,
+                "password": request.password,
+                "email_confirm": True
+            })
+            user_id = res.user.id
+            user_email = res.user.email
         except Exception as e:
             error_str = str(e)
             if hasattr(e, 'message'):
                 error_str = e.message
-            if "User already registered" in error_str:
-                # If they are already registered, just log them in
+            if "Email address already registered" in error_str or "already registered" in error_str:
                 return login(request, db)
             raise e
             
-        if not res.user:
-            raise HTTPException(status_code=400, detail="Failed to create user")
+        # Log in immediately to get a real valid JWT token (since we auto-confirmed them)
+        login_res = supabase.auth.sign_in_with_password({"email": request.email, "password": request.password})
+        access_token = login_res.session.access_token
         
         # Create local parent record
-        parent = db.query(models.Parent).filter(models.Parent.id == res.user.id).first()
+        parent = db.query(models.Parent).filter(models.Parent.id == user_id).first()
         if not parent:
-            parent = models.Parent(id=res.user.id, email=res.user.email, plan="free")
+            parent = models.Parent(id=user_id, email=user_email, plan="free")
             db.add(parent)
             db.commit()
             db.refresh(parent)
-            
-        # If confirm email is required, session might be None
-        access_token = ""
-        if res.session and hasattr(res.session, 'access_token'):
-            access_token = res.session.access_token
-        else:
-            # Try to log in immediately to bypass/check
-            try:
-                login_res = supabase.auth.sign_in_with_password({"email": request.email, "password": request.password})
-                if login_res.session:
-                    access_token = login_res.session.access_token
-            except Exception:
-                pass # Probably Email not confirmed error
-                
-        if not access_token:
-            # For prototype MVP, just return a dummy token so the UI proceeds if Supabase blocks token issuing due to email confirm
-            access_token = "dummy_token_awaiting_email_confirm"
             
         return {"access_token": access_token, "parent": parent}
     except Exception as e:
