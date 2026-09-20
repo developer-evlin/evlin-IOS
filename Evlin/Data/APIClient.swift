@@ -92,8 +92,25 @@ class APIClient {
     }
 
     func generatePairingCode() async throws -> (code: String, expiresAt: String) {
-        try await Task.sleep(nanoseconds: 1_000_000_000)
-        return ("123456", "2099-01-01T00:00:00Z")
+        let url = URL(string: "\(baseURL)/auth/pairing-code")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        
+        if let token = SessionManager.shared.parentAccessToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError("Failed to generate code")
+        }
+        
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let code = json?["code"] as? String, let expiresAt = json?["expires_at"] as? String else {
+            throw APIError.serverError("Failed to decode response")
+        }
+        
+        return (code, expiresAt)
     }
     
     func pairChildDevice(pairingCode: String, childName: String? = nil) async throws -> Bool {
