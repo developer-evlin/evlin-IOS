@@ -351,6 +351,34 @@ struct TaskDetailView: View {
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
         .clipShape(RoundedRectangle(cornerRadius: 20))
 
+        // A photo that didn't make it up (a network blip, or the server
+        // wasn't configured yet — see PhotoCompression/capture(_:)) used to
+        // be a dead end once "All done!" moved past the capture screen:
+        // there was no way back to the retake button that lived there. This
+        // retries the same photo already sitting on the device — no need to
+        // take it again, and no need to leave this screen.
+        if hasFailedUploads {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color(hex: "EA580C"))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("A photo didn't send").font(Typography.font(13.5, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                    Text("Check your connection, then try again").font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
+                }
+                Spacer(minLength: 8)
+                Button("Retry") { retryFailedUploads() }
+                    .font(Typography.font(13.5, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Color(hex: "EA580C"))
+                    .clipShape(Capsule())
+            }
+            .padding(14)
+            .background(Color(hex: "FFEDD5"))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .padding(.top, 14)
+        }
+
         if !photos.isEmpty {
             Text("Your photo\(photos.count == 1 ? "" : "s")")
                 .font(Typography.display(16, weight: .bold))
@@ -389,6 +417,31 @@ struct TaskDetailView: View {
                 .padding(.top, 10)
         }
 
+        // A parent asking for a redo (task.redoRequested) already reopens
+        // straight into the edit flow, so this is for everything else a
+        // kid might want to fix on their own before a parent has looked at
+        // it — a photo they want to swap, one more thing to add, a typo in
+        // the note. Gone once it's actually approved: that submission is
+        // done, not something to reopen and rewrite after the fact.
+        if !task.approved {
+            Button { submitted = false } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 13, weight: .bold))
+                    Text("Redo this")
+                        .font(Typography.font(15, weight: .bold))
+                }
+                .foregroundStyle(KidTheme.greenDeep)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(KidTheme.cream)
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(KidTheme.line, lineWidth: 1.5))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 20)
+        }
+
         Button {
             if justSubmitted { onComplete(photos.count, note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note, hasVoiceNote) }
             dismiss()
@@ -407,27 +460,44 @@ struct TaskDetailView: View {
 
     // MARK: - Real capture + upload
 
+    private var hasFailedUploads: Bool { photos.contains { $0.uploadState == .failed } }
+
     private func capture(_ image: UIImage) {
         let photo = CapturedPhoto(image: image, uploadState: .uploading)
-        let id = photo.id
         withAnimation(.easeOut(duration: 0.15)) { photos.append(photo) }
+        upload(photoId: photo.id, image: image)
+    }
+
+    /// Retries every failed photo using the image already on the device —
+    /// there's no reason to make a kid retake a perfectly good photo just
+    /// because the upload itself (a network blip, or the server not being
+    /// configured yet) is what actually failed.
+    private func retryFailedUploads() {
+        for photo in photos where photo.uploadState == .failed {
+            guard let image = photo.image else { continue }
+            if let i = photos.firstIndex(where: { $0.id == photo.id }) { photos[i].uploadState = .uploading }
+            upload(photoId: photo.id, image: image)
+        }
+    }
+
+    private func upload(photoId: UUID, image: UIImage) {
         guard let occurrenceId = task.occurrenceId, let data = PhotoCompression.compress(image) else {
             // No occurrence to attach evidence to (shouldn't normally
             // happen — every synced task has one) or compression failed:
             // keep the photo visible locally rather than losing it, just
             // without a real upload behind it.
-            if let i = photos.firstIndex(where: { $0.id == id }) { photos[i].uploadState = .failed }
+            if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
             return
         }
         Task {
             do {
                 let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "photo", contentType: "image/jpeg")
-                if let i = photos.firstIndex(where: { $0.id == id }) { photos[i].submissionId = result.submissionId }
+                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].submissionId = result.submissionId }
                 try await APIClient.shared.uploadToPresignedURL(result.uploadURL, data: data, contentType: "image/jpeg")
                 try await APIClient.shared.completeSubmission(id: result.submissionId)
-                if let i = photos.firstIndex(where: { $0.id == id }) { photos[i].uploadState = .uploaded }
+                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .uploaded }
             } catch {
-                if let i = photos.firstIndex(where: { $0.id == id }) { photos[i].uploadState = .failed }
+                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
             }
         }
     }
