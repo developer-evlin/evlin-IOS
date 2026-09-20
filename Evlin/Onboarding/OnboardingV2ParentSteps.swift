@@ -42,7 +42,7 @@ class OAuthManager: NSObject, ASWebAuthenticationPresentationContextProviding {
                 }
             }
             session.presentationContextProvider = self
-            session.prefersEphemeralWebBrowserSession = false
+            session.prefersEphemeralWebBrowserSession = true
             session.start()
         }
     }
@@ -395,7 +395,7 @@ struct ParentSignInStep: View {
         var hasKids = false
         do {
             let kids = try await APIClient.shared.fetchChildren()
-            hasKids = !kids.isEmpty
+            hasKids = kids.contains(where: { $0.isPaired })
         } catch {
             print("Failed to fetch kids during onboarding: \(error)")
         }

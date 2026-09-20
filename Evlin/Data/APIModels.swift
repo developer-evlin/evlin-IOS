@@ -41,4 +41,5 @@ struct ApiChild: Codable {
     let id: String
     let name: String
     let colorIndex: Int
+    let isPaired: Bool
 }
