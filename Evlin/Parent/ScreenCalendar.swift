@@ -1517,12 +1517,6 @@ private struct TaskDueGroupSheet: View {
         }
     }
 
-    private func approve(_ de: CalDayEvent) {
-        if let i = tasks.firstIndex(where: { $0.id == de.id }) {
-            tasks[i].event.taskState = .done
-        }
-        onApprove(de)
-    }
 
     private func statusMeta(_ state: CalTaskState) -> (label: String, tone: Color) {
         switch state {
@@ -1550,46 +1544,37 @@ private struct TaskDueGroupSheet: View {
             }
     }
 
+    // Tapping the row is the only way to act on it now — it already opens
+    // the real review flow (TaskReviewDeckView) for anything with a linked
+    // task, so the inline "Approve" button was a redundant shortcut that
+    // skipped straight past that review, not a separate capability.
     private func taskRow(_ de: CalDayEvent) -> some View {
         let ev = de.event
         let meta = statusMeta(ev.taskState)
-        return HStack(spacing: 10) {
-            Button { openDetail(de) } label: {
-                HStack(spacing: 12) {
-                    statusBox(ev.taskState)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(ev.title)
-                            .font(Typography.font(15, weight: .semibold))
-                            .foregroundStyle(EColor.onSurface)
-                            .strikethrough(ev.taskState == .done)
-                        Text(meta.label)
-                            .font(Typography.font(12.5, weight: .medium))
-                            .foregroundStyle(meta.tone)
-                    }
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(EColor.onSurfaceVariant)
+        return Button { openDetail(de) } label: {
+            HStack(spacing: 12) {
+                statusBox(ev.taskState)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ev.title)
+                        .font(Typography.font(15, weight: .semibold))
+                        .foregroundStyle(EColor.onSurface)
+                        .strikethrough(ev.taskState == .done)
+                    Text(meta.label)
+                        .font(Typography.font(12.5, weight: .medium))
+                        .foregroundStyle(meta.tone)
                 }
-                .contentShape(Rectangle())
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(EColor.onSurfaceVariant)
             }
-            .buttonStyle(.plain)
-
-            if ev.taskState != .done {
-                Button("Approve") { approve(de) }
-                    .buttonStyle(.plain)
-                    .font(Typography.font(13, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color(hex: "25924A"))
-                    .clipShape(Capsule())
-            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(EColor.surfaceContainerLowest)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(EColor.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .buttonStyle(.plain)
     }
 }
 
