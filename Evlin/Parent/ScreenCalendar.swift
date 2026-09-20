@@ -795,6 +795,13 @@ private struct DayTimelineView: View {
         .padding(.horizontal, 16)
     }
 
+    // A parent who assigns a lot of tasks used to get a full pill per
+    // anytime task, stacked one per line — with five, six, seven of them
+    // this pushed the actual hour grid halfway off the screen and read as
+    // a wall of near-identical purple bars. One compact tile per lane now
+    // shows a count instead; tapping it opens the same "tasks as a real
+    // list" sheet the timed due-markers already use (TaskDueGroupSheet),
+    // rather than inventing a second list UI for the same job.
     private var anytimeZone: some View {
         HStack(alignment: .top, spacing: 0) {
             Text("ANY\nTIME")
@@ -806,35 +813,52 @@ private struct DayTimelineView: View {
                 .padding(.trailing, 8)
                 .padding(.top, 2)
             ForEach(activePeople) { p in
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(anytimeTasks(for: p.id)) { de in
-                        anytimeChip(de)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 4)
+                anytimeSummaryTile(for: p)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
     }
 
-    // Strikethrough is the only status signal now (done) — no icon.
-    private func anytimeChip(_ de: CalDayEvent) -> some View {
-        let ev = de.event
-        let p = CalendarData.person(ev.personId)
-        return Button { onSelect(de) } label: {
-            Text(ev.title)
-                .font(Typography.font(11.5, weight: .semibold))
-                .strikethrough(ev.taskState == .done)
-                .lineLimit(1)
-                .foregroundStyle(p.color)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(p.bg)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    private func anytimeSummaryTile(for p: FamilyPerson) -> some View {
+        let tasks = anytimeTasks(for: p.id)
+        let doneCount = tasks.filter { $0.event.taskState == .done }.count
+        return Group {
+            if tasks.isEmpty {
+                EmptyView()
+            } else {
+                Button {
+                    // A group of exactly one still goes straight to its own
+                    // detail, same as tapping a single timed task does —
+                    // there's nothing a one-row list sheet adds over that.
+                    if tasks.count == 1 {
+                        onSelect(tasks[0])
+                    } else {
+                        onSelectGroup(TaskDueGroup(personId: p.id, start: "Anytime", tasks: tasks))
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checklist")
+                            .font(.system(size: 12, weight: .bold))
+                        Text(tasks.count == 1 ? tasks[0].event.title : "\(tasks.count) tasks")
+                            .font(Typography.font(12.5, weight: .semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(doneCount)/\(tasks.count)")
+                            .font(Typography.font(11.5, weight: .bold))
+                            .foregroundStyle(p.color.opacity(0.75))
+                    }
+                    .foregroundStyle(p.color)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(p.bg)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
     }
 
     // Events only now — tasks never enter this pipeline, so there's
@@ -1421,7 +1445,7 @@ private struct TaskDueGroupSheet: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 6)
 
-            Text("Due at \(group.start), \(person.name)")
+            Text(group.start == "Anytime" ? "Anytime tasks, \(person.name)" : "Due at \(group.start), \(person.name)")
                 .font(Typography.font(24, weight: .heavy))
                 .foregroundStyle(FormGreen.title)
                 .padding(.horizontal, 20)
