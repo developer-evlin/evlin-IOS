@@ -627,9 +627,12 @@ struct AddTaskFormFields<When: View>: View {
                 FormTextField(placeholder: "e.g. Make your bed", text: $taskTitle, scrollToTopOnFocus: true)
             }
             if fixedChild == nil {
+                // Includes the parent's own lane now — used to filter it
+                // out, which was the whole reason a parent had no way to
+                // assign a task or event to themselves.
                 FormField(label: "For") {
                     FlowChips {
-                        ForEach(CalendarData.people.filter { $0.id != "family" }) { p in
+                        ForEach(CalendarData.people) { p in
                             DotChip(label: p.name, color: p.color, selected: personId == p.id) { personId = p.id }
                         }
                     }

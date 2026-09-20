@@ -210,13 +210,7 @@ struct ScreenCalendar: View {
     // of this calendar." Family-wide events (Family Lunch, Family Dinner)
     // still aren't any one lane's — those render as their own full-width
     // blocks via CalendarData.everyone, not by occupying this lane list.
-    private var lanePeople: [FamilyPerson] {
-        var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
-        for child in FamilyStore.children {
-            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color, bg: child.color.opacity(0.15)))
-        }
-        return people
-    }
+    private var lanePeople: [FamilyPerson] { CalendarData.people }
 
     private func expandedEvents(for day: Int) -> [CalDayEvent] {
         CalendarData.expandedEvents(for: day, in: eventsByDay)
@@ -1711,13 +1705,6 @@ private struct AddCalendarEventForm: View {
     var onCreate: (CalEvent, Int) -> Void
     var onCancel: () -> Void
 
-    private var lanePeople: [FamilyPerson] {
-        var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
-        for child in FamilyStore.children {
-            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color, bg: child.color.opacity(0.15)))
-        }
-        return people
-    }
     @State private var personId = "family"
     @State private var title = ""
     // Real hour/minute pickers now, not free-text — defaults to the next
@@ -1754,7 +1741,7 @@ private struct AddCalendarEventForm: View {
             }
             FormField(label: "For") {
                 FlowChips {
-                    ForEach(lanePeople + [CalendarData.everyone]) { p in
+                    ForEach(CalendarData.people + [CalendarData.everyone]) { p in
                         DotChip(label: p.name, color: p.color, selected: personId == p.id) { personId = p.id }
                     }
                 }
@@ -1792,13 +1779,6 @@ private struct AddCalendarTaskForm: View {
     var onCreate: (CalEvent, Int) -> Void
     var onCancel: () -> Void
 
-    private var lanePeople: [FamilyPerson] {
-        var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
-        for child in FamilyStore.children {
-            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color, bg: child.color.opacity(0.15)))
-        }
-        return people
-    }
     @State private var personId = FamilyStore.children.first?.id ?? "family"
     @State private var title = ""
     @State private var whatToDo = ""

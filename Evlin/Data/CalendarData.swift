@@ -38,10 +38,31 @@ struct CalDayEvent: Identifiable {
 }
 
 enum CalendarData {
-    static let people: [FamilyPerson] = [
-        FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE")),
-        FamilyPerson(id: "child", name: "Child", color: Color(hex: "2563EB"), bg: Color(hex: "DBEAFE")),
-    ]
+    static let parentColor = Color(hex: "7C6FF7")
+    static let parentBg = Color(hex: "EDE9FE")
+
+    /// The parent's own calendar lane — a fixed id ("family"), a live name.
+    /// MainActor because it reads ParentProfile/FamilyStore, both
+    /// MainActor-isolated UI-facing stores; everything else in this enum is
+    /// plain data parsing/formatting with no such dependency, so only this
+    /// and `people`/`person(_:)` below carry the isolation, not the whole
+    /// type.
+    @MainActor static var parentPerson: FamilyPerson {
+        FamilyPerson(id: "family", name: ParentProfile.shared.displayName, color: parentColor, bg: parentBg)
+    }
+
+    /// The parent plus every real child, live — used to build calendar
+    /// lanes and the task/event "For" picker. Used to be two hardcoded
+    /// entries (a fake "Parent" and a single fake "Child" with the literal
+    /// id "child") that never matched any real child's actual id, which is
+    /// what silently misfiled every real child's tasks under the parent's
+    /// own lane wherever `person(_:)` had to fall back — see its own
+    /// comment below.
+    @MainActor static var people: [FamilyPerson] {
+        [parentPerson] + FamilyStore.children.map {
+            FamilyPerson(id: $0.id, name: $0.name, color: $0.color, bg: $0.color.opacity(0.15))
+        }
+    }
 
     static let everyone = FamilyPerson(id: "everyone", name: "Family", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))
 
@@ -84,9 +105,19 @@ enum CalendarData {
 
     static let allDayByDay: [Int: [(personId: String, title: String)]] = [:]
 
-    static func person(_ id: String) -> FamilyPerson {
+    // Used to fall back to people[0] (a hardcoded "Parent") for any id it
+    // didn't recognize — since every real child's id is a backend UUID that
+    // never matched the two fake entries this array used to hold, that
+    // fallback fired on every real child event/task, silently relabeling
+    // it as the parent's own (wrong color, wrong name, wrong lane — see the
+    // "Anytime tasks, Parent" bug this caused). A genuinely unknown id
+    // (e.g. a removed child's leftover event) now reads as unknown instead
+    // of impersonating someone real.
+    @MainActor static func person(_ id: String) -> FamilyPerson {
         if id == everyone.id { return everyone }
-        return people.first { $0.id == id } ?? people[0]
+        if id == "family" { return parentPerson }
+        if let match = people.first(where: { $0.id == id }) { return match }
+        return FamilyPerson(id: id, name: "Unknown", color: EColor.onSurfaceVariant, bg: EColor.surfaceContainerLowest)
     }
 
     static func minutesSinceMidnight(_ str: String) -> Int {
