@@ -86,7 +86,13 @@ struct OnboardingV2Coordinator: View {
             // MARK: - Parent chain
 
             case .parentSignIn:
-                ParentSignInStep(parentName: $parentName, onSignedIn: { step = .parentProfile }, onBack: onExitToModePicker)
+                ParentSignInStep(parentName: $parentName, onSignedIn: { hasKids in 
+                    if hasKids {
+                        step = .parentDone
+                    } else {
+                        step = .parentProfile
+                    }
+                }, onBack: onExitToModePicker)
 
             case .parentProfile:
                 ParentProfileStep(

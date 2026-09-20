@@ -75,7 +75,7 @@ private let parentTotal = 8
 
 struct ParentSignInStep: View {
     @Binding var parentName: String
-    let onSignedIn: () -> Void
+    let onSignedIn: (Bool) -> Void
     var onBack: (() -> Void)? = nil
 
     private enum Phase { case providers, emailAddress, password, confirmEmail }
@@ -349,7 +349,7 @@ struct ParentSignInStep: View {
             let local = email.split(separator: "@").first.map(String.init) ?? "Morgan"
             parentName = local.capitalized
         }
-        onSignedIn()
+        await checkBackendAndProceed()
     }
 
     
@@ -383,12 +383,28 @@ struct ParentSignInStep: View {
                 parentName = local.capitalized
             }
             // Skip the mocked confirm email phase entirely now that backend auth is wired up
-            onSignedIn()
+            await checkBackendAndProceed()
         } else {
             passwordError = actualError ?? (authMode == .signUp ? "Failed to create account." : "Incorrect email or password.")
         }
     }
 
+    
+    private func checkBackendAndProceed() async {
+        busy = true
+        var hasKids = false
+        do {
+            let kids = try await APIClient.shared.fetchChildren()
+            hasKids = !kids.isEmpty
+        } catch {
+            print("Failed to fetch kids during onboarding: \(error)")
+        }
+        busy = false
+        
+        await MainActor.run {
+            onSignedIn(hasKids)
+        }
+    }
     
     private func signInWithProvider() async {
         busy = true
@@ -398,9 +414,7 @@ struct ParentSignInStep: View {
             let token = try await manager.signInWithGoogle()
             let success = try await APIClient.shared.verifyParent(token: token)
             if success {
-                await MainActor.run {
-                    onSignedIn()
-                }
+                await checkBackendAndProceed()
             } else {
                 providersError = "Failed to sync Google login with backend."
             }
