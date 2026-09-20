@@ -197,7 +197,7 @@ struct ScreenCalendar: View {
     // whole column from the grid/ANYTIME row — a quick "just show me
     // your child" filter, not a destructive action. Starts with everyone on,
     // the parent included.
-    @State private var activeLaneIds: Set<String> = Set(CalendarData.people.map(\.id))
+    @State private var activeLaneIds: Set<String> = []
 
     // The parent gets a real lane too, same as every kid — their own
     // events (a work call, anything personal) belong somewhere, and
@@ -205,7 +205,13 @@ struct ScreenCalendar: View {
     // of this calendar." Family-wide events (Family Lunch, Family Dinner)
     // still aren't any one lane's — those render as their own full-width
     // blocks via CalendarData.everyone, not by occupying this lane list.
-    private var lanePeople: [FamilyPerson] { CalendarData.people }
+    private var lanePeople: [FamilyPerson] {
+        var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
+        for child in FamilyStore.children {
+            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color.ink, bg: child.color.bg))
+        }
+        return people
+    }
 
     private func expandedEvents(for day: Int) -> [CalDayEvent] {
         CalendarData.expandedEvents(for: day, in: eventsByDay)
@@ -1592,7 +1598,14 @@ private struct AddCalendarEventForm: View {
     var onCreate: (CalEvent, Int) -> Void
     var onCancel: () -> Void
 
-    @State private var personId = CalendarData.people[0].id
+    private var lanePeople: [FamilyPerson] {
+        var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
+        for child in FamilyStore.children {
+            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color.ink, bg: child.color.bg))
+        }
+        return people
+    }
+    @State private var personId = "family"
     @State private var title = ""
     // Real hour/minute pickers now, not free-text — defaults to the next
     // half-hour with a 1-hour span, so opening the sheet already shows a
@@ -1628,7 +1641,7 @@ private struct AddCalendarEventForm: View {
             }
             FormField(label: "For") {
                 FlowChips {
-                    ForEach(CalendarData.people + [CalendarData.everyone]) { p in
+                    ForEach(lanePeople + [CalendarData.everyone]) { p in
                         DotChip(label: p.name, color: p.color, selected: personId == p.id) { personId = p.id }
                     }
                 }
@@ -1666,7 +1679,14 @@ private struct AddCalendarTaskForm: View {
     var onCreate: (CalEvent, Int) -> Void
     var onCancel: () -> Void
 
-    @State private var personId = CalendarData.people.first { $0.id != "family" }?.id ?? CalendarData.people[0].id
+    private var lanePeople: [FamilyPerson] {
+        var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
+        for child in FamilyStore.children {
+            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color.ink, bg: child.color.bg))
+        }
+        return people
+    }
+    @State private var personId = FamilyStore.children.first?.id ?? "family"
     @State private var title = ""
     @State private var whatToDo = ""
     // Same "When" field as a profile's own Add Task — no due date at all
