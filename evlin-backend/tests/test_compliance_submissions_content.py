@@ -163,3 +163,31 @@ def test_list_submissions_hidden_from_other_families(client, db_session):
     assert client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-other")).status_code == 404
     assert client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("pb")).status_code == 404
     assert client.get(f"/occurrences/{occ['id']}/submissions").status_code in (401, 403)
+
+
+# ---- storage not configured -----------------------------------------------
+# Regression coverage for a real production bug: R2 credentials missing on
+# the server used to surface as a bare, undiagnosable 500 (get_s3_client()
+# raised ValueError before storage.py's own try/except even started), on
+# every single submissions/content upload call. Now it's a clean 503 that
+# says exactly what's wrong.
+
+def test_submission_upload_returns_503_when_storage_not_configured(client, db_session, monkeypatch):
+    import routers.submissions as submissions_router
+    monkeypatch.setattr(submissions_router, "storage_configured", lambda: False)
+    kid, occ = _occurrence(client, db_session)
+    r = client.post(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid"),
+                     json={"kind": "photo", "content_type": "image/jpeg"})
+    assert r.status_code == 503 and "R2" in r.json()["detail"]
+
+
+def test_content_upload_and_download_return_503_when_storage_not_configured(client, db_session, monkeypatch):
+    import routers.content as content_router
+    monkeypatch.setattr(content_router, "storage_configured", lambda: False)
+    p = make_parent(db_session, "pa")
+    kid = make_child(db_session, p)
+    make_device(db_session, kid, "dev-kid")
+    up = client.post("/content/upload-url", headers=auth("dev-kid"), json={"content_type": "image/png"})
+    assert up.status_code == 503
+    down = client.get("/content/some-key/url", headers=auth("dev-kid"))
+    assert down.status_code == 503

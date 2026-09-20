@@ -11,6 +11,13 @@ R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
 R2_PUBLIC_BUCKET_NAME = os.getenv("R2_PUBLIC_BUCKET_NAME")
 
+def storage_configured() -> bool:
+    """Whether R2 credentials are present at all — lets a route tell "not
+    configured yet" apart from "configured but the signing call itself
+    failed", which are different problems with different fixes."""
+    return all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY])
+
+
 def get_s3_client():
     if not all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY]):
         raise ValueError("Cloudflare R2 credentials are not fully set in .env")
@@ -26,12 +33,17 @@ def get_s3_client():
 
 def generate_presigned_upload_url(object_name: str, content_type: str, expiration=3600, bucket_name=None):
     """
-    Generate a presigned URL to upload a file directly to R2.
+    Generate a presigned URL to upload a file directly to R2. Returns None on
+    any failure — including missing/misconfigured credentials (get_s3_client
+    raises before this even reaches R2), which used to propagate uncaught
+    out of get_s3_client() and turn into a bare, undiagnosable 500 on every
+    single upload/submission route. The caller decides what to tell the
+    client; this function just never lets a config problem crash the process.
     """
     if bucket_name is None:
         bucket_name = R2_BUCKET_NAME
-    s3_client = get_s3_client()
     try:
+        s3_client = get_s3_client()
         response = s3_client.generate_presigned_url(
             'put_object',
             Params={
@@ -48,12 +60,13 @@ def generate_presigned_upload_url(object_name: str, content_type: str, expiratio
 
 def generate_presigned_download_url(object_name: str, expiration=3600, bucket_name=None):
     """
-    Generate a presigned URL to securely download a file from R2.
+    Generate a presigned URL to securely download a file from R2. Same
+    all-failures-return-None contract as generate_presigned_upload_url.
     """
     if bucket_name is None:
         bucket_name = R2_BUCKET_NAME
-    s3_client = get_s3_client()
     try:
+        s3_client = get_s3_client()
         response = s3_client.generate_presigned_url(
             'get_object',
             Params={

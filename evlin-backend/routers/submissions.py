@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import models, schemas
 from database import get_db
 from routers.auth import get_current_device
-from storage import generate_presigned_upload_url, generate_presigned_download_url
+from storage import generate_presigned_upload_url, storage_configured, generate_presigned_download_url
 from access import get_occurrence_for_device_or_parent
 
 router = APIRouter(tags=["submissions"])
@@ -51,6 +51,8 @@ def create_submission(
     r2_key = f"submissions/{occurrence.child_id}/{occurrence_id}/{uuid4()}.{ext}"
     
     # 3. Generate the presigned URL via our storage module
+    if not storage_configured():
+        raise HTTPException(status_code=503, detail="Photo/voice uploads aren't configured on the server yet (missing R2 credentials).")
     presigned_url = generate_presigned_upload_url(r2_key, sub_req.content_type)
     if not presigned_url:
         raise HTTPException(status_code=500, detail="Failed to generate upload URL")
