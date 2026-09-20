@@ -28,16 +28,31 @@ _MIGRATIONS = [
 ]
 
 
+def apply_migrations(engine) -> list[str]:
+    """Applies each migration statement in its own transaction, so one
+    failure can't roll back the others — every statement here is IF NOT
+    EXISTS / IF EXISTS and safe to (re)run on its own. (A prior version ran
+    them all in one transaction: one bad statement silently rolled back
+    every other one too, including columns later code assumed existed —
+    e.g. tasks.due_date — which then 500'd on every write.) Returns the
+    statements that failed, if any.
+    """
+    from sqlalchemy import text
+    failed = []
+    for stmt in _MIGRATIONS:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(stmt))
+        except Exception as e:
+            failed.append(stmt)
+            print(f"Startup migration failed ({stmt.strip().splitlines()[0]}...): {e}")
+    return failed
+
+
 @app.on_event("startup")
 def run_migrations():
-    from sqlalchemy import text
     from database import engine
-    try:
-        with engine.begin() as conn:
-            for stmt in _MIGRATIONS:
-                conn.execute(text(stmt))
-    except Exception as e:  # never keep the API from booting over this
-        print(f"Startup migration failed: {e}")
+    apply_migrations(engine)
 
 
 app.include_router(auth.router)
@@ -56,11 +71,30 @@ def read_root():
 
 from sqlalchemy import text
 
+# Columns the app relies on that were added after the original schema —
+# if a migration silently failed, this is how that shows up before a user
+# hits a 500 on the feature that needs it.
+_EXPECTED_COLUMNS = [
+    ("app.parents", "name"), ("app.tasks", "due_date"),
+    ("app.events", "category"), ("app.events", "note"), ("app.events", "recurrence"),
+    ("app.child_rules", "daily_limit_enabled"), ("app.child_rules", "custom_rules"),
+]
+
+
 @app.get("/health")
 def health_check(db: Session = Depends(get_db)):
     try:
-        # Check DB connection
         db.execute(text("SELECT 1"))
-        return {"status": "healthy", "database": "connected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    missing = []
+    for table, column in _EXPECTED_COLUMNS:
+        try:
+            db.execute(text(f"SELECT {column} FROM {table} LIMIT 0"))
+        except Exception:
+            missing.append(f"{table}.{column}")
+            db.rollback()  # the failed SELECT leaves the transaction unusable otherwise
+    if missing:
+        return {"status": "degraded", "database": "connected", "missing_columns": missing}
+    return {"status": "healthy", "database": "connected"}
