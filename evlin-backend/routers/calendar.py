@@ -7,8 +7,17 @@ import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
 from access import assert_parent_owns_child, parent_owns_child
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter(tags=["calendar"])
+
+
+def _commit_or_400(db: Session):
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"That couldn't be saved: {e.orig}")
 
 
 def _event_for_parent(db: Session, parent: models.Parent, event_id: UUID) -> models.Event:
@@ -56,13 +65,18 @@ def create_event(event: schemas.EventCreate, current_parent: models.Parent = Dep
         end_at=event.end_at,
         gates_apps=event.gates_apps,
         location_or_link=event.location_or_link,
-        source=event.source,
+        # The DB only allows ('manual','ics_import') here — it describes how
+        # the row was created, not whose calendar lane it's in (that's
+        # child_id / is_parent_only). There's no ICS import feature yet, so
+        # this is always "manual" regardless of what a client sends.
+        source="manual",
+        is_parent_only=event.is_parent_only,
         category=event.category,
         note=event.note,
         recurrence=event.recurrence,
     )
     db.add(new_event)
-    db.commit()
+    _commit_or_400(db)
     db.refresh(new_event)
     return new_event
 
@@ -78,11 +92,12 @@ def update_event(event_id: UUID, update: schemas.EventCreate, current_parent: mo
     event.end_at = update.end_at
     event.gates_apps = update.gates_apps
     event.location_or_link = update.location_or_link
-    event.source = update.source
+    event.source = "manual"
+    event.is_parent_only = update.is_parent_only
     event.category = update.category
     event.note = update.note
     event.recurrence = update.recurrence
-    db.commit()
+    _commit_or_400(db)
     db.refresh(event)
     return event
 

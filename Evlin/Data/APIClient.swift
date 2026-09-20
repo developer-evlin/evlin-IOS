@@ -342,13 +342,17 @@ class APIClient {
         return try decode(try await send("GET", "/children/\(childId)/events?\(q)"))
     }
 
-    private func eventBody(childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, source: String) -> [String: Any] {
+    private func eventBody(childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, isParentOnly: Bool) -> [String: Any] {
         var body: [String: Any] = [
             "title": title,
             "start_at": Self.isoOut.string(from: start),
             "end_at": Self.isoOut.string(from: end),
             "recurrence": recurrence,
-            "source": source,
+            // The server always stores "manual" here regardless of what's
+            // sent — there's no ICS-import feature yet, and this field
+            // isn't how the parent-lane/family-wide distinction is made
+            // (that's is_parent_only, below).
+            "is_parent_only": isParentOnly,
         ]
         if let childId { body["child_id"] = childId }
         if let category { body["category"] = category }
@@ -357,13 +361,13 @@ class APIClient {
         return body
     }
 
-    func createEvent(childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, source: String) async throws -> ApiEvent {
-        let body = eventBody(childId: childId, title: title, start: start, end: end, category: category, note: note, location: location, recurrence: recurrence, source: source)
+    func createEvent(childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, isParentOnly: Bool) async throws -> ApiEvent {
+        let body = eventBody(childId: childId, title: title, start: start, end: end, category: category, note: note, location: location, recurrence: recurrence, isParentOnly: isParentOnly)
         return try decode(try await send("POST", "/events", body: body))
     }
 
-    func updateEvent(eventId: String, childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, source: String) async throws {
-        let body = eventBody(childId: childId, title: title, start: start, end: end, category: category, note: note, location: location, recurrence: recurrence, source: source)
+    func updateEvent(eventId: String, childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, isParentOnly: Bool) async throws {
+        let body = eventBody(childId: childId, title: title, start: start, end: end, category: category, note: note, location: location, recurrence: recurrence, isParentOnly: isParentOnly)
         try await send("PUT", "/events/\(eventId)", body: body)
     }
 
@@ -375,12 +379,12 @@ class APIClient {
     
     /// Creates the task on the backend and returns the saved row, so callers
     /// can use the real database id instead of a locally generated one.
-    func createTask(childId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> ApiTask {
+    func createTask(childId: String, title: String, instructions: String?, recurrence: String, category: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> ApiTask {
         var body: [String: Any] = [
             "title": title,
             "instructions": instructions ?? "",
             "recurrence": recurrence,
-            "bucket": bucket,
+            "category": category,
             "submission_kind": submissionKind
         ]
         if let dueTime { body["due_time"] = dueTime }
@@ -412,12 +416,12 @@ class APIClient {
         try await send("POST", "/occurrences/\(occurrenceId)/bypass", body: ["bypass_note": note ?? ""])
     }
 
-    func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> Bool {
+    func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, category: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> Bool {
         var body: [String: Any] = [
             "title": title,
             "instructions": instructions ?? "",
             "recurrence": recurrence,
-            "bucket": bucket,
+            "category": category,
             "submission_kind": submissionKind
         ]
         if let dueTime { body["due_time"] = dueTime }

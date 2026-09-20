@@ -278,10 +278,12 @@ struct ScreenCalendar: View {
 
     /// personId "family" is the parent's own lane, "everyone" is family-wide;
     /// neither is a child row, so both are stored with no child_id and told
-    /// apart by `source`.
-    private static func eventScope(_ personId: String) -> (childId: String?, source: String) {
-        if FamilyStore.children.contains(where: { $0.id == personId }) { return (personId, "manual") }
-        return (nil, personId == "family" ? "parent" : "everyone")
+    /// apart by `isParentOnly` (the DB's own `source` field means something
+    /// else entirely — how the row was created — and rejects anything but
+    /// "manual"/"ics_import").
+    private static func eventScope(_ personId: String) -> (childId: String?, isParentOnly: Bool) {
+        if FamilyStore.children.contains(where: { $0.id == personId }) { return (personId, false) }
+        return (nil, personId == "family")
     }
 
     private static func eventDates(_ ev: CalEvent, day: Int) -> (Date, Date) {
@@ -316,8 +318,8 @@ struct ScreenCalendar: View {
                 _ = try await APIClient.shared.createTask(
                     childId: ev.personId, title: ev.title,
                     instructions: ev.note.isEmpty ? nil : ev.note,
-                    recurrence: ev.repeats, bucket: ev.isAnytime ? "anytime" : "timed",
-                    submissionKind: "button",
+                    recurrence: ev.repeats, category: "Task",
+                    submissionKind: "none",
                     dueTime: ev.isAnytime ? nil : Self.dueTimeString(ev.start),
                     dueDate: Self.dayString(day)
                 )
@@ -327,7 +329,7 @@ struct ScreenCalendar: View {
                 _ = try await APIClient.shared.createEvent(
                     childId: scope.childId, title: ev.title, start: start, end: end,
                     category: ev.category, note: ev.note, location: ev.location,
-                    recurrence: ev.repeats, source: scope.source
+                    recurrence: ev.repeats, isParentOnly: scope.isParentOnly
                 )
             }
         }
@@ -344,7 +346,7 @@ struct ScreenCalendar: View {
             try await APIClient.shared.updateEvent(
                 eventId: remoteId, childId: scope.childId, title: updated.title, start: start, end: end,
                 category: updated.category, note: updated.note, location: updated.location,
-                recurrence: updated.repeats, source: scope.source
+                recurrence: updated.repeats, isParentOnly: scope.isParentOnly
             )
         }
     }

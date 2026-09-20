@@ -331,8 +331,8 @@ struct ScreenProfile: View {
                             title: newTask.title,
                             instructions: newTask.description,
                             recurrence: newTask.repeats,
-                            bucket: newTask.category,
-                            submissionKind: "button", // Default to button for MVP
+                            category: newTask.category,
+                            submissionKind: "none", // tap-to-complete, no photo/voice required
                             dueTime: newTask.dueDate.map { Self.dueTimeString($0) },
                             dueDate: newTask.dueDate.map { Self.dueDateString($0) }
                         )
@@ -438,7 +438,7 @@ struct ScreenProfile: View {
                         .overlay(Text(String(child.name.prefix(1))).font(Typography.font(adaptive.of(24, 32), weight: .heavy)).foregroundStyle(.white))
                     VStack(alignment: .leading, spacing: 6) {
                         Text(child.name).font(Typography.font(adaptive.of(22, 28), weight: .heavy)).foregroundStyle(EColor.primary)
-                        if let r = child.reflection {
+                        if child.reflection != nil {
                             Label("Under Reflection", systemImage: "figure.mind.and.body")
                                 .font(Typography.font(10, weight: .bold))
                                 .foregroundStyle(Color(hex: "4A3215"))

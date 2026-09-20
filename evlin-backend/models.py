@@ -86,6 +86,10 @@ class Task(Base):
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
     title = Column(String, nullable=False)
     instructions = Column(String)
+    # Free-form UI label ("Chore", "Study", …) for icon/badge display — not
+    # the same thing as `bucket` below, which the DB constrains to a fixed
+    # time-of-day vocabulary and is derived server-side (see routers/tasks.py).
+    category = Column(String)
     bucket = Column(String, nullable=False, default="anytime")
     due_time = Column(Time)
     # Day a one-off task is for / the day a repeating task starts. NULL means
@@ -187,6 +191,12 @@ class Event(Base):
     gates_apps = Column(Boolean, nullable=False, default=False)
     location_or_link = Column(String)
     source = Column(String, nullable=False, default="manual")
+    # True for the parent's own personal lane; False (and child_id is null)
+    # for a genuinely family-wide event. Both cases have child_id = null, so
+    # this is the only thing telling them apart — it used to be smuggled
+    # into `source`, which the DB restricts to ('manual','ics_import') and
+    # rejected anything else outright.
+    is_parent_only = Column(Boolean, nullable=False, default=False)
     category = Column(String)
     note = Column(String)
     # Comma-joined weekday codes ("mon,wed") or "none".

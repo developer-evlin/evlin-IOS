@@ -2,12 +2,48 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID
 from datetime import datetime, timezone, timedelta, time, date
+from sqlalchemy.exc import IntegrityError
+from typing import Optional
 import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
 from access import assert_parent_owns_child, assert_child_access, get_task_for_parent
 
 router = APIRouter(tags=["tasks"])
+
+
+# bucket is a DB-enforced time-of-day grouping (morning/after_school/
+# evening/anytime) — nothing in the UI lets a parent pick it directly (it
+# used to carry the free-form category label instead — "category" is where
+# that actually lives now), so it's derived from due_time rather than
+# trusted from the client.
+def _derive_bucket(due_time: Optional[time]) -> str:
+    if due_time is None:
+        return "anytime"
+    if due_time.hour < 12:
+        return "morning"
+    if due_time.hour < 17:
+        return "after_school"
+    return "evening"
+
+
+_VALID_SUBMISSION_KINDS = {"none", "photo", "voice", "either"}
+
+
+def _safe_submission_kind(value: str) -> str:
+    # Coerced rather than 400'd: an older/cached client build sending
+    # something outside this vocabulary (e.g. "button", meaning "no
+    # evidence needed" — the same thing "none" already means here) shouldn't
+    # hard-fail every task save until every device updates.
+    return value if value in _VALID_SUBMISSION_KINDS else "none"
+
+
+def _commit_or_400(db: Session):
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"That couldn't be saved: {e.orig}")
 
 
 def _parse_due(task: schemas.TaskCreate):
@@ -43,17 +79,18 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         child_id=child_id,
         title=task.title,
         instructions=task.instructions,
-        bucket=task.bucket,
+        category=task.category,
+        bucket=_derive_bucket(parsed_time),
         due_time=parsed_time,
         due_date=parsed_date,
         recurrence=task.recurrence,
         gates_apps=task.gates_apps,
         points=task.points,
-        submission_kind=task.submission_kind,
+        submission_kind=_safe_submission_kind(task.submission_kind),
         active=task.active
     )
     db.add(new_task)
-    db.commit()
+    _commit_or_400(db)
     db.refresh(new_task)
     return new_task
 
@@ -65,20 +102,22 @@ def update_task(task_id: UUID, task_update: schemas.TaskCreate, current_parent: 
 
     db_task.title = task_update.title
     db_task.instructions = task_update.instructions
-    db_task.bucket = task_update.bucket
+    if "category" in task_update.model_fields_set:
+        db_task.category = task_update.category
     # Only touch the schedule when the client actually sent it, so a partial
     # edit (e.g. a title change from the review screen) doesn't wipe it.
     if "due_time" in task_update.model_fields_set:
         db_task.due_time = parsed_time
     if "due_date" in task_update.model_fields_set:
         db_task.due_date = parsed_date
+    db_task.bucket = _derive_bucket(db_task.due_time)  # keep in sync either way
     db_task.recurrence = task_update.recurrence
     db_task.gates_apps = task_update.gates_apps
     db_task.points = task_update.points
-    db_task.submission_kind = task_update.submission_kind
+    db_task.submission_kind = _safe_submission_kind(task_update.submission_kind)
     db_task.active = task_update.active
 
-    db.commit()
+    _commit_or_400(db)
     db.refresh(db_task)
     return db_task
 

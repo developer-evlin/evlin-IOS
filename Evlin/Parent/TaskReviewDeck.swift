@@ -275,8 +275,8 @@ struct TaskReviewDeckView: View {
                 title: updated.title,
                 instructions: updated.description,
                 recurrence: updated.repeats,
-                bucket: updated.category,
-                submissionKind: updated.photoCount > 0 ? "photo" : "button"
+                category: updated.category,
+                submissionKind: updated.photoCount > 0 ? "photo" : "none"
             )
         }
         if let i = tasks.firstIndex(where: { $0.id == updated.id }) {

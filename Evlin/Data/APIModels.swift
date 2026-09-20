@@ -8,7 +8,11 @@ struct ApiTask: Codable {
     let gatesApps: Bool
     let points: Int
     let submissionKind: String
+    // `bucket` is a DB time-of-day grouping the server derives from due_time
+    // and never trusts from the client — see routers/tasks.py. `category` is
+    // the free-form UI label ("Chore", "Study", …).
     let bucket: String
+    let category: String?
     let dueDate: String?   // "YYYY-MM-DD"
     let dueTime: String?   // "HH:MM:SS"
     let createdAt: String?
@@ -22,6 +26,7 @@ struct ApiEvent: Codable {
     let endAt: String
     let locationOrLink: String?
     let source: String
+    let isParentOnly: Bool
     let category: String?
     let note: String?
     let recurrence: String

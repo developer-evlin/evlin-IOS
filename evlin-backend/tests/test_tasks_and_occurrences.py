@@ -41,8 +41,8 @@ def test_create_task_returns_saved_row_with_string_due_fields(client, db_session
     p = make_parent(db_session, "pa")
     c = make_child(db_session, p)
     r = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={
-        "title": " Make bed ", "instructions": "tidy", "recurrence": "none", "bucket": "anytime",
-        "submission_kind": "button", "due_time": "09:30:00", "due_date": "2026-09-19"})
+        "title": " Make bed ", "instructions": "tidy", "recurrence": "none", "category": "Chore",
+        "submission_kind": "none", "due_time": "09:30:00", "due_date": "2026-09-19"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["title"] == "Make bed"
@@ -54,9 +54,60 @@ def test_create_task_minimal_payload_like_the_app_sends(client, db_session):
     p = make_parent(db_session, "pa")
     c = make_child(db_session, p)
     r = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={
-        "title": "Homework", "instructions": "", "recurrence": "none", "bucket": "Chore",
-        "submission_kind": "button", "due_date": "2026-09-19"})
+        "title": "Homework", "instructions": "", "recurrence": "none", "category": "Chore",
+        "submission_kind": "none", "due_date": "2026-09-19"})
     assert r.status_code == 200, r.text
+
+
+# ---- regression: category vs. the DB-constrained `bucket`, and
+# submission_kind values the DB actually accepts. Caught only by running the
+# real ALTER-TABLE migrations against a real Postgres with the original
+# evlin-tables.sql CHECK constraints (see the manual verification in the fix
+# commit) — SQLite has no CHECK enforcement, so this asserts the *values*
+# the server computes/stores are the constraint-safe ones, not that a bad
+# value would be rejected.
+
+def test_bucket_is_derived_from_due_time_not_trusted_from_the_client(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    # A client that still sends a free-form "bucket" (the old, wrong usage —
+    # e.g. a category label like "Chore") must not have it stored verbatim;
+    # the DB only accepts morning/after_school/evening/anytime here.
+    no_time = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                           json={"title": "x", "bucket": "Chore"}).json()
+    assert no_time["bucket"] == "anytime"
+    morning = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                           json={"title": "x", "due_time": "08:00:00"}).json()
+    assert morning["bucket"] == "morning"
+    after_school = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                                json={"title": "x", "due_time": "15:00:00"}).json()
+    assert after_school["bucket"] == "after_school"
+    evening = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                           json={"title": "x", "due_time": "20:00:00"}).json()
+    assert evening["bucket"] == "evening"
+
+
+def test_category_label_is_kept_separate_from_bucket(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    r = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                     json={"title": "x", "category": "Study", "due_time": "16:00:00"}).json()
+    assert r["category"] == "Study" and r["bucket"] == "after_school"
+    up = client.put(f"/tasks/{r['id']}", headers=auth("pa"), json={"title": "x"}).json()
+    assert up["category"] == "Study"  # untouched when the update omits it
+
+
+def test_unrecognized_submission_kind_is_coerced_to_none(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    # "button" was the app's old (invalid) value, meaning "no evidence
+    # required" — exactly what "none" already means in the DB's vocabulary.
+    r = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                     json={"title": "x", "submission_kind": "button"}).json()
+    assert r["submission_kind"] == "none"
+    photo = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                         json={"title": "x", "submission_kind": "photo"}).json()
+    assert photo["submission_kind"] == "photo"
 
 
 def test_create_task_rejects_blank_title_and_bad_dates(client, db_session):

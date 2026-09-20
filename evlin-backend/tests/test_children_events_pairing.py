@@ -291,3 +291,19 @@ def test_parent_name_validation_and_auth(client, db_session):
     assert client.put("/auth/me", json={"name": "x"}).status_code in (401, 403)
     long = client.put("/auth/me", headers=auth("pa"), json={"name": "x" * 200}).json()["name"]
     assert len(long) == 60
+
+
+def test_source_is_always_manual_and_is_parent_only_distinguishes_the_parent_lane(client, db_session):
+    p = make_parent(db_session, "pa")
+    kid = make_child(db_session, p)
+    # No ICS import feature exists, and the DB only accepts ('manual',
+    # 'ics_import') for `source` — a client sending anything else (this used
+    # to be how the parent/family-wide lane was — wrongly — encoded) must
+    # not have it stored verbatim.
+    family = client.post("/events", headers=auth("pa"), json={**EV, "title": "Family", "source": "everyone"}).json()
+    assert family["source"] == "manual" and family["is_parent_only"] is False
+    mine = client.post("/events", headers=auth("pa"), json={**EV, "title": "Mine", "source": "parent", "is_parent_only": True}).json()
+    assert mine["source"] == "manual" and mine["is_parent_only"] is True
+    # Both are child_id-less but distinguishable, and both come back for any child.
+    listed = {e["title"]: e["is_parent_only"] for e in client.get(f"/children/{kid.id}/events?{WINDOW}", headers=auth("pa")).json()}
+    assert listed == {"Family": False, "Mine": True}

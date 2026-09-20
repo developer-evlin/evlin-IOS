@@ -242,7 +242,7 @@ class AppSync {
                 occurrenceId: occurrence?.id,
                 title: task.title,
                 state: uiState,
-                category: task.bucket,
+                category: task.category ?? task.bucket,
                 description: task.instructions ?? "",
                 note: occurrence?.bypassNote,
                 dueLabel: dueLabel,
@@ -428,7 +428,7 @@ enum CalendarSync {
         guard let day = placement(start: start, repeats: repeats) else { return nil }
         let category = e.category ?? "Activity"
         var ev = CalEvent(
-            personId: e.childId ?? (e.source == "parent" ? "family" : "everyone"),
+            personId: e.childId ?? (e.isParentOnly ? "family" : "everyone"),
             title: e.title, emoji: emojiForCalendarCategory(category),
             start: ChildRule.fmtClock(start), end: ChildRule.fmtClock(end),
             category: category, location: e.locationOrLink ?? "", note: e.note ?? "", repeats: repeats

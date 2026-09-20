@@ -16,6 +16,35 @@ _MIGRATIONS = [
     "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS recurrence text NOT NULL DEFAULT 'none'",
     "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS daily_limit_enabled boolean NOT NULL DEFAULT true",
     "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS custom_rules jsonb NOT NULL DEFAULT '[]'::jsonb",
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS category text",
+    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS is_parent_only boolean NOT NULL DEFAULT false",
+    # The original schema's tasks.recurrence check only allowed the literal
+    # words 'daily'/'weekly'/'none' — the app's day-picker stores a
+    # comma-joined weekday list instead (e.g. "mon,wed,fri"), which the old
+    # constraint rejected outright on every write that used it. Drop
+    # whichever check constraint is actually on that column (its exact
+    # auto-generated name isn't something a plain ADD COLUMN can rely on)
+    # and replace it with one that accepts both.
+    """DO $$
+    DECLARE r record;
+    BEGIN
+        FOR r IN
+            SELECT con.conname FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'app' AND rel.relname = 'tasks' AND con.contype = 'c'
+              AND pg_get_constraintdef(con.oid) ILIKE '%recurrence%'
+        LOOP
+            EXECUTE format('ALTER TABLE app.tasks DROP CONSTRAINT %I', r.conname);
+        END LOOP;
+    END $$""",
+    """DO $$
+    BEGIN
+        ALTER TABLE app.tasks ADD CONSTRAINT tasks_recurrence_or_weekdays_check
+            CHECK (recurrence IN ('daily','weekly','none')
+                   OR recurrence ~ '^(mon|tue|wed|thu|fri|sat|sun)(,(mon|tue|wed|thu|fri|sat|sun)){0,6}$');
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$""",
     """CREATE TABLE IF NOT EXISTS app.device_pairings (
         code text PRIMARY KEY,
         secret_hash text NOT NULL,

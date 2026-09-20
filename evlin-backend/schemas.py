@@ -84,6 +84,10 @@ class PairingStatusResponse(BaseModel):
 class TaskBase(BaseModel):
     title: str
     instructions: Optional[str] = None
+    # Free-form UI label ("Chore", "Study", …). `bucket` still exists on the
+    # wire for backward compatibility with any client that still sends it,
+    # but the server no longer trusts it — see routers/tasks.py.
+    category: Optional[str] = None
     bucket: str = "anytime"
     due_time: Optional[str] = None # Will store time as string "HH:MM:SS"
     due_date: Optional[str] = None # "YYYY-MM-DD"
@@ -174,6 +178,7 @@ class EventBase(BaseModel):
     gates_apps: bool = False
     location_or_link: Optional[str] = None
     source: str = "manual"
+    is_parent_only: bool = False
     category: Optional[str] = None
     note: Optional[str] = None
     recurrence: str = "none"
