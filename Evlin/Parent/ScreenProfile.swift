@@ -500,6 +500,22 @@ struct ScreenProfile: View {
     // no controls of its own while it's active. Toggling or deleting the
     // Downtime rule (in rulesSection) is what ends it, via
     // exitDowntimeIfActive.
+
+    private func applyManualLock(locked: Bool) {
+        child.manualLock = locked
+        Task {
+            try? await APIClient.shared.updateChildState(childId: child.id, manualLock: locked, taskGateOverride: child.taskGateOverride)
+        }
+    }
+    
+    private func applyGateOverride() {
+        child.manualLock = false
+        child.taskGateOverride = true
+        Task {
+            try? await APIClient.shared.updateChildState(childId: child.id, manualLock: false, taskGateOverride: true)
+        }
+    }
+    
     private func exitDowntimeIfActive() {
         guard child.status == .downtime else { return }
         child.manualLock = false
