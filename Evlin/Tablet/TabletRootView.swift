@@ -14,9 +14,28 @@ struct TabletRootView: View {
 
     // Screen-time numbers used to live only in the immutable TabletData.child
     // snapshot — lifted into @State here so it can actually mutate.
-    // @State private var usedMin = TabletData.child.usedMin
-    // @State private var limitMin = TabletData.child.limitMin
+    // Computed properties pulling live data from the session store
+    private var activeChild: Child? {
+        if let id = session.activeChildId {
+            return FamilyStore.children.first(where: { $0.id == id })
+        }
+        return FamilyStore.children.first
+    }
+    
+    private var childName: String {
+        activeChild?.name ?? "Child"
+    }
+    
+    private var usedMin: Int {
+        activeChild?.usageTodayMin ?? 0
+    }
+    
+    private var limitMin: Int {
+        activeChild?.dailyLimitMin ?? 120
+    }
+
     @State private var onBreakUntil: Date?
+
 
     // "Your tasks for today" intro — shown once per app session, before the
     // kid sees their list, framing the day ahead. Purely a session flag (no
