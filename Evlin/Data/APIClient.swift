@@ -11,7 +11,15 @@ class APIClient {
     static let shared = APIClient()
     
     // Switch to your Render URL:
-    let baseURL = "http://10.0.30.196:8000"
+    let baseURL = "https://evlin-ios.onrender.com"
+
+    // 15-second request timeout so unreachable backends fail fast instead
+    // of hanging for the default 60 seconds, which freezes the UI.
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        return URLSession(configuration: config)
+    }()
     
     // Tokens and active child state are now managed by SessionManager
     
@@ -29,7 +37,7 @@ class APIClient {
         let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             return false
         }
@@ -52,7 +60,7 @@ class APIClient {
         let body: [String: Any] = ["access_token": token]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             return false
         }
@@ -70,7 +78,7 @@ class APIClient {
         let body: [String: Any] = ["email": email, "password": password]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             return false
         }
@@ -101,7 +109,7 @@ class APIClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 return false
             }
@@ -129,7 +137,7 @@ class APIClient {
         }
         
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 return (false, nil)
             }
@@ -153,7 +161,7 @@ class APIClient {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
@@ -207,7 +215,7 @@ class APIClient {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             return true
         }
@@ -230,7 +238,7 @@ class APIClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             return true
         }
@@ -247,7 +255,7 @@ class APIClient {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             return true
         }
@@ -272,7 +280,7 @@ class APIClient {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             return true
         }
@@ -288,7 +296,7 @@ class APIClient {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             return true
         }
@@ -311,7 +319,7 @@ class APIClient {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             return true
         }
@@ -334,7 +342,7 @@ class APIClient {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
             return true
         }
