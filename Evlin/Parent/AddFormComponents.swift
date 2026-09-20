@@ -627,12 +627,16 @@ struct AddTaskFormFields<When: View>: View {
                 FormTextField(placeholder: "e.g. Make your bed", text: $taskTitle, scrollToTopOnFocus: true)
             }
             if fixedChild == nil {
-                // Includes the parent's own lane now — used to filter it
-                // out, which was the whole reason a parent had no way to
-                // assign a task or event to themselves.
+                // Children only — a Task, unlike an Event, structurally
+                // belongs to a child in the backend (submission/approval,
+                // a non-nullable child_id) and there's no one to review a
+                // parent's own task. This form is used only for creating
+                // Tasks (the calendar's own event picker is separate and
+                // does include the parent — see AddCalendarEventForm), so
+                // that's the one place "assign to myself" is meant to work.
                 FormField(label: "For") {
                     FlowChips {
-                        ForEach(CalendarData.people) { p in
+                        ForEach(CalendarData.people.filter { $0.id != "family" }) { p in
                             DotChip(label: p.name, color: p.color, selected: personId == p.id) { personId = p.id }
                         }
                     }

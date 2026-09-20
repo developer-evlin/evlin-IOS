@@ -796,6 +796,19 @@ private struct DayTimelineView: View {
     // shows a count instead; tapping it opens the same "tasks as a real
     // list" sheet the timed due-markers already use (TaskDueGroupSheet),
     // rather than inventing a second list UI for the same job.
+    // Only lanes that actually have an anytime task render a tile at all —
+    // a lane with none isn't given an equal, empty flexible slot to fight
+    // over (an EmptyView still wrapped in .frame(maxWidth: .infinity) is
+    // ambiguous about whether it reserves that share or lets its neighbor
+    // claim it). Explicit instead: one active lane gets the full width,
+    // two active lanes split it evenly between just the two of them — the
+    // exact "stay wide alone, squeeze once another lane has tasks too"
+    // rule, guaranteed by what's actually in the HStack rather than left
+    // to how a hidden placeholder happens to lay out.
+    private var activeAnytimeLanes: [FamilyPerson] {
+        activePeople.filter { !anytimeTasks(for: $0.id).isEmpty }
+    }
+
     private var anytimeZone: some View {
         HStack(alignment: .top, spacing: 0) {
             Text("ANY\nTIME")
@@ -806,7 +819,7 @@ private struct DayTimelineView: View {
                 .frame(width: timeColW, alignment: .trailing)
                 .padding(.trailing, 8)
                 .padding(.top, 2)
-            ForEach(activePeople) { p in
+            ForEach(activeAnytimeLanes) { p in
                 anytimeSummaryTile(for: p)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
@@ -818,41 +831,35 @@ private struct DayTimelineView: View {
     private func anytimeSummaryTile(for p: FamilyPerson) -> some View {
         let tasks = anytimeTasks(for: p.id)
         let doneCount = tasks.filter { $0.event.taskState == .done }.count
-        return Group {
-            if tasks.isEmpty {
-                EmptyView()
+        return Button {
+            // A group of exactly one still goes straight to its own
+            // detail, same as tapping a single timed task does — there's
+            // nothing a one-row list sheet adds over that.
+            if tasks.count == 1 {
+                onSelect(tasks[0])
             } else {
-                Button {
-                    // A group of exactly one still goes straight to its own
-                    // detail, same as tapping a single timed task does —
-                    // there's nothing a one-row list sheet adds over that.
-                    if tasks.count == 1 {
-                        onSelect(tasks[0])
-                    } else {
-                        onSelectGroup(TaskDueGroup(personId: p.id, start: "Anytime", tasks: tasks))
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checklist")
-                            .font(.system(size: 12, weight: .bold))
-                        Text(tasks.count == 1 ? tasks[0].event.title : "\(tasks.count) tasks")
-                            .font(Typography.font(12.5, weight: .semibold))
-                            .lineLimit(1)
-                        Spacer(minLength: 4)
-                        Text("\(doneCount)/\(tasks.count)")
-                            .font(Typography.font(11.5, weight: .bold))
-                            .foregroundStyle(p.color.opacity(0.75))
-                    }
-                    .foregroundStyle(p.color)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(p.bg)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
+                onSelectGroup(TaskDueGroup(personId: p.id, start: "Anytime", tasks: tasks))
             }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 12, weight: .bold))
+                Text(tasks.count == 1 ? tasks[0].event.title : "\(tasks.count) tasks")
+                    .font(Typography.font(12.5, weight: .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text("\(doneCount)/\(tasks.count)")
+                    .font(Typography.font(11.5, weight: .bold))
+                    .foregroundStyle(p.color.opacity(0.75))
+            }
+            .foregroundStyle(p.color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(p.bg)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .buttonStyle(.plain)
     }
 
     // Events only now — tasks never enter this pipeline, so there's
