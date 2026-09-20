@@ -315,3 +315,16 @@ def test_source_is_always_manual_and_is_parent_only_distinguishes_the_parent_lan
     # Both are child_id-less but distinguishable, and both come back for any child.
     listed = {e["title"]: e["is_parent_only"] for e in client.get(f"/children/{kid.id}/events?{WINDOW}", headers=auth("pa")).json()}
     assert listed == {"Family": False, "Mine": True}
+
+
+def test_created_at_dropped_from_parent_child_occurrence_event_but_kept_on_tasks(client, db_session):
+    p = make_parent(db_session, "pa")
+    kid = make_child(db_session, p)
+    assert "created_at" not in client.get("/auth/me", headers=auth("pa")).json()
+    assert "created_at" not in client.get("/children", headers=auth("pa")).json()[0]
+    ev = client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id)}).json()
+    assert "created_at" not in ev
+    task = client.post(f"/children/{kid.id}/tasks", headers=auth("pa"), json={"title": "x"}).json()
+    assert task["created_at"]  # kept: task_applies_on() anchors undated recurrence on it
+    occ = client.get(f"/children/{kid.id}/occurrences?target_date=2026-09-20", headers=auth("pa")).json()
+    assert "created_at" not in occ[0]

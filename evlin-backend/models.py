@@ -15,7 +15,6 @@ class Parent(Base):
     plan = Column(String, nullable=False, default="free")
     terms_accepted_at = Column(DateTime(timezone=True))
     terms_version = Column(Integer)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class Child(Base):
     __tablename__ = "children"
@@ -27,7 +26,6 @@ class Child(Base):
     color_index = Column(Integer, nullable=False, default=0)
     avatar_url = Column(String)
     activated_at = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class ParentChild(Base):
     __tablename__ = "parent_children"
@@ -118,7 +116,6 @@ class Occurrence(Base):
     rejection_note = Column(String)
     bypass_requested = Column(Boolean, nullable=False, default=False)
     bypass_note = Column(String)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class Submission(Base):
     __tablename__ = "submissions"
@@ -194,7 +191,6 @@ class Event(Base):
     recurrence = Column(String, nullable=False, default="none")
     ics_feed_id = Column(UUID(as_uuid=True), ForeignKey("app.ics_feeds.id", ondelete="CASCADE"))
     external_uid = Column(String)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class EventProposal(Base):
     __tablename__ = "event_proposals"

@@ -6,7 +6,6 @@ struct ApiTask: Codable {
     let instructions: String?
     let recurrence: String
     let gatesApps: Bool
-    let points: Int
     let submissionKind: String
     // `bucket` is a DB time-of-day grouping the server derives from due_time
     // and never trusts from the client — see routers/tasks.py. `category` is

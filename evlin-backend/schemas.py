@@ -26,7 +26,6 @@ class ParentResponse(ParentBase):
     name: Optional[str] = None
     terms_accepted_at: Optional[datetime] = None
     terms_version: Optional[int] = None
-    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -44,7 +43,6 @@ class ChildResponse(ChildBase):
     id: UUID
     activated_at: Optional[datetime] = None
     is_paired: bool = False
-    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -135,7 +133,6 @@ class OccurrenceResponse(OccurrenceBase):
     due_time: Optional[str] = None
     completed_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
-    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -188,7 +185,6 @@ class EventResponse(EventBase):
     child_id: Optional[UUID] = None
     ics_feed_id: Optional[UUID] = None
     external_uid: Optional[str] = None
-    created_at: datetime
 
     class Config:
         from_attributes = True

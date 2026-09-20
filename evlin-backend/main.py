@@ -61,6 +61,16 @@ _MIGRATIONS = [
     "ALTER TABLE app.child_rules DROP COLUMN IF EXISTS bedtime_enabled",
     "ALTER TABLE app.child_rules DROP COLUMN IF EXISTS bedtime_start",
     "ALTER TABLE app.child_rules DROP COLUMN IF EXISTS bedtime_end",
+    # created_at on these four: never decoded by the app (its Codable
+    # structs for child/parent/occurrence/event don't declare it) and
+    # nothing server-side reads it either. tasks.created_at is kept — it's
+    # the fallback anchor date task_applies_on() (and the iOS mirror of it,
+    # CalendarSync) use for any task saved with no due date, which is the
+    # common path when "more options" isn't opened.
+    "ALTER TABLE app.parents DROP COLUMN IF EXISTS created_at",
+    "ALTER TABLE app.children DROP COLUMN IF EXISTS created_at",
+    "ALTER TABLE app.occurrences DROP COLUMN IF EXISTS created_at",
+    "ALTER TABLE app.events DROP COLUMN IF EXISTS created_at",
     """CREATE TABLE IF NOT EXISTS app.device_pairings (
         code text PRIMARY KEY,
         secret_hash text NOT NULL,
