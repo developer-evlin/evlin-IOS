@@ -3,12 +3,16 @@ import AuthenticationServices
 
 class OAuthManager: NSObject, ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        return UIApplication.shared.windows.first { $0.isKeyWindow } ?? ASPresentationAnchor()
+        return UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow } ?? ASPresentationAnchor()
     }
 
     func signInWithGoogle() async throws -> String {
         let supabaseURL = "https://czvuqumlmuarcltgsxag.supabase.co"
-        let urlString = "\(supabaseURL)/auth/v1/authorize?provider=google&redirect_to=evlin://auth-callback"
+        let redirect = "evlin://auth-callback"
+        let urlString = "\(supabaseURL)/auth/v1/authorize?provider=google&redirect_to=\(redirect)"
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         
         return try await withCheckedThrowingContinuation { continuation in
@@ -25,12 +29,16 @@ class OAuthManager: NSObject, ASWebAuthenticationPresentationContextProviding {
                 let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
                 let fragment = components?.fragment ?? ""
                 let dummyURL = URL(string: "http://dummy?\(fragment)")
-                let fragmentComponents = URLComponents(url: dummyURL!, resolvingAgainstBaseURL: false)
+                let fragmentComponents = URLComponents(url: dummyURL ?? URL(string: "http://dummy")!, resolvingAgainstBaseURL: false)
                 
                 if let token = fragmentComponents?.queryItems?.first(where: { $0.name == "access_token" })?.value {
                     continuation.resume(returning: token)
+                } else if let token = components?.queryItems?.first(where: { $0.name == "access_token" })?.value {
+                    continuation.resume(returning: token)
                 } else {
-                    continuation.resume(throwing: URLError(.cannotParseResponse))
+                    let errorDesc = components?.queryItems?.first(where: { $0.name == "error_description" })?.value ?? "No access token found in URL"
+                    let err = NSError(domain: "OAuth", code: -1, userInfo: [NSLocalizedDescriptionKey: "Auth failed: \(errorDesc) | URL: \(callbackURL.absoluteString)"])
+                    continuation.resume(throwing: err)
                 }
             }
             session.presentationContextProvider = self
@@ -361,7 +369,6 @@ struct ParentSignInStep: View {
             success = false
             switch apiError {
             case .serverError(let msg): actualError = msg
-            default: actualError = apiError.localizedDescription
             }
         } catch {
             success = false
