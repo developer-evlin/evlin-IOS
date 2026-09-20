@@ -106,13 +106,6 @@ struct ScreenTabletHome: View {
         return h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"
     }
 
-    // Blue "waiting on a parent to check it" — distinct from both the
-    // bypass lavender (so a kid can tell "I asked to skip this" apart from
-    // "I finished this, they just haven't looked yet") and the redo orange
-    // right below, which read too close to this state's original amber to
-    // tell apart at a glance.
-    private let approvalBlueTint = Color(hex: "DBEAFE")
-    private let approvalBlueText = Color(hex: "2563EB")
     // A parent asking for a redo instead of approving — "almost there, one
     // more pass," not an alarm. A genuinely bright, warm orange (close to
     // KidAccent's own) instead of the muted rust/brown this used to be,
@@ -124,17 +117,21 @@ struct ScreenTabletHome: View {
 
     private func taskCard(_ task: KidTask, isNext: Bool) -> some View {
         let awaitingBypass = task.bypassRequested && !task.done
-        let awaitingApproval = task.done && task.pendingApproval && !task.approved
         let needsRedo = task.redoRequested
-        // Redo puts a task back in "to do" territory visually (not struck
-        // through, full opacity) — the banner below is what explains why,
-        // rather than the row just looking like nothing ever happened.
-        let doneLook = task.done && !needsRedo && !awaitingApproval
+        // A task waiting on a parent's review looks exactly like a plain
+        // finished one to the kid — no separate "still pending" state, no
+        // hourglass, no "waiting for your parent" label. Whether it's been
+        // approved yet is the parent's business, not something to make the
+        // kid sit and watch for. Redo is the one exception: it puts the
+        // task back in "to do" territory visually (not struck through,
+        // full opacity) — the banner below is what explains why, rather
+        // than the row just looking like nothing ever happened.
+        let doneLook = task.done && !needsRedo
 
-        let chipColor = needsRedo ? redoOrangeTint : (awaitingBypass ? KidTheme.lavender : (awaitingApproval ? approvalBlueTint : KidTheme.cream))
-        let chipIconColor = needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalBlueText : KidTheme.greenDeep))
-        let chipIcon = awaitingBypass ? "hand.raised.fill" : (awaitingApproval ? "hourglass" : TabletData.sfIcon(for: task.iconTaskId))
-        let ringColor = doneLook ? KidTheme.green : (needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalBlueText : (isNext ? KidTheme.green : Color(hex: "D5DED8")))))
+        let chipColor = needsRedo ? redoOrangeTint : (awaitingBypass ? KidTheme.lavender : KidTheme.cream)
+        let chipIconColor = needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : KidTheme.greenDeep)
+        let chipIcon = awaitingBypass ? "hand.raised.fill" : TabletData.guessedIcon(forTitle: task.title)
+        let ringColor = doneLook ? KidTheme.green : (needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (isNext ? KidTheme.green : Color(hex: "D5DED8"))))
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 16) {
@@ -165,9 +162,6 @@ struct ScreenTabletHome: View {
                     } else if awaitingBypass {
                         Label("Waiting on a parent", systemImage: "hand.raised.fill")
                             .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.lavenderText)
-                    } else if awaitingApproval {
-                        Label("Waiting for your parent to check it", systemImage: "hourglass")
-                            .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(approvalBlueText)
                     } else if !task.done {
                         if let due = task.due {
                             Label("Due \(due)", systemImage: "clock")
@@ -186,8 +180,6 @@ struct ScreenTabletHome: View {
                     .overlay {
                         if doneLook {
                             Image(systemName: "checkmark").font(.system(size: taskCheckSize * 0.46, weight: .bold)).foregroundStyle(.white)
-                        } else if awaitingApproval {
-                            Image(systemName: "hourglass").font(.system(size: taskCheckSize * 0.4, weight: .bold)).foregroundStyle(approvalBlueText)
                         }
                     }
             }
@@ -213,8 +205,8 @@ struct ScreenTabletHome: View {
             }
         }
         .padding(taskCardPadding)
-        .background(needsRedo ? redoOrangeTint.opacity(0.55) : (awaitingBypass ? KidTheme.lavender.opacity(0.5) : (awaitingApproval ? approvalBlueTint.opacity(0.6) : (isNext && !task.done ? KidTheme.greenTint : KidTheme.cream))))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(needsRedo ? redoOrangeText.opacity(0.4) : (awaitingBypass ? KidTheme.lavenderText : (awaitingApproval ? approvalBlueText.opacity(0.4) : (isNext && !task.done ? KidTheme.green : KidTheme.line)))))
+        .background(needsRedo ? redoOrangeTint.opacity(0.55) : (awaitingBypass ? KidTheme.lavender.opacity(0.5) : (isNext && !task.done ? KidTheme.greenTint : KidTheme.cream)))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(needsRedo ? redoOrangeText.opacity(0.4) : (awaitingBypass ? KidTheme.lavenderText : (isNext && !task.done ? KidTheme.green : KidTheme.line))))
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .opacity(doneLook ? 0.65 : 1)
     }

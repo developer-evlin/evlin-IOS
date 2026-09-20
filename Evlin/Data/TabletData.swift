@@ -95,6 +95,49 @@ enum TabletData {
         }
     }
 
+    // Real tasks (created via chat, the "+" flow, or Calendar) don't carry
+    // one of the fixed demo ids sfIcon(for:) above understands — every one
+    // of them fell through to the same plain star. This guesses a more
+    // specific icon from the task's own title instead, for the common
+    // chores a family actually types, and only falls back to the star
+    // placeholder for anything it doesn't recognize. Ordered
+    // specific-phrase-first so e.g. "wash the dishes" doesn't get caught
+    // by a more generic "wash"-style rule before the dish-specific one.
+    // A parent/kid picking a real icon explicitly (tasks.icon, reserved on
+    // the backend for that) is meant to take priority over this guess
+    // whenever that picker exists — this is the sensible default until then.
+    private static let titleIconRules: [(keywords: [String], icon: String)] = [
+        (["dish", "dishes", "plate"], "fork.knife"),
+        (["laundry"], "washer.fill"),
+        (["clothes", "clothing", "fold"], "tshirt.fill"),
+        (["bed", "tidy", "room"], "bed.double.fill"),
+        (["trash", "garbage", "recycl"], "trash.fill"),
+        (["homework", "study", "math", "read"], "book.fill"),
+        (["teeth", "floss", "brush"], "mouth.fill"),
+        (["dog", "cat", "pet", "feed"], "pawprint.fill"),
+        (["plant", "garden", "water"], "leaf.fill"),
+        (["shower", "bath"], "drop.fill"),
+        (["piano", "practice", "instrument", "music"], "pianokeys"),
+        (["backpack", "school bag", "pack bag"], "backpack.fill"),
+        (["grocery", "groceries", "shopping"], "basket.fill"),
+        (["box", "declutter", "organize"], "shippingbox.fill"),
+        (["car"], "car.fill"),
+        (["bike", "bicycle"], "bicycle"),
+        (["walk", "run", "jog", "exercise"], "figure.walk"),
+        (["call", "phone"], "phone.fill"),
+        (["draw", "paint", "art"], "paintpalette.fill"),
+        (["write", "journal", "diary"], "pencil"),
+        (["vacuum", "sweep", "mop", "clean"], "sparkles"),
+    ]
+
+    static func guessedIcon(forTitle title: String) -> String {
+        let lower = title.lowercased()
+        for rule in titleIconRules where rule.keywords.contains(where: { lower.contains($0) }) {
+            return rule.icon
+        }
+        return "star.fill"
+    }
+
     static let howToGuides: [HowToGuide] = [
         HowToGuide(id: "boat", emoji: "⛵", title: "Origami Sailboat", blurb: "Fold a paper boat in 6 steps", count: 6),
         HowToGuide(id: "crane", emoji: "🕊️", title: "Origami Paper Crane", blurb: "The classic lucky paper bird", count: 6),
