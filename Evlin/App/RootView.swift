@@ -33,7 +33,7 @@ struct RootView: View {
                     ModePickerView(mode: $mode)
                 case .parent:
                     if parentOnboarded {
-                        ParentRootView(onSwitchMode: { mode = nil })
+                        ParentRootView(onSwitchMode: { mode = nil }, onSignOut: { parentOnboarded = false; mode = nil })
                             .environment(session)
                     } else {
                         OnboardingV2Coordinator(

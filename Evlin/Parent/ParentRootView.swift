@@ -4,6 +4,7 @@ struct ParentRootView: View {
     @Environment(SessionManager.self) private var session
 
     var onSwitchMode: () -> Void
+    var onSignOut: (() -> Void)? = nil
     @State private var tab = 0
 
     var body: some View {
@@ -20,7 +21,7 @@ struct ParentRootView: View {
             ScreenLibrary()
                 .tabItem { Label("Library", systemImage: "book.pages") }
                 .tag(3)
-            ScreenSettings(onSwitchMode: onSwitchMode)
+            ScreenSettings(onSwitchMode: onSwitchMode, onSignOut: onSignOut)
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(4)
         }

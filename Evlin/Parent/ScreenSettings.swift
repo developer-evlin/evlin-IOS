@@ -10,6 +10,7 @@ import PhotosUI
 // use an inline alert; they open DestructiveConfirmSheet instead.
 struct ScreenSettings: View {
     var onSwitchMode: () -> Void
+    var onSignOut: (() -> Void)? = nil
 
     // Root notification toggle — the only notification setting there is.
     @State private var pushOn = true
@@ -752,7 +753,7 @@ struct ScreenSettings: View {
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self),
                    let img = UIImage(data: data) {
-                    await MainActor.run { parentAvatar = img }
+                    await MainActor.run { parentAvatar = downsampledAvatar(img) }
                 }
             }
         }
@@ -773,7 +774,9 @@ struct ScreenSettings: View {
                 onConfirm: {
                     showSignOutConfirm = false
                     showParentProfile = false
-                    onSwitchMode()
+                    SessionManager.shared.clear()
+                    FamilyStore.clear() // Clear mock data just in case
+                    onSignOut?() ?? onSwitchMode()
                 },
                 onCancel: { showSignOutConfirm = false }
             )
@@ -791,7 +794,9 @@ struct ScreenSettings: View {
                 onConfirm: {
                     showDeleteAccountConfirm = false
                     showParentProfile = false
-                    onSwitchMode()
+                    SessionManager.shared.clear()
+                    FamilyStore.clear()
+                    onSignOut?() ?? onSwitchMode()
                 },
                 onCancel: { showDeleteAccountConfirm = false }
             )
@@ -1077,7 +1082,7 @@ private struct ChildSettingsSheet: View {
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self),
                    let img = UIImage(data: data) {
-                    await MainActor.run { child.avatar = img }
+                    await MainActor.run { child.avatar = downsampledAvatar(img) }
                 }
             }
         }
