@@ -576,26 +576,27 @@ private struct ChatSuggestion: Identifiable {
     var reply: String? = nil
 }
 
-private let welcomeSuggestions: [ChatSuggestion] = [
-    ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review Liam's progress", prompt: "How is Liam doing with his tasks today?", card: .reviewCompliance(childId: SessionManager.shared.activeChildId ?? "", childName: "Liam")),
+@MainActor
+private var welcomeSuggestions: [ChatSuggestion] {[
+    ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review your child's progress", prompt: "How is your child doing with his tasks today?", card: .reviewCompliance(childId: SessionManager.shared.activeChildId ?? "", childName: "your child")),
     ChatSuggestion(icon: "gavel", title: "Set a bedtime rule", prompt: "Lock all apps at 9pm on school nights"),
     ChatSuggestion(
         icon: "sf:checklist", title: "Add a task",
-        prompt: "Add a task for Liam to clean his room every Saturday morning",
-        card: .addTask(prompt: "Add a task for Liam to clean his room every Saturday morning")
+        prompt: "Add a task for your child to clean his room every Saturday morning",
+        card: .addTask(prompt: "Add a task for your child to clean his room every Saturday morning")
     ),
-    ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for Liam", card: .blockApp),
+    ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for your child", card: .blockApp),
     ChatSuggestion(
         icon: "sf:lightbulb.fill", title: "Suggest an activity",
-        prompt: "Suggest something Liam can do instead of screen time",
+        prompt: "Suggest something your child can do instead of screen time",
         reply: "A 20-minute LEGO build or a walk around the block both work well right after school — want me to add one to today's tasks?"
     ),
     ChatSuggestion(
         icon: "sf:calendar", title: "Update the calendar",
-        prompt: "Add soccer practice to Liam's calendar every Thursday at 4pm",
-        reply: "Added — Soccer Practice now repeats every Thursday, 4:00–5:30 PM on Liam's calendar."
+        prompt: "Add soccer practice to your child's calendar every Thursday at 4pm",
+        reply: "Added — Soccer Practice now repeats every Thursday, 4:00–5:30 PM on your child's calendar."
     ),
-]
+]}
 
 struct ScreenChat: View {
     @Environment(SessionManager.self) private var session
@@ -1080,12 +1081,12 @@ struct ScreenChat: View {
         guard !apps.isEmpty else { return }
         let list = apps.count == 1 ? apps[0] : apps.dropLast().joined(separator: ", ") + " and " + (apps.last ?? "")
         let duration = minutes.map { "for \(formatMinutes($0))" } ?? "until you unlock it"
-        respondAfterDelay(with: "Blocked \(list) for Liam \(duration).")
+        respondAfterDelay(with: "Blocked \(list) for your child \(duration).")
 
         // Surfaces the same way a parent-authored Custom rule would — see
         // ScreenProfile's Active Rules. Appended onto the shared Child
         // object itself (not this screen's own state), so it's actually
-        // there the next time Liam's profile is opened, not just in this
+        // there the next time your child's profile is opened, not just in this
         // chat transcript.
         FamilyStore.child(session.activeChildId ?? "").rules.append(ChildRule(
             id: UUID().uuidString,
@@ -1102,7 +1103,7 @@ struct ScreenChat: View {
         let dueTrimmed = due.trimmingCharacters(in: .whitespaces)
         let dueText = dueTrimmed.isEmpty ? "" : ", due \(dueTrimmed)"
         let repeatsText = repeats == "none" ? "" : " (\(repeatDisplayLabel(repeats).lowercased()))"
-        respondAfterDelay(with: "Added \"\(title)\" for Liam\(dueText)\(repeatsText).")
+        respondAfterDelay(with: "Added \"\(title)\" for your child\(dueText)\(repeatsText).")
     }
 
     @ViewBuilder
@@ -1222,8 +1223,8 @@ private let chatHistoryMock: [ChatHistoryEntry] = [
         title: "Extra time for homework",
         time: "9:41 AM", section: "Today",
         transcript: [
-            (true, "Give Liam 30 more minutes if his homework's done"),
-            (false, "Done — updated Liam's controls. I'll unlock the extra 30 minutes automatically once he marks homework complete."),
+            (true, "Give your child 30 more minutes if his homework's done"),
+            (false, "Done — updated your child's controls. I'll unlock the extra 30 minutes automatically once he marks homework complete."),
         ]
     ),
     ChatHistoryEntry(
@@ -1238,7 +1239,7 @@ private let chatHistoryMock: [ChatHistoryEntry] = [
         title: "TikTok pushback after lock",
         time: "Monday", section: "Previous 7 Days",
         transcript: [
-            (true, "Liam is really upset that TikTok got locked, what do I say?"),
+            (true, "your child is really upset that TikTok got locked, what do I say?"),
             (false, "Here's a de-escalation strategy for tonight: acknowledge the frustration first, then offer a fixed choice — a 10-minute walk or a snack break — before revisiting screen time. Kids regulate faster when they feel heard before they're redirected."),
         ]
     ),
@@ -1246,8 +1247,8 @@ private let chatHistoryMock: [ChatHistoryEntry] = [
         title: "Weekly usage check-in",
         time: "Monday", section: "Previous 7 Days",
         transcript: [
-            (true, "How's Liam's screen time trending this week?"),
-            (false, "Liam's screen time was down 12% from last week — mostly less time in reading apps, so nothing to flag."),
+            (true, "How's your child's screen time trending this week?"),
+            (false, "your child's screen time was down 12% from last week — mostly less time in reading apps, so nothing to flag."),
         ]
     ),
 ]

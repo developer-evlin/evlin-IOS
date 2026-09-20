@@ -94,6 +94,7 @@ struct ChildProfileStep: View {
 // MARK: - 5/// MARK: - 6 · Enter Code (kid)
 
 struct ChildEnterCodeStep: View {
+    var childName: String = ""
     let onConnected: () -> Void
     var onBack: (() -> Void)? = nil
 
@@ -168,7 +169,7 @@ struct ChildEnterCodeStep: View {
         errorText = nil
         
         do {
-            let success = try await APIClient.shared.pairChildDevice(pairingCode: code)
+            let success = try await APIClient.shared.pairChildDevice(pairingCode: code, childName: childName)
             if success {
                 onConnected()
             } else {
@@ -267,19 +268,16 @@ struct ChildScreenTimeStep: View {
             footer: {            }
         )
         .animation(.easeOut(duration: 0.2), value: stage)
-        .onAppear {
-            // Check status without spinning up a Task, as AuthorizationCenter
-            // synchronously calls out via XPC and causes 'unsafeForcedSync'
-            // concurrency warnings and system gesture timeouts if executed
-            // inside a cooperative Swift Concurrency Task.
-            DispatchQueue.global(qos: .userInitiated).async {
-                let status = AuthorizationCenter.shared.authorizationStatus
-                DispatchQueue.main.async {
-                    self.authStatus = status
-                    if status == .approved {
-                        self.stage = .granted
-                    }
-                }
+        .task {
+            // Read on the main actor (where AuthorizationCenter lives) so
+            // there is no cross-actor hop and no unsafeForcedSync. The
+            // previous DispatchQueue.global() approach accessed a @MainActor
+            // property from a background queue, which forced the runtime to
+            // synchronously hop back — blocking the main thread and stalling
+            // gesture recognizers for tens of seconds on first launch.
+            authStatus = AuthorizationCenter.shared.authorizationStatus
+            if authStatus == .approved {
+                stage = .granted
             }
         }
     }

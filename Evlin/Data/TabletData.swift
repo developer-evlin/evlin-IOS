@@ -77,25 +77,9 @@ struct KidChild {
 }
 
 enum TabletData {
-    static let child = KidChild(id: "liam", name: "Liam", usedMin: 94, limitMin: 120)
+    static let child = KidChild(id: "liam", name: "Child", usedMin: 94, limitMin: 120)
 
-    static var tasks: [KidTask] = [
-        KidTask(occurrenceId: nil, id: "t1", title: "Make your bed", iconTaskId: "t1", due: "8:00 AM", done: true, desc: "Pull up your covers, fluff your pillow, and put any clothes in the basket.", pendingApproval: false, approved: true),
-        KidTask(occurrenceId: nil, id: "t2", title: "Do your maths", iconTaskId: "t2", due: "6:00 PM", done: true, desc: "Complete questions 1 through 8 on page 24 of your maths book.", pendingApproval: false, approved: true),
-        KidTask(occurrenceId: nil, id: "t3", title: "Feed Biscuit", iconTaskId: "t3", due: "6:30 PM", done: false, desc: "Give Biscuit one scoop of dry food and fresh water."),
-        KidTask(occurrenceId: nil, id: "t4", title: "Read your book", iconTaskId: "t4", due: "7:30 PM", done: false, desc: "Read quietly for at least 20 minutes from your current book."),
-        KidTask(occurrenceId: nil, id: "t5", title: "Brush your teeth", iconTaskId: "t5", due: "8:30 PM", done: false, desc: "Brush for two full minutes, top and bottom."),
-        // Submitted, waiting on a parent to check it — done from the kid's
-        // own side, but not yet approved.
-        KidTask(occurrenceId: nil, id: "t6", title: "Tidy your room", iconTaskId: "t6", due: "5:30 PM", done: true, desc: "Put toys back in the bin and clothes in the hamper.", submittedPhotoCount: 1, pendingApproval: true, approved: false),
-        // A parent asked for a redo instead of approving — back to normal
-        // ("to do") styling, with the redo note visible on the card.
-        KidTask(occurrenceId: nil, id: "t7", title: "Practice piano", iconTaskId: "t7", due: "4:00 PM", done: false, desc: "15 minutes, scales then one song.", redoRequested: true, redoNote: "Good start! Can you play it once more with both hands together?", redoHasVoiceNote: false),
-        // Plain demo task, no icon chip — now that the task-row icon and
-        // the calendar's per-event glyphs are both gone, this is just a
-        // fresh example to eyeball the icon-less row/timeline styling on.
-        KidTask(occurrenceId: nil, id: "t8", title: "Walk the dog", iconTaskId: "t8", due: "5:00 PM", done: false, desc: "Take Biscuit around the block, at least once around the park."),
-    ]
+    static var tasks: [KidTask] = []
 
     // Used by ScreenTabletHome's task rows to render each task's icon.
     static func sfIcon(for taskId: String) -> String {

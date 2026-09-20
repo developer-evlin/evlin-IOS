@@ -49,11 +49,12 @@ struct LaidOutEvent: Identifiable {
 // just splitting width when two people happen to overlap in time. That used
 // to mean a non-overlapping event (the common case: most of a family's
 // events don't collide) rendered full-width, with nothing to visually tie
-// it to "this is Emma's lane" the way the header row implies. Now Emma's
-// events always sit under Emma's avatar, whether or not anyone else has
+// it to "this is your child's lane" the way the header row implies. Now your child's
+// events always sit under your child's avatar, whether or not anyone else (the
+// parent's own "family" events, or another child if Settings adds one) has
 // something scheduled at the same time.
 //
-// That lane is still just one column wide, though — if Emma herself has
+// That lane is still just one column wide, though — if your child himself has
 // two things at once (a task due mid-event, say), they used to draw
 // directly on top of each other. splitOverlaps below runs a second,
 // per-lane pass to give those their own side-by-side sub-columns.
@@ -194,7 +195,7 @@ struct ScreenCalendar: View {
     @State private var openChildId: String?
     // Tapping an avatar in the lane header dims them out and hides their
     // whole column from the grid/ANYTIME row — a quick "just show me
-    // Liam" filter, not a destructive action. Starts with everyone on,
+    // your child" filter, not a destructive action. Starts with everyone on,
     // the parent included.
     @State private var activeLaneIds: Set<String> = Set(CalendarData.people.map(\.id))
 
@@ -1259,7 +1260,7 @@ private struct EventDetailSheet: View {
 
 // MARK: - Deadline group sheet — every task due at the same moment for the
 // same kid opens here as one unit. Titled by the moment itself ("Due at
-// 6:00 PM, Liam"), one row per task (status box, name, status line,
+// 6:00 PM, your child"), one row per task (status box, name, status line,
 // Approve). Approve acts in place — the sheet stays open, so clearing
 // several tasks is quick — and tapping a row instead pushes to that task's
 // full detail (TaskReviewDeckView, the same real review screen the rest of

@@ -58,7 +58,7 @@ struct OnboardingV2Coordinator: View {
     @State private var parentAvatar: UIImage?
     /// Fixed mock kid name — there's no second device to pair with, so the
     /// parent chain's "kid" is always this fake identity.
-    @State private var kidName = "Liam"
+    @State private var kidName = "your child"
     @State private var pairedSucceeded = false
 
     // MARK: Threaded state (kid chain)
@@ -148,6 +148,7 @@ struct OnboardingV2Coordinator: View {
 
             case .childShowCode:
                 ChildEnterCodeStep(
+                    childName: childName,
                     onConnected: { step = .childConnected },
                     onBack: { step = .childProfile }
                 )

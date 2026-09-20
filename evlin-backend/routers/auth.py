@@ -235,6 +235,12 @@ def pair_child(request: schemas.PairChildRequest, db: Session = Depends(get_db))
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
         
+    # Update child name if provided from the pairing device
+    if request.child_name and request.child_name.strip():
+        child.name = request.child_name.strip()
+        db.commit()
+        db.refresh(child)
+        
     # 3. Generate a secure long-lived token
     access_token = secrets.token_urlsafe(32)
     token_hash = hash_token(access_token)

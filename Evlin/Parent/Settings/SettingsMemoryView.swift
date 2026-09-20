@@ -13,12 +13,7 @@ private struct MockMemory: Identifiable {
 }
 
 struct SettingsMemoryView: View {
-    @State private var memories: [MockMemory] = [
-        MockMemory(text: "Liam prefers a 30-minute Roblox session after homework.", category: "Preferences", confidence: "High confidence", userLocked: true),
-        MockMemory(text: "Maya's bedtime wind-down starts at 8 PM on school nights.", category: "Rules", confidence: "High confidence", userLocked: false),
-        MockMemory(text: "Noah responds better to task reminders phrased as questions.", category: "Preferences", confidence: "Medium confidence", userLocked: false),
-        MockMemory(text: "Grandma Rose is allowed to approve bypass requests on weekends.", category: "People", confidence: "Medium confidence", userLocked: true),
-    ]
+    @State private var memories: [MockMemory] = []
     @State private var editing: MockMemory?
 
     private var grouped: [(String, [MockMemory])] {

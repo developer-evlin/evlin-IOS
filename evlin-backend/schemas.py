@@ -46,6 +46,7 @@ class GeneratePairingCodeResponse(BaseModel):
 class PairChildRequest(BaseModel):
     pairing_code: str
     platform: str = "ios" # Add platform, defaults to ios
+    child_name: Optional[str] = None
 
 class PairChildResponse(BaseModel):
     access_token: str

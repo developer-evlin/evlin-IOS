@@ -59,7 +59,7 @@ struct ChildRule: Identifiable {
 }
 
 // Per-child task lists, ported from screen-profile.jsx's hardcoded set
-// (originally only Liam's — mirrored across kids so every profile has content).
+// (originally only your child's — mirrored across kids so every profile has content).
 enum TaskStore {
     // Generated once per child, then cached — ScreenProfile and a direct
     // notification-tap-to-TaskReviewDeckView route (see ScreenHome) both

@@ -6,6 +6,7 @@ enum APIError: Error {
 
 }
 
+@MainActor
 class APIClient {
     static let shared = APIClient()
     
@@ -84,13 +85,16 @@ class APIClient {
         return (code, expires)
     }
     
-    func pairChildDevice(pairingCode: String) async throws -> Bool {
+    func pairChildDevice(pairingCode: String, childName: String? = nil) async throws -> Bool {
         let url = URL(string: "\(baseURL)/auth/pair-child")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let body: [String: Any] = ["pairing_code": pairingCode, "platform": "ios"]
+        var body: [String: Any] = ["pairing_code": pairingCode, "platform": "ios"]
+        if let childName = childName, !childName.isEmpty {
+            body["child_name"] = childName
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         do {
@@ -341,7 +345,7 @@ import SwiftUI
 
 import Observation
 
-@Observable
+@MainActor @Observable
 public class SessionManager {
     static let shared = SessionManager()
     

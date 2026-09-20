@@ -231,12 +231,12 @@ private struct NotificationPanel: View {
 
     // "maya"/"emma" cases used to live here too — dead along with the
     // notif entries that used to carry those old demo-gallery ids (see
-    // NotificationsData.swift). Any child besides "liam" (multi-child via
+    // NotificationsData.swift). Any child besides "your child" (multi-child via
     // Settings' "Add a child" gets a real UUID) falls through to the
     // default tint rather than a hardcoded per-id color.
     private func color(for childId: String) -> Color {
         switch childId {
-        case "liam": return Color(hex: "2563EB")
+        case "your child": return Color(hex: "2563EB")
         default: return EColor.primary
         }
     }

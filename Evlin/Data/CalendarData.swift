@@ -70,7 +70,122 @@ enum CalendarData {
     // A day-timeline lane exists for each of these, in this order.
     static let people: [FamilyPerson] = [
         FamilyPerson(id: "family", name: "Alex Carter", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE")),
-        FamilyPerson(id: "liam", name: "Liam", color: Color(hex: "2563EB"), bg: Color(hex: "DBEAFE")),
+        FamilyPerson(id: "liam", name: "Child", color: Color(hex: "2563EB"), bg: Color(hex: "DBEAFE")),
+    ]
+
+    // The one abstract, non-lane entity: "everyone." An event tagged with
+    // this id (Family Lunch, Family Dinner) isn't any single person's —
+    // it renders as its own full-width block on the grid instead of
+    // competing for a lane, and it's never a column a parent can dim.
+    // Kept out of `people` on purpose so it can never leak into a lane
+    // list; still offered as a "For" option when creating an event.
+    static let everyone = FamilyPerson(id: "everyone", name: "Family", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))
+
+    // Mock "data day" — matches Evlin_Parent_view/index.html's DATA_MONTH/
+    // DATA_YEAR/TODAY_DAY: the demo events all live on this one fixed day,
+    // consistent with the rest of the app's static demo-data approach.
+    static let dataMonth = 9 // September, 1-indexed
+    static let dataYear = 2024
+    static let dataDay = 12
+    static let daysInDataMonth = 30
+
+    // Days 8-11 used to read Mon/Tue/Wed/Thu — each one day ahead of its
+    // real September 2024 weekday (day 1 is a real Sunday, so day 8 is a
+    // real Sunday too).
+    static let dayNames: [Int: String] = [
+        1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat",
+        8: "Sun", 9: "Mon", 10: "Tue", 11: "Wed", 12: "Thu", 13: "Fri", 14: "Sat",
+        15: "Sun", 16: "Mon", 17: "Tue", 18: "Wed", 19: "Thu", 20: "Fri", 21: "Sat",
+        22: "Sun", 23: "Mon", 24: "Tue", 25: "Wed", 26: "Thu", 27: "Fri", 28: "Sat",
+        29: "Sun", 30: "Mon",
+    ]
+    static let fullDayNames: [String: String] = [
+        "Sun": "Sunday", "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday",
+        "Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday",
+    ]
+
+    // `repeats` stores a comma-joined, Sun-first list of day codes (see
+    // weekDayCodes/repeatDisplayLabel in TaskData.swift) — the same format
+    // the task RepeatPicker uses, rather than a fixed preset keyword. Day 12
+    // (dataDay) is a Thursday, so a "weekly" mock event repeats on "thu" —
+    // the same weekday it originates on, matching the old `(day-origin)%7`
+    // rule exactly, just expressed as a day-code set instead of a keyword.
+    static let allDayCodes = "sun,mon,tue,wed,thu,fri,sat"
+    static let weekdayCodes = "mon,tue,wed,thu,fri"
+
+    static let eventsByDay: [Int: [CalEvent]] = [:] SwiftUI
+
+struct FamilyPerson: Identifiable {
+    let id: String
+    var name: String
+    var color: Color
+    var bg: Color
+}
+
+// A task's progress toward the parent's own review, distinct from a plain
+// event which has no completion concept at all — see the three status
+// markers this drives on the day timeline (strikethrough/dot/padlock).
+enum CalTaskState { case pending, submitted, done }
+
+struct CalEvent: Identifiable {
+    let id = UUID()
+    var personId: String
+    var title: String
+    var emoji: String
+    var start: String
+    var end: String
+    var category: String
+    var location: String
+    var note: String
+    var repeats: String
+    // The following three only mean anything when category == "Task" — an
+    // ordinary event has no anytime/pending-approval/gating concept. Kept
+    // on CalEvent itself (not a parallel CalTask type) so tasks and events
+    // stay in the same eventsByDay store and the whole existing add/edit/
+    // expand/recurrence pipeline works for both without a second copy.
+    //
+    // Whether this belongs to the day as a whole (the ANYTIME row) rather
+    // than a specific moment on the grid.
+    var isAnytime: Bool = false
+    var taskState: CalTaskState = .pending
+    // Whether this is one of the tasks holding the child's apps locked
+    // until a parent approves it — the calendar's actual link to
+    // enforcement, not just a to-do list. Most tasks aren't gating.
+    var gatesUnlock: Bool = false
+    // The real ChildTask (TaskStore.tasks(for:)) this calendar entry
+    // stands for, when one exists — the calendar's own task list and the
+    // profile's task list are two separate mock stores in this prototype,
+    // so title-matching between them is a guess; this is the actual,
+    // deterministic link. Tapping a task with this set jumps straight into
+    // TaskReviewDeckView at that exact task (see ScreenCalendar's
+    // onSelect) instead of landing on the plain profile. Only the seeded
+    // demo tasks below set it — a task a parent adds through the "+" flow
+    // has no real counterpart to jump to, so it falls back to the profile.
+    var linkedTaskId: String? = nil
+}
+
+// A day-in-context view of an event: `day` is which day it's being shown as
+// occurring on (a recurring event can be shown on many days), `originDay` is
+// where it's actually stored — edits/deletes always act on the origin, while
+// display (date label, etc.) uses `day`. `isRecurring` marks a virtual
+// occurrence generated from an earlier day's repeat rule rather than an
+// explicit entry — mirrors index.html's `_origin`/`_recurring`.
+struct CalDayEvent: Identifiable {
+    var id = UUID()
+    var event: CalEvent
+    var day: Int
+    var originDay: Int
+    var isRecurring: Bool
+}
+
+enum CalendarData {
+    // Every real lane is an actual person's own profile, the parent's
+    // included — "family" is the parent's own id (same "Alex Carter"
+    // identity ScreenSettings' account header uses), not a group label.
+    // A day-timeline lane exists for each of these, in this order.
+    static let people: [FamilyPerson] = [
+        FamilyPerson(id: "family", name: "Alex Carter", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE")),
+        FamilyPerson(id: "liam", name: "Child", color: Color(hex: "2563EB"), bg: Color(hex: "DBEAFE")),
     ]
 
     // The one abstract, non-lane entity: "everyone." An event tagged with
