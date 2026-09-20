@@ -208,7 +208,7 @@ struct ScreenCalendar: View {
     private var lanePeople: [FamilyPerson] {
         var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
         for child in FamilyStore.children {
-            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color.ink, bg: child.color.bg))
+            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color, bg: child.color.opacity(0.15)))
         }
         return people
     }
@@ -1601,7 +1601,7 @@ private struct AddCalendarEventForm: View {
     private var lanePeople: [FamilyPerson] {
         var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
         for child in FamilyStore.children {
-            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color.ink, bg: child.color.bg))
+            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color, bg: child.color.opacity(0.15)))
         }
         return people
     }
@@ -1682,7 +1682,7 @@ private struct AddCalendarTaskForm: View {
     private var lanePeople: [FamilyPerson] {
         var people = [FamilyPerson(id: "family", name: "Parent", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))]
         for child in FamilyStore.children {
-            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color.ink, bg: child.color.bg))
+            people.append(FamilyPerson(id: child.id, name: child.name, color: child.color, bg: child.color.opacity(0.15)))
         }
         return people
     }
