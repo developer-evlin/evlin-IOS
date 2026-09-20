@@ -69,3 +69,9 @@ struct ApiChild: Codable {
     let colorIndex: Int
     let isPaired: Bool
 }
+
+struct ApiParent: Codable {
+    let id: String
+    let email: String
+    let name: String?
+}

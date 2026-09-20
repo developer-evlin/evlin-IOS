@@ -449,6 +449,7 @@ struct ParentProfileStep: View {
     @State private var ageText = ""
     @State private var saved = false
     @State private var busy = false
+    @State private var errorText: String?
 
     var body: some View {
         OnboardingV2ScreenContainer(
@@ -475,6 +476,12 @@ struct ParentProfileStep: View {
                             .frame(maxWidth: .infinity)
 
                         OnboardingV2EditableField(label: "NAME", text: $name)
+
+                        if let errorText {
+                            Text(errorText)
+                                .font(OnboardingV2Theme.Typography.bodyXS)
+                                .foregroundStyle(OnboardingV2Theme.Palette.error)
+                        }
 
                         OnboardingV2EditableField(label: "AGE", text: $ageText, placeholder: "e.g. 35", keyboardType: .numberPad)
                             .onChange(of: ageText) { _, newValue in
@@ -503,9 +510,14 @@ struct ParentProfileStep: View {
     
     private func save() async {
         busy = true
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        errorText = nil
+        do {
+            try await ParentProfile.shared.saveNow(name)
+            withAnimation { saved = true }
+        } catch {
+            errorText = "Couldn't save your name. \(error.apiUserMessage)"
+        }
         busy = false
-        withAnimation { saved = true }
     }
 }
 

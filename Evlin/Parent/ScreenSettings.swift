@@ -17,7 +17,8 @@ struct ScreenSettings: View {
 
     // Parent identity — shown in the account header and edited in the
     // account sheet (parentProfilePage).
-    @State private var parentName = "Parent"
+    private var profile: ParentProfile { ParentProfile.shared }
+    private var parentName: String { profile.displayName }
     @State private var parentAvatar: UIImage?
     @State private var showChangeParentPicture = false
     @State private var parentLibraryItem: PhotosPickerItem?
@@ -86,7 +87,10 @@ struct ScreenSettings: View {
                 familyRefreshTick += 1
             })
         }
-        .sheet(isPresented: $showParentProfile) { parentProfilePage }
+        .sheet(isPresented: $showParentProfile) {
+            // The name field edits live; persist it when the sheet closes.
+            parentProfilePage.onDisappear { profile.saveIfChanged() }
+        }
         .sheet(isPresented: $showBilling) { NavigationStack { billingPage } }
         .sheet(isPresented: $showPrivacyTerms) { NavigationStack { privacyTermsPage } }
         .sheet(isPresented: $showCancelPlanConfirm) {
@@ -713,7 +717,7 @@ struct ScreenSettings: View {
                     .padding(.bottom, 28)
 
                     FormField(label: "Your name") {
-                        FormTextField(placeholder: "Your name", text: $parentName)
+                        FormTextField(placeholder: "Your name", text: Binding(get: { profile.name }, set: { profile.name = $0 }))
                     }
 
                     // Same block as the root Settings list's account card

@@ -9,6 +9,7 @@ app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app"
 # Additive, idempotent schema updates for columns added after the original
 # evlin-tables.sql (see models.py). Safe to run on every boot.
 _MIGRATIONS = [
+    "ALTER TABLE app.parents ADD COLUMN IF NOT EXISTS name text",
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS due_date date",
     "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS category text",
     "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS note text",

@@ -10,8 +10,20 @@ class ParentBase(BaseModel):
 class ParentCreate(ParentBase):
     pass
 
+class ParentUpdate(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _name_ok(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v[:60]
+
 class ParentResponse(ParentBase):
     id: UUID
+    name: Optional[str] = None
     terms_accepted_at: Optional[datetime] = None
     terms_version: Optional[int] = None
     created_at: datetime

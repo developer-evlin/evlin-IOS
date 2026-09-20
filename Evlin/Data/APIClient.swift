@@ -306,6 +306,16 @@ class APIClient {
         return try decoder.decode(T.self, from: data)
     }
 
+    // MARK: - Parent profile
+
+    func fetchMe() async throws -> ApiParent {
+        try decode(try await send("GET", "/auth/me"))
+    }
+
+    func updateMyName(_ name: String) async throws {
+        try await send("PUT", "/auth/me", body: ["name": name])
+    }
+
     // MARK: - Children
 
     func updateChild(childId: String, name: String? = nil, colorIndex: Int? = nil) async throws {
@@ -477,6 +487,7 @@ public class SessionManager {
     var hasChildSession: Bool { childDeviceToken != nil }
 
     func clear() {
+        ParentProfile.shared.reset()
         parentAccessToken = nil
         parentRefreshToken = nil
         childDeviceToken = nil

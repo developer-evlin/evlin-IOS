@@ -14,6 +14,52 @@ final class SyncState {
     var writeError: String?
 }
 
+/// The signed-in parent's own profile (name), loaded from the backend.
+@MainActor @Observable
+final class ParentProfile {
+    static let shared = ParentProfile()
+    /// What the name field edits.
+    var name = ""
+    /// What the server has, so we only save real changes.
+    private(set) var savedName = ""
+    private(set) var email = ""
+
+    /// The name to show: the saved one, else the part of the email before the @.
+    var displayName: String {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !n.isEmpty { return n }
+        let local = email.split(separator: "@").first.map(String.init) ?? ""
+        return local.isEmpty ? "Parent" : local.capitalized
+    }
+
+    func load(_ parent: ApiParent) {
+        email = parent.email
+        // Don't clobber a name that's mid-edit.
+        let editing = name != savedName
+        savedName = parent.name ?? ""
+        if !editing { name = savedName }
+    }
+
+    /// Call when the user finishes editing; saves only if it changed.
+    func saveIfChanged() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != savedName else { name = savedName; return }
+        name = trimmed
+        BackendWrite.run("Your name") { try await APIClient.shared.updateMyName(trimmed) }
+    }
+
+    /// Used by onboarding, which wants to know whether the save worked.
+    func saveNow(_ newName: String) async throws {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try await APIClient.shared.updateMyName(trimmed)
+        savedName = trimmed
+        name = trimmed
+    }
+
+    func reset() { name = ""; savedName = ""; email = "" }
+}
+
 /// Runs a backend write in the background. A failure is reported through
 /// `SyncState.writeError`, and either way the app re-syncs so the screen shows
 /// what the server actually has.
@@ -107,6 +153,8 @@ class AppSync {
         if isKidDevice { await syncKidDevice(); return }
         do {
             let apiChildren = try await APIClient.shared.fetchChildren()
+            // The parent's own profile doesn't depend on having children yet.
+            if let me = try? await APIClient.shared.fetchMe() { ParentProfile.shared.load(me) }
 
             // If backend is empty (no kids paired/created), nothing to sync yet
             guard !apiChildren.isEmpty else {

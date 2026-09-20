@@ -108,6 +108,21 @@ def login(request: schemas.EmailAuthRequest, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
+@router.get("/me", response_model=schemas.ParentResponse)
+def get_me(current_parent: models.Parent = Depends(get_current_parent)):
+    """The signed-in parent's own profile."""
+    return current_parent
+
+
+@router.put("/me", response_model=schemas.ParentResponse)
+def update_me(update: schemas.ParentUpdate, current_parent: models.Parent = Depends(get_current_parent),
+              db: Session = Depends(get_db)):
+    current_parent.name = update.name
+    db.commit()
+    db.refresh(current_parent)
+    return current_parent
+
+
 @router.post("/refresh", response_model=schemas.RefreshResponse)
 def refresh(request: schemas.RefreshRequest):
     """Trade a Supabase refresh token for a fresh access token. Access tokens

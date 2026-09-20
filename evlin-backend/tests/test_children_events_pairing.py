@@ -271,3 +271,23 @@ def test_deleting_the_downtime_rule_clears_its_times(client, db_session):
     put({"daily_limit_minutes": 60, "downtime_enabled": False, "downtime_clear": True})
     got = client.get(f"/children/{kid.id}/rules", headers=auth("pa")).json()
     assert got["downtime_enabled"] is False and got["downtime_start"] is None and got["downtime_end"] is None
+
+
+# ---- parent profile -----------------------------------------------------
+
+def test_parent_name_saved_trimmed_and_private_to_that_parent(client, db_session):
+    make_parent(db_session, "pa", "ada@example.com"), make_parent(db_session, "pb", "bo@example.com")
+    assert client.get("/auth/me", headers=auth("pa")).json()["name"] is None
+    r = client.put("/auth/me", headers=auth("pa"), json={"name": "  Ada Lovelace "})
+    assert r.status_code == 200 and r.json()["name"] == "Ada Lovelace"
+    assert client.get("/auth/me", headers=auth("pa")).json()["name"] == "Ada Lovelace"
+    assert client.get("/auth/me", headers=auth("pb")).json()["name"] is None
+
+
+def test_parent_name_validation_and_auth(client, db_session):
+    make_parent(db_session, "pa")
+    assert client.put("/auth/me", headers=auth("pa"), json={"name": "   "}).status_code == 422
+    assert client.put("/auth/me", headers=auth("pa"), json={}).status_code == 422
+    assert client.put("/auth/me", json={"name": "x"}).status_code in (401, 403)
+    long = client.put("/auth/me", headers=auth("pa"), json={"name": "x" * 200}).json()["name"]
+    assert len(long) == 60
