@@ -577,7 +577,7 @@ private struct ChatSuggestion: Identifiable {
 }
 
 private let welcomeSuggestions: [ChatSuggestion] = [
-    ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review Liam's progress", prompt: "How is Liam doing with his tasks today?", card: .reviewCompliance(childId: session.activeChildId ?? "", childName: "Liam")),
+    ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review Liam's progress", prompt: "How is Liam doing with his tasks today?", card: .reviewCompliance(childId: SessionManager.shared.activeChildId ?? "", childName: "Liam")),
     ChatSuggestion(icon: "gavel", title: "Set a bedtime rule", prompt: "Lock all apps at 9pm on school nights"),
     ChatSuggestion(
         icon: "sf:checklist", title: "Add a task",
