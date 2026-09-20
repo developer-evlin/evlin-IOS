@@ -55,7 +55,6 @@ def _generate_occurrences_for_date(child_id: UUID, target_date: date, db: Sessio
                 due_time=task.due_time,
                 status="pending",
                 gates_apps=task.gates_apps,
-                points=task.points
             ))
     db.commit()
 

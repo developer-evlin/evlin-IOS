@@ -85,7 +85,6 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         due_date=parsed_date,
         recurrence=task.recurrence,
         gates_apps=task.gates_apps,
-        points=task.points,
         submission_kind=_safe_submission_kind(task.submission_kind),
         active=task.active
     )
@@ -113,7 +112,6 @@ def update_task(task_id: UUID, task_update: schemas.TaskCreate, current_parent: 
     db_task.bucket = _derive_bucket(db_task.due_time)  # keep in sync either way
     db_task.recurrence = task_update.recurrence
     db_task.gates_apps = task_update.gates_apps
-    db_task.points = task_update.points
     db_task.submission_kind = _safe_submission_kind(task_update.submission_kind)
     db_task.active = task_update.active
 

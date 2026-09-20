@@ -235,7 +235,7 @@ def test_rules_update_with_only_the_fields_the_app_sends(client, db_session):
                    json={"daily_limit_minutes": 90, "downtime_enabled": True})
     assert r.status_code == 200, r.text
     assert r.json()["daily_limit_minutes"] == 90 and r.json()["downtime_enabled"] is True
-    assert r.json()["blocked_categories"] == []   # untouched
+    assert "blocked_categories" not in r.json()
 
 
 def test_state_update_and_ownership(client, db_session):
@@ -261,6 +261,14 @@ def test_rules_persist_toggle_and_custom_rules(client, db_session):
     client.put(f"/children/{kid.id}/rules", headers=auth("pa"), json={"daily_limit_minutes": 30, "downtime_enabled": True})
     again = client.get(f"/children/{kid.id}/rules", headers=auth("pa")).json()
     assert again["custom_rules"] == custom and again["daily_limit_minutes"] == 30
+
+
+def test_rules_response_no_longer_carries_dead_fields(client, db_session):
+    p = make_parent(db_session, "pa")
+    kid = make_child(db_session, p)
+    got = client.get(f"/children/{kid.id}/rules", headers=auth("pa")).json()
+    for dead in ("bedtime_enabled", "bedtime_start", "bedtime_end", "blocked_categories"):
+        assert dead not in got
 
 
 def test_deleting_the_downtime_rule_clears_its_times(client, db_session):

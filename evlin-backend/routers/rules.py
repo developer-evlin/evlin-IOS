@@ -34,13 +34,6 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
         rules.downtime_start = time.fromisoformat(rules_update.downtime_start)
     if rules_update.downtime_end:
         rules.downtime_end = time.fromisoformat(rules_update.downtime_end)
-        
-    if rules_update.bedtime_enabled is not None:
-        rules.bedtime_enabled = rules_update.bedtime_enabled
-    if rules_update.bedtime_start:
-        rules.bedtime_start = time.fromisoformat(rules_update.bedtime_start)
-    if rules_update.bedtime_end:
-        rules.bedtime_end = time.fromisoformat(rules_update.bedtime_end)
 
     if rules_update.downtime_clear:
         rules.downtime_start = None
@@ -49,8 +42,6 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
         rules.daily_limit_enabled = rules_update.daily_limit_enabled
     if rules_update.custom_rules is not None:
         rules.custom_rules = rules_update.custom_rules
-    if rules_update.blocked_categories is not None:
-        rules.blocked_categories = rules_update.blocked_categories
     rules.updated_at = datetime.now(timezone.utc)
     
     db.commit()
@@ -77,7 +68,6 @@ def update_child_state(child_id: UUID, state_update: schemas.ChildStateUpdate, c
         
     state.manual_lock = state_update.manual_lock
     state.task_gate_override = state_update.task_gate_override
-    state.last_tripwire_minutes = state_update.last_tripwire_minutes
     state.updated_at = datetime.now(timezone.utc)
     
     db.commit()

@@ -48,9 +48,6 @@ struct ApiChildRule: Codable {
     let downtimeEnabled: Bool
     let downtimeStart: String?
     let downtimeEnd: String?
-    let bedtimeEnabled: Bool
-    let bedtimeStart: String?
-    let bedtimeEnd: String?
     let dailyLimitEnabled: Bool?
     let customRules: [ApiCustomRule]?
 }

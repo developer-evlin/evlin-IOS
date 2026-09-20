@@ -97,10 +97,8 @@ class Task(Base):
     due_date = Column(Date)
     recurrence = Column(String, nullable=False, default="daily")
     gates_apps = Column(Boolean, nullable=False, default=True)
-    points = Column(Integer, nullable=False, default=0)
     submission_kind = Column(String, nullable=False, default="none")
     active = Column(Boolean, nullable=False, default=True)
-    comic_id = Column(UUID(as_uuid=True))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class Occurrence(Base):
@@ -114,7 +112,6 @@ class Occurrence(Base):
     due_time = Column(Time)
     status = Column(String, nullable=False, default="pending")
     gates_apps = Column(Boolean, nullable=False)
-    points = Column(Integer, nullable=False, default=0)
     completed_at = Column(DateTime(timezone=True))
     approved_at = Column(DateTime(timezone=True))
     approved_by = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
@@ -147,10 +144,6 @@ class ChildRule(Base):
     downtime_enabled = Column(Boolean, nullable=False, default=False)
     downtime_start = Column(Time)
     downtime_end = Column(Time)
-    bedtime_enabled = Column(Boolean, nullable=False, default=False)
-    bedtime_start = Column(Time)
-    bedtime_end = Column(Time)
-    blocked_categories = Column(ARRAY(String), nullable=False, default=[])
     # Whether the daily screen-time limit is switched on, and the parent's
     # free-form rules (from chat): [{"id","title","detail","icon","on"}].
     daily_limit_enabled = Column(Boolean, nullable=False, default=True)
@@ -164,8 +157,6 @@ class ChildState(Base):
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), primary_key=True)
     manual_lock = Column(Boolean, nullable=False, default=False)
     task_gate_override = Column(Boolean, nullable=False, default=False)
-    last_tripwire_minutes = Column(Integer)
-    last_tripwire_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class ICSFeed(Base):

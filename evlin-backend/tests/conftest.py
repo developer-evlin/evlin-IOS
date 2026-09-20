@@ -98,7 +98,7 @@ def make_child(db, parent, name="Kid"):
     db.add(c)
     db.commit()
     db.add(models.ParentChild(parent_id=parent.id, child_id=c.id, role="primary"))
-    db.add(models.ChildRule(child_id=c.id, daily_limit_minutes=60, downtime_enabled=False, bedtime_enabled=False, blocked_categories=[]))
+    db.add(models.ChildRule(child_id=c.id, daily_limit_minutes=60, downtime_enabled=False))
     db.add(models.ChildState(child_id=c.id, manual_lock=False, task_gate_override=False))
     db.commit()
     return c

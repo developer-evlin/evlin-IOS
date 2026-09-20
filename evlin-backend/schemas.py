@@ -93,7 +93,6 @@ class TaskBase(BaseModel):
     due_date: Optional[str] = None # "YYYY-MM-DD"
     recurrence: str = "daily"
     gates_apps: bool = True
-    points: int = 0
     submission_kind: str = "none"
     active: bool = True
 
@@ -116,7 +115,6 @@ class TaskResponse(TaskBase):
 
     id: UUID
     child_id: UUID
-    comic_id: Optional[UUID] = None
     created_at: datetime
 
     class Config:
@@ -125,7 +123,6 @@ class TaskResponse(TaskBase):
 class OccurrenceBase(BaseModel):
     status: str
     gates_apps: bool
-    points: int
     bypass_requested: bool
     bypass_note: Optional[str] = None
     rejection_note: Optional[str] = None
@@ -201,22 +198,12 @@ class ChildRuleBase(BaseModel):
     downtime_enabled: bool
     downtime_start: Optional[str] = None
     downtime_end: Optional[str] = None
-    bedtime_enabled: bool
-    bedtime_start: Optional[str] = None
-    bedtime_end: Optional[str] = None
-    blocked_categories: List[str]
 
 class ChildRuleUpdate(BaseModel):
-    # Only the daily limit and downtime switch are required: the app doesn't
-    # send bedtime/blocked categories, and omitting them must leave them as-is.
     daily_limit_minutes: int
     downtime_enabled: bool
     downtime_start: Optional[str] = None
     downtime_end: Optional[str] = None
-    bedtime_enabled: Optional[bool] = None
-    bedtime_start: Optional[str] = None
-    bedtime_end: Optional[str] = None
-    blocked_categories: Optional[List[str]] = None
     daily_limit_enabled: Optional[bool] = None
     custom_rules: Optional[List[dict]] = None
     # True when the parent deleted the Downtime rule: forgets its times.
@@ -224,7 +211,7 @@ class ChildRuleUpdate(BaseModel):
 
 class ChildRuleResponse(ChildRuleBase):
     # ORM rows hold time objects; the API exposes "HH:MM:SS" strings.
-    @field_validator("downtime_start", "downtime_end", "bedtime_start", "bedtime_end", mode="before")
+    @field_validator("downtime_start", "downtime_end", mode="before")
     @classmethod
     def _iso_time(cls, v):
         return v.isoformat() if hasattr(v, "isoformat") else v
@@ -240,14 +227,12 @@ class ChildRuleResponse(ChildRuleBase):
 class ChildStateBase(BaseModel):
     manual_lock: bool
     task_gate_override: bool
-    last_tripwire_minutes: Optional[int] = None
 
 class ChildStateUpdate(ChildStateBase):
     pass
 
 class ChildStateResponse(ChildStateBase):
     child_id: UUID
-    last_tripwire_at: Optional[datetime] = None
     updated_at: datetime
 
     class Config:

@@ -45,6 +45,22 @@ _MIGRATIONS = [
                    OR recurrence ~ '^(mon|tue|wed|thu|fri|sat|sun)(,(mon|tue|wed|thu|fri|sat|sun)){0,6}$');
     EXCEPTION WHEN duplicate_object THEN NULL;
     END $$""",
+    # Dropping columns the app never reads or writes — see the schema audit:
+    # tasks/occurrences.points (no gamification UI exists), tasks.comic_id
+    # (the comics/rewards feature was never built — nothing can even set
+    # this over the API), child_state.last_tripwire_* (nothing computes a
+    # tripwire), child_rules.blocked_categories (the original SQL's own
+    # comment called it "intent only"), and child_rules.bedtime_* (decoded
+    # by the app, then never consulted — a dead duplicate of Downtime).
+    "ALTER TABLE app.tasks DROP COLUMN IF EXISTS points",
+    "ALTER TABLE app.tasks DROP COLUMN IF EXISTS comic_id",
+    "ALTER TABLE app.occurrences DROP COLUMN IF EXISTS points",
+    "ALTER TABLE app.child_state DROP COLUMN IF EXISTS last_tripwire_minutes",
+    "ALTER TABLE app.child_state DROP COLUMN IF EXISTS last_tripwire_at",
+    "ALTER TABLE app.child_rules DROP COLUMN IF EXISTS blocked_categories",
+    "ALTER TABLE app.child_rules DROP COLUMN IF EXISTS bedtime_enabled",
+    "ALTER TABLE app.child_rules DROP COLUMN IF EXISTS bedtime_start",
+    "ALTER TABLE app.child_rules DROP COLUMN IF EXISTS bedtime_end",
     """CREATE TABLE IF NOT EXISTS app.device_pairings (
         code text PRIMARY KEY,
         secret_hash text NOT NULL,

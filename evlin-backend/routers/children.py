@@ -52,8 +52,6 @@ def create_child(child: schemas.ChildCreate, current_parent: models.Parent = Dep
         child_id=new_child.id,
         daily_limit_minutes=60, # Matches frontend default
         downtime_enabled=False,
-        bedtime_enabled=False,
-        blocked_categories=[]
     )
     db.add(default_rules)
     

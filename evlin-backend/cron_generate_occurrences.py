@@ -31,7 +31,6 @@ def generate_daily_occurrences():
                         due_time=task.due_time,
                         status="pending",
                         gates_apps=task.gates_apps,
-                        points=task.points
                     )
                     db.add(new_occurrence)
                     created_count += 1
