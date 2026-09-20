@@ -14,6 +14,12 @@ def get_children(current_parent: models.Parent = Depends(get_current_parent), db
     child_ids = [pc.child_id for pc in parent_children]
     
     children = db.query(models.Child).filter(models.Child.id.in_(child_ids)).all()
+    
+    # Calculate is_paired
+    for child in children:
+        devices = db.query(models.Device).filter(models.Device.child_id == child.id).count()
+        child.is_paired = devices > 0
+        
     return children
 
 @router.post("/children", response_model=schemas.ChildResponse)

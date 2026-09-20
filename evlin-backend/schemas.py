@@ -31,6 +31,7 @@ class ChildCreate(ChildBase):
 class ChildResponse(ChildBase):
     id: UUID
     activated_at: Optional[datetime] = None
+    is_paired: bool = False
     created_at: datetime
 
     class Config:
