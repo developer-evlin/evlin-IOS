@@ -239,7 +239,9 @@ def pair_child(request: schemas.PairChildRequest, db: Session = Depends(get_db))
     access_token = secrets.token_urlsafe(32)
     token_hash = hash_token(access_token)
     
-    # 4. Create the device record
+    # 4. Create the device record (enforce 1 active device by clearing old ones for MVP)
+    db.query(models.Device).filter(models.Device.child_id == child.id).delete()
+    
     device = models.Device(
         child_id=child.id,
         platform=request.platform,
