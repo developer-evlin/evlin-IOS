@@ -397,8 +397,14 @@ struct ParentSignInStep: View {
             } else {
                 providersError = "Failed to sync Google login with backend."
             }
-        } catch {
-            providersError = error.localizedDescription
+        } catch let error as NSError {
+            // ASWebAuthenticationSessionErrorCode.canceledLogin is error code 1
+            if error.domain == ASWebAuthenticationSessionErrorDomain && error.code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                // User intentionally cancelled, just silently ignore it
+                providersError = nil
+            } else {
+                providersError = error.localizedDescription
+            }
         }
         busy = false
     }
@@ -752,6 +758,10 @@ struct ParentShowCodeStep: View {
         .task {
             await fetchCode()
         }
+        .onDisappear {
+            pollingTask?.cancel()
+            pollingTask = nil
+        }
     }
 
     
@@ -775,15 +785,18 @@ struct ParentShowCodeStep: View {
     private func startPolling() {
         pollingTask?.cancel()
         pollingTask = Task {
-            while !Task.isCancelled {
+            // Cap at 150 attempts (5 minutes at 2s intervals) so the loop
+            // never runs indefinitely if the child device never connects.
+            var attempts = 0
+            let maxAttempts = 150
+            while !Task.isCancelled && attempts < maxAttempts {
                 try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
                 if Task.isCancelled { break }
+                attempts += 1
                 
                 let result = (try? await APIClient.shared.checkPairingStatus(code: code)) ?? (paired: false, kidName: nil)
                 if result.paired {
                     await MainActor.run {
-                        // Pass the kidName string along through a NotificationCenter notification 
-                        // so the Coordinator can update its @State kidName before transitioning
                         if let kidName = result.kidName {
                             NotificationCenter.default.post(name: NSNotification.Name("EvlinKidPaired"), object: kidName)
                         }
