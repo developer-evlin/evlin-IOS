@@ -1,10 +1,16 @@
 import SwiftUI
 
-// Paged task review — opened when a parent taps a task row. Swipe left to
-// move to the next task, right to go back; Approve/Redo are button-only
-// decisions (not tied to swipe direction, since swiping is now navigation).
+// Tinder-style task review — opened when a parent taps a task row. A
+// submitted task (task.state == .review — the kid has actually turned
+// something in, so there's a real decision to make) is a draggable card:
+// swipe right to approve, left to ask for a redo, with the same live
+// tilt/stamp feedback Tinder gives while dragging. Every other state
+// (nothing submitted yet, already resolved, a bypass request) shows the
+// same card without the gesture — there's no decision a drag could
+// represent for those, so it's buttons only, same as before.
 // A Redo always pauses on a small compose step first so the parent can send
-// the kid a quick note or voice message about what to fix.
+// the kid a quick note or voice message about what to fix — swiping left
+// past the threshold opens that same compose step rather than skipping it.
 struct TaskReviewDeckView: View {
     @Binding var tasks: [ChildTask]
     var childName: String
@@ -23,14 +29,14 @@ struct TaskReviewDeckView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var index: Int
-    // Drives the actual paging (see the ScrollView pager in body); kept as
-    // a separate Optional Int rather than reusing `index` directly because
-    // .scrollPosition(id:) needs that shape. Synced both ways with equality
-    // guards below so neither a swipe nor a button-triggered advance() can
-    // fight the other into a feedback loop.
-    @State private var scrollPosition: Int?
     @State private var showRedoCompose = false
     @State private var editingTask: ChildTask?
+    // The current card's live drag position — reset to .zero every time
+    // the card underneath it changes (advance()/back()), or the next
+    // card would render already offset from whatever the previous one
+    // ended up at.
+    @State private var dragOffset: CGSize = .zero
+    private let swipeThreshold: CGFloat = 120
 
     init(tasks: Binding<[ChildTask]>, childName: String, childId: String? = nil, startIndex: Int, onDismiss: @escaping () -> Void) {
         self._tasks = tasks
@@ -39,7 +45,6 @@ struct TaskReviewDeckView: View {
         self.startIndex = startIndex
         self.onDismiss = onDismiss
         _index = State(initialValue: startIndex)
-        _scrollPosition = State(initialValue: startIndex)
     }
 
     private var currentTask: ChildTask? { tasks.indices.contains(index) ? tasks[index] : nil }
@@ -76,45 +81,7 @@ struct TaskReviewDeckView: View {
 
                 if let task = currentTask {
                     VStack(spacing: 18) {
-                        // A hand-built pager (ScrollView + .paging target
-                        // behavior), not TabView(.page) — TabView's page
-                        // style is backed by a UICollectionView whose
-                        // bounce/gesture handling is documented to conflict
-                        // with a nested ScrollView (exactly TaskReviewCard's
-                        // own vertical scroll for a long submission): after
-                        // scrolling down inside a card, the horizontal
-                        // swipe-to-next-task gesture could take a second or
-                        // two to respond again. A plain ScrollView is backed
-                        // by UIScrollView instead, which handles nested
-                        // orthogonal scroll views (this is exactly how
-                        // Photos/Mail's attachment browsers work) without
-                        // that conflict.
-                        ScrollView(.horizontal) {
-                            LazyHStack(spacing: 0) {
-                                ForEach(Array(tasks.enumerated()), id: \.offset) { i, t in
-                                    TaskReviewCard(task: t, childName: childName)
-                                        .containerRelativeFrame(.horizontal)
-                                        .id(i)
-                                }
-                            }
-                            .scrollTargetLayout()
-                        }
-                        .scrollTargetBehavior(.paging)
-                        .scrollPosition(id: $scrollPosition)
-                        .scrollIndicators(.hidden)
-                        .onChange(of: scrollPosition) { _, newValue in
-                            guard let newValue, newValue != index else { return }
-                            index = newValue
-                        }
-                        // A spring (not a flat ease) so a button-triggered
-                        // advance still carries the same snap/settle a real
-                        // finger-drag page-swipe has, rather than reading as
-                        // a plain fade/slide.
-                        .onChange(of: index) { _, newValue in
-                            guard scrollPosition != newValue else { return }
-                            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { scrollPosition = newValue }
-                        }
-
+                        cardStack(for: task)
                         actionButtons(for: task)
                     }
                     // Horizontal margin wider than the card's own 24pt
@@ -132,7 +99,24 @@ struct TaskReviewDeckView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss(); onDismiss() }
+                    HStack(spacing: 4) {
+                        Button("Close") { dismiss(); onDismiss() }
+                        // Swiping used to also mean "go back to the
+                        // previous card" (plain navigation, no decision).
+                        // A drag is spoken for now (approve/redo on a
+                        // submitted card), so this is what replaces it —
+                        // a plain step back, no decision attached.
+                        if index > 0 {
+                            Button { back() } label: {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .frame(width: 32, height: 32)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                        }
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if let task = currentTask {
@@ -153,9 +137,19 @@ struct TaskReviewDeckView: View {
                 RedoComposeSheet(childName: childName, taskTitle: task.title, actionLabel: secondaryLabel(for: task) ?? "Redo", onSend: { note, hasVoice in
                     applyRedo(note: note, hasVoice: hasVoice)
                     showRedoCompose = false
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
+                    // Finish the fly-off-left the swipe started, then bring
+                    // in the next card fresh (no leftover offset).
+                    withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: -520, height: dragOffset.height) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                        dragOffset = .zero
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
+                    }
                 }, onCancel: {
                     showRedoCompose = false
+                    // A swipe-initiated redo leans the card out before this
+                    // sheet appears (see the drag gesture) — cancelling
+                    // means the decision didn't happen, so it springs back.
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { dragOffset = .zero }
                 })
                 .interactiveDismissDisabled()
                 .presentationDetents([.large])
@@ -237,7 +231,13 @@ struct TaskReviewDeckView: View {
             tasks[i].state = task.state == .bypass ? .bypassed : .done
         }
         unlockIfEverythingResolved()
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
+        // Same fly-off-right whether this came from a swipe or the Approve
+        // button — the transition means "approved", not "you dragged it".
+        withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: 520, height: dragOffset.height) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            dragOffset = .zero
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
+        }
     }
 
     // Mirrors ScreenProfile's approveAllPendingReview() — approving the
@@ -293,6 +293,96 @@ struct TaskReviewDeckView: View {
 
     private func advance() {
         index += 1
+    }
+
+    private func back() {
+        guard index > 0 else { return }
+        dragOffset = .zero
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { index -= 1 }
+    }
+
+    // MARK: - Tinder-style card stack
+
+    // A faint peek of the next card sitting behind the current one — the
+    // same stacked-deck read Tinder has — plus the current card itself,
+    // draggable only when there's an actual decision a drag could mean
+    // (task.state == .review: the kid submitted something, nothing to
+    // decide otherwise).
+    @ViewBuilder
+    private func cardStack(for task: ChildTask) -> some View {
+        ZStack {
+            if tasks.indices.contains(index + 1) {
+                TaskReviewCard(task: tasks[index + 1], childName: childName)
+                    .scaleEffect(0.94)
+                    .opacity(0.5)
+                    .allowsHitTesting(false)
+            }
+            if task.state == .review {
+                swipeableCard(for: task)
+            } else {
+                TaskReviewCard(task: task, childName: childName)
+            }
+        }
+    }
+
+    private func swipeableCard(for task: ChildTask) -> some View {
+        // Tracks toward the threshold only, not the raw pixel distance —
+        // a stamp fully visible well before the drag would actually
+        // commit reads as "you've done enough," which is the wrong signal.
+        let progress = min(abs(dragOffset.width) / swipeThreshold, 1)
+        return TaskReviewCard(task: task, childName: childName)
+            .rotationEffect(.degrees(Double(dragOffset.width / 16)))
+            .offset(dragOffset)
+            .overlay(alignment: .topLeading) {
+                swipeStamp("APPROVE", systemImage: "checkmark.circle.fill", tint: Color(hex: "25924A"))
+                    .opacity(dragOffset.width > 0 ? progress : 0)
+                    .rotationEffect(.degrees(-12))
+                    .padding(20)
+            }
+            .overlay(alignment: .topTrailing) {
+                swipeStamp("REDO", systemImage: "arrow.uturn.backward.circle.fill", tint: Color(hex: "EF6C00"))
+                    .opacity(dragOffset.width < 0 ? progress : 0)
+                    .rotationEffect(.degrees(12))
+                    .padding(20)
+            }
+            // simultaneousGesture, not gesture — TaskReviewCard's body is
+            // itself a ScrollView (a long submission can need real
+            // vertical scrolling), and a plain .gesture() here would claim
+            // the touch outright and block that scroll, the same conflict
+            // this file's old pager comment described. Running alongside
+            // the ScrollView's own pan instead, filtered to horizontal-
+            // dominant drags only, leaves vertical scrolling untouched.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { value in
+                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                        dragOffset = value.translation
+                    }
+                    .onEnded { value in
+                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                        if value.translation.width > swipeThreshold {
+                            approve(task)
+                        } else if value.translation.width < -swipeThreshold {
+                            // Leans the card out; the compose sheet (opened
+                            // below) is the real commit — see its onSend/
+                            // onCancel for how the card actually resolves.
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                dragOffset = CGSize(width: -swipeThreshold * 0.6, height: 0)
+                            }
+                            showRedoCompose = true
+                        } else {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { dragOffset = .zero }
+                        }
+                    }
+            )
+    }
+
+    private func swipeStamp(_ label: String, systemImage: String, tint: Color) -> some View {
+        Label(label, systemImage: systemImage)
+            .font(Typography.font(18, weight: .heavy))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint, lineWidth: 3))
     }
 }
 
