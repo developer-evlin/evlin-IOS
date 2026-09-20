@@ -16,7 +16,7 @@ struct ScreenSettings: View {
 
     // Parent identity — shown in the account header and edited in the
     // account sheet (parentProfilePage).
-    @State private var parentName = "Alex Carter"
+    @State private var parentName = "Parent"
     @State private var parentAvatar: UIImage?
     @State private var showChangeParentPicture = false
     @State private var parentLibraryItem: PhotosPickerItem?
