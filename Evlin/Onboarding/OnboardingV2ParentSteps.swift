@@ -708,16 +708,12 @@ enum BetaAgreementContent {
     static let privacySections: [Section] = [sections[3]]
 }
 
-// MARK: - 6 · Show Code to Pair
+// MARK: - 6 · Scan or type the code shown on the kid's device
 
-struct ParentShowCodeStep: View {
-    let onContinue: () -> Void
+struct ParentScanCodeStep: View {
+    /// Called with the child's name once the code has been accepted.
+    let onPaired: (String) -> Void
     var onBack: (() -> Void)? = nil
-
-    @State private var code = "------"
-    @State private var expiresAt = ""
-    @State private var busy = true
-    @State private var errorText: String?
 
     var body: some View {
         OnboardingV2ScreenContainer(
@@ -733,109 +729,25 @@ struct ParentShowCodeStep: View {
             content: {
                 VStack(spacing: Spacing.lg) {
                     VStack(spacing: 8) {
-                        Text("Pair Your Child's Device")
+                        Text("Connect Your Child's Device")
                             .onboardingV2TitleL()
                             .fontWeight(.bold)
                             .multilineTextAlignment(.center)
-                        Text("Enter this 6-digit code on your child's iPad to link it to your account.")
+                        Text("Open Evlin on your child's device and choose Child. Scan the QR code it shows, or type the 6-digit code.")
                             .onboardingV2Body()
                             .multilineTextAlignment(.center)
                     }
-
-                    if busy {
-                        ProgressView("Generating secure code...")
-                            .padding(.vertical, Spacing.xl)
-                    } else {
-                        Text(code)
-                            .font(.system(size: 48, weight: .bold, design: .monospaced))
-                            .tracking(8)
-                            .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
-                            .padding(.vertical, Spacing.xl)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.fieldCornerRadius, style: .continuous)
-                                    .fill(OnboardingV2Theme.Palette.surfaceContainer)
-                            )
-                        
-                        if !expiresAt.isEmpty {
-                            CountdownView(expiresAtISO: expiresAt)
-                        }
-                    }
-
-                    if let errorText {
-                        Text(errorText)
-                            .font(OnboardingV2Theme.Typography.bodyXS)
-                            .foregroundStyle(OnboardingV2Theme.Palette.error)
-                            .multilineTextAlignment(.center)
-                    }
-
-                    if !busy {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("Waiting for child device to connect...")
-                                .font(OnboardingV2Theme.Typography.bodyXS)
-                                .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
-                        }
-                        .padding(.top, Spacing.md)
+                    PairCodeEntry(accent: OnboardingV2Theme.Palette.primary) { code in
+                        let child = try await APIClient.shared.claimPairing(code: code)
+                        SessionManager.shared.activeChildId = child.id
+                        // RootView uses this as the child's name until the first sync lands.
+                        NotificationCenter.default.post(name: NSNotification.Name("EvlinKidPaired"), object: child.name)
+                        onPaired(child.name)
                     }
                 }
             },
             footer: { }
         )
-        .task {
-            await fetchCode()
-        }
-        .onDisappear {
-            pollingTask?.cancel()
-            pollingTask = nil
-        }
-    }
-
-    
-    @State private var pollingTask: Task<Void, Never>? = nil
-    @State private var pairingChildId: String?
-
-    private func fetchCode() async {
-        busy = true
-        errorText = nil
-        do {
-            // Generates a live pairing code and auto-creates a Child record on the backend
-            let result = try await APIClient.shared.generatePairingCode()
-            code = result.code
-            expiresAt = result.expiresAt
-            pairingChildId = result.childId
-            if let childId = result.childId { SessionManager.shared.activeChildId = childId }
-            startPolling()
-        } catch {
-            errorText = "Failed to generate pairing code. Please try again."
-        }
-        busy = false
-    }
-    
-    private func startPolling() {
-        pollingTask?.cancel()
-        pollingTask = Task {
-            // Cap at 150 attempts (5 minutes at 2s intervals) so the loop
-            // never runs indefinitely if the child device never connects.
-            var attempts = 0
-            let maxAttempts = 150
-            while !Task.isCancelled && attempts < maxAttempts {
-                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-                if Task.isCancelled { break }
-                attempts += 1
-                
-                let result = (try? await APIClient.shared.checkPairingStatus(code: code, childId: pairingChildId)) ?? (paired: false, kidName: nil)
-                if result.paired {
-                    await MainActor.run {
-                        if let kidName = result.kidName {
-                            NotificationCenter.default.post(name: NSNotification.Name("EvlinKidPaired"), object: kidName)
-                        }
-                        onContinue()
-                    }
-                    break
-                }
-            }
-        }
     }
 }
 

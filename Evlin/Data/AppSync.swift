@@ -9,6 +9,59 @@ import Observation
 final class SyncState {
     static let shared = SyncState()
     var version = 0
+    /// Set when a background save (approve, lock, rule edit, …) fails, so the
+    /// UI can tell the user instead of the change silently bouncing back.
+    var writeError: String?
+}
+
+/// Runs a backend write in the background. A failure is reported through
+/// `SyncState.writeError`, and either way the app re-syncs so the screen shows
+/// what the server actually has.
+@MainActor
+enum BackendWrite {
+    static func run(_ what: String, _ work: @escaping () async throws -> Void) {
+        Task {
+            do { try await work() }
+            catch { SyncState.shared.writeError = "\(what) wasn't saved. \(error.apiUserMessage)" }
+            await AppSync.shared.syncBackendData()
+        }
+    }
+}
+
+extension Child {
+    /// Persists this child's rules (limit, downtime, custom rules) after any local edit.
+    func pushRules() {
+        let id = self.id
+        let body = RuleSync.payload(for: self)
+        BackendWrite.run("That rule change") { try await APIClient.shared.saveRules(childId: id, body: body) }
+    }
+}
+
+enum RuleSync {
+    private static func hhmmss(_ d: Date) -> String {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+        return String(format: "%02d:%02d:00", c.hour ?? 0, c.minute ?? 0)
+    }
+
+    @MainActor static func payload(for child: Child) -> [String: Any] {
+        let limit = child.rules.first { $0.kind == .screenTimeLimit }
+        let downtime = child.rules.first { $0.kind == .downtime }
+        var body: [String: Any] = [
+            "daily_limit_minutes": child.dailyLimitMin,
+            "daily_limit_enabled": limit?.on ?? true,
+            "downtime_enabled": downtime?.on ?? false,
+            "custom_rules": child.rules.filter { $0.kind == .custom }.map {
+                ["id": $0.id, "title": $0.title, "detail": $0.detail, "icon": $0.icon, "on": $0.on] as [String: Any]
+            },
+        ]
+        if let downtime {
+            body["downtime_start"] = hhmmss(downtime.downtimeFrom)
+            body["downtime_end"] = hhmmss(downtime.downtimeTo)
+        } else {
+            body["downtime_clear"] = true
+        }
+        return body
+    }
 }
 
 @MainActor
@@ -109,11 +162,18 @@ class AppSync {
         for task in apiTasks {
             let occurrence = apiOccurrences.first(where: { $0.taskId == task.id })
 
+            let bypass = occurrence?.bypassRequested ?? false
             let uiState: TaskState
             switch occurrence?.status {
-            case "approved": uiState = .done
+            case "approved": uiState = bypass ? .bypassed : .done
             case "submitted": uiState = .review
-            default: uiState = .pending // includes rejected: goes back to the kid
+            case "rejected": uiState = .pending // a redo: goes back to the kid
+            default: uiState = bypass ? .bypass : .pending
+            }
+            var redoNote: String? = nil
+            if occurrence?.status == "rejected" {
+                let n = occurrence?.rejectionNote ?? ""
+                redoNote = n.isEmpty ? "Please try again." : n
             }
 
             // The backend only creates an occurrence on days a task actually
@@ -140,33 +200,32 @@ class AppSync {
                 dueLabel: dueLabel,
                 dueDate: dueDate,
                 photoCount: task.submissionKind == "photo" ? 1 : 0,
-                repeats: CalendarSync.repeatCodes(task.recurrence)
+                repeats: CalendarSync.repeatCodes(task.recurrence),
+                redoNote: redoNote
             ))
         }
         TaskStore.binding(for: id).wrappedValue = uiTasks
 
-        // Map Rules. Custom rules only ever exist locally (chat creates them),
-        // so keep those; the two backend-backed ones are rebuilt.
-        var childRules: [ChildRule] = existing?.rules.filter { $0.kind == .custom } ?? []
-        var backendRules: [ChildRule] = [ChildRule(
+        // Map Rules — all of them now live on the backend.
+        var childRules: [ChildRule] = [ChildRule(
             id: "screen-time-limit",
             kind: .screenTimeLimit,
             icon: "sf:hourglass",
             title: "Screen Time Limit",
             detail: "\(formatMinutes(rules.dailyLimitMinutes)) per day",
-            on: true
+            on: rules.dailyLimitEnabled ?? true
         )]
-        if rules.downtimeEnabled {
-            backendRules.append(ChildRule(
-                id: "downtime",
-                kind: .downtime,
-                icon: "dark_mode",
-                title: "Downtime",
-                detail: "\(rules.downtimeStart ?? "8:00 PM") – \(rules.downtimeEnd ?? "7:00 AM")",
-                on: true
-            ))
+        // The Downtime rule exists once it has times (it can still be switched off).
+        if rules.downtimeEnabled || rules.downtimeStart != nil {
+            var dt = ChildRule(id: "downtime", kind: .downtime, icon: "dark_mode", title: "Downtime", detail: "", on: rules.downtimeEnabled)
+            if let m = CalendarSync.parseTime(rules.downtimeStart) { dt.downtimeFrom = CalendarSync.date(on: Date(), minutes: m) }
+            if let m = CalendarSync.parseTime(rules.downtimeEnd) { dt.downtimeTo = CalendarSync.date(on: Date(), minutes: m) }
+            dt.detail = "\(ChildRule.fmtClock(dt.downtimeFrom)) – \(ChildRule.fmtClock(dt.downtimeTo))"
+            childRules.append(dt)
         }
-        childRules = backendRules + childRules
+        for c in rules.customRules ?? [] {
+            childRules.append(ChildRule(id: c.id, kind: .custom, icon: c.icon, title: c.title, detail: c.detail, on: c.on))
+        }
 
         let palette = FamilyStore.childColorPalette
         let color = palette[apiChild.colorIndex % palette.count]

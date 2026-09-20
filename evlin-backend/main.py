@@ -13,6 +13,17 @@ _MIGRATIONS = [
     "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS category text",
     "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS note text",
     "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS recurrence text NOT NULL DEFAULT 'none'",
+    "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS daily_limit_enabled boolean NOT NULL DEFAULT true",
+    "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS custom_rules jsonb NOT NULL DEFAULT '[]'::jsonb",
+    """CREATE TABLE IF NOT EXISTS app.device_pairings (
+        code text PRIMARY KEY,
+        secret_hash text NOT NULL,
+        child_name text,
+        platform text NOT NULL DEFAULT 'ios',
+        child_id uuid REFERENCES app.children(id) ON DELETE CASCADE,
+        expires_at timestamptz NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
 ]
 
 

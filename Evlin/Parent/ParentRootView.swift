@@ -26,5 +26,14 @@ struct ParentRootView: View {
                 .tag(4)
         }
         .tint(EColor.primary)
+        // Any background save that failed (approve, lock, rule edit, …).
+        .alert("Couldn't save", isPresented: Binding(
+            get: { SyncState.shared.writeError != nil },
+            set: { if !$0 { SyncState.shared.writeError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(SyncState.shared.writeError ?? "")
+        }
     }
 }

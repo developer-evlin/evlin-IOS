@@ -1088,7 +1088,8 @@ struct ScreenChat: View {
         // object itself (not this screen's own state), so it's actually
         // there the next time your child's profile is opened, not just in this
         // chat transcript.
-        FamilyStore.child(session.activeChildId ?? "").rules.append(ChildRule(
+        let blockedChild = FamilyStore.child(session.activeChildId ?? "")
+        blockedChild.rules.append(ChildRule(
             id: UUID().uuidString,
             kind: .custom,
             icon: "sf:nosign",
@@ -1096,6 +1097,7 @@ struct ScreenChat: View {
             detail: minutes.map { "Blocked for \(formatMinutes($0))" } ?? "Blocked until unlocked",
             on: true
         ))
+        blockedChild.pushRules()
     }
 
     private func handleAddTask(_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) {

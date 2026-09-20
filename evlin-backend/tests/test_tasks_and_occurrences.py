@@ -166,3 +166,25 @@ def test_only_the_owning_device_can_submit_and_only_the_parent_can_review(client
     assert client.post(f"/tasks/occurrences/{occ['id']}/submit", headers=auth("dev-other"), json={}).status_code == 404
     assert client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("pb")).status_code == 404
     assert client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("dev-kid")).status_code == 401
+
+
+def test_redo_note_reaches_the_kid_and_resubmitting_clears_it(client, db_session):
+    c, occ = _occurrence(client, db_session)
+    client.post(f"/tasks/occurrences/{occ['id']}/submit", headers=auth("dev-kid"), json={})
+    r = client.put(f"/occurrences/{occ['id']}/status", headers=auth("pa"),
+                   json={"status": "rejected", "rejection_note": "photo is blurry"})
+    assert r.status_code == 200 and r.json()["status"] == "rejected"
+    kid_view = client.get(f"/children/{c.id}/occurrences?target_date=2026-09-20", headers=auth("dev-kid")).json()[0]
+    assert kid_view["rejection_note"] == "photo is blurry"
+    again = client.post(f"/tasks/occurrences/{occ['id']}/submit", headers=auth("dev-kid"), json={}).json()
+    assert again["status"] == "submitted" and again["rejection_note"] is None
+
+
+def test_kid_bypass_request_is_visible_and_approval_keeps_the_flag(client, db_session):
+    c, occ = _occurrence(client, db_session)
+    r = client.post(f"/occurrences/{occ['id']}/bypass", headers=auth("dev-kid"), json={"bypass_note": "sick today"})
+    assert r.status_code == 200 and r.json()["bypass_requested"] is True
+    seen = client.get(f"/children/{c.id}/occurrences?target_date=2026-09-20", headers=auth("pa")).json()[0]
+    assert seen["bypass_requested"] and seen["bypass_note"] == "sick today"
+    ok = client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("pa")).json()
+    assert ok["status"] == "approved" and ok["bypass_requested"] is True   # app shows it as "bypassed"

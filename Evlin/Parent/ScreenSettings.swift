@@ -794,13 +794,18 @@ struct ScreenSettings: View {
                 destructiveLabel: "Delete Account",
                 onConfirm: {
                     Task {
-                        _ = try? await APIClient.shared.deleteAccount()
-                        await MainActor.run {
+                        // Only sign out once the server has actually deleted the
+                        // account; otherwise the account would still exist.
+                        do {
+                            try await APIClient.shared.deleteAccount()
                             showDeleteAccountConfirm = false
                             showParentProfile = false
                             SessionManager.shared.clear()
                             FamilyStore.clear()
                             onSignOut?() ?? onSwitchMode()
+                        } catch {
+                            showDeleteAccountConfirm = false
+                            SyncState.shared.writeError = "Your account wasn't deleted. \(error.apiUserMessage)"
                         }
                     }
                 },
@@ -1120,10 +1125,7 @@ private struct ChildSettingsSheet: View {
             guard newName != nameOnOpen, !newName.isEmpty,
                   FamilyStore.children.contains(where: { $0.id == child.id }) else { return }
             let id = child.id
-            Task {
-                try? await APIClient.shared.updateChild(childId: id, name: newName)
-                await AppSync.shared.syncBackendData()
-            }
+            BackendWrite.run("The new name") { try await APIClient.shared.updateChild(childId: id, name: newName) }
         }
         .sheet(isPresented: $showRemoveConfirm) {
             DestructiveConfirmSheet(
@@ -1139,10 +1141,7 @@ private struct ChildSettingsSheet: View {
                     FamilyStore.removeChild(removedId)
                     // If the backend delete fails the next sync brings the
                     // child back, which is the honest outcome.
-                    Task {
-                        try? await APIClient.shared.deleteChild(childId: removedId)
-                        await AppSync.shared.syncBackendData()
-                    }
+                    BackendWrite.run("Removing the profile") { try await APIClient.shared.deleteChild(childId: removedId) }
                     showRemoveConfirm = false
                     dismiss()
                     onRemoved()
@@ -1249,107 +1248,56 @@ private struct ChildSettingsSheet: View {
 private struct PairingSheet: View {
     @ObservedObject var child: Child
     // True for Settings' "Add a child": `child` is only a stand-in, and the
-    // backend creates the real profile when it issues the code.
+    // backend creates the real profile when the code is claimed.
     var isNewChild = false
-    // Fires once the child's device has actually paired.
+    // Fires once the child's device has been connected.
     var onPaired: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
-    @State private var code: String?
-    @State private var pairingChildId: String?
     @State private var redeemed = false
-    @State private var errorText: String?
+    @State private var connectedName = ""
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                if redeemed {
-                    redeemedView
-                } else if let code {
-                    Text("Enter this code on \(isNewChild ? "your child's" : "\(child.name)'s") device")
-                        .font(Typography.font(20, weight: .heavy))
-                        .foregroundStyle(EColor.onSurface)
-                        .multilineTextAlignment(.center)
-                    codeCard(code)
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text("Waiting for the device…")
-                            .font(Typography.font(13, weight: .regular))
-                            .foregroundStyle(EColor.onSurfaceVariant)
+            ScrollView {
+                VStack(spacing: 22) {
+                    if redeemed {
+                        redeemedView
+                    } else {
+                        VStack(spacing: 8) {
+                            Text(isNewChild ? "Add your child's device" : "Pair \(child.name)'s device")
+                                .font(Typography.font(20, weight: .heavy))
+                                .foregroundStyle(EColor.onSurface)
+                            Text("On the child's device, open Evlin and choose Child. It shows a QR code and a 6-digit code — scan it or type it here.")
+                                .font(Typography.font(13, weight: .regular))
+                                .foregroundStyle(EColor.onSurfaceVariant)
+                                .multilineTextAlignment(.center)
+                        }
+                        PairCodeEntry { code in
+                            let claimed = try await APIClient.shared.claimPairing(
+                                code: code, childId: isNewChild ? nil : child.id, newChild: isNewChild)
+                            connectedName = claimed.name
+                            await AppSync.shared.syncBackendData()
+                            redeemed = true
+                            onPaired?()
+                        }
                     }
-                } else if let errorText {
-                    Text(errorText)
-                        .font(Typography.font(15, weight: .semibold))
-                        .foregroundStyle(EColor.danger)
-                        .multilineTextAlignment(.center)
-                    Button("Try again") { Task { await start() } }
-                } else {
-                    ProgressView()
                 }
-                Spacer(minLength: 0)
+                .padding(24)
             }
-            .padding(24)
             .navigationTitle("Pair a Device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(redeemed ? "Done" : "Cancel") { dismiss() } }
             }
         }
-        // Cancelled automatically when the sheet closes, which also stops
-        // the polling loop inside.
-        .task { await start() }
-    }
-
-    private func start() async {
-        errorText = nil
-        do {
-            let result = try await APIClient.shared.generatePairingCode(
-                childId: isNewChild ? nil : child.id, newChild: isNewChild)
-            code = result.code
-            pairingChildId = result.childId ?? child.id
-            await poll(code: result.code)
-        } catch {
-            errorText = "Couldn't get a pairing code. Check your connection and try again."
-        }
-    }
-
-    private func poll(code: String) async {
-        // Codes last 15 minutes on the backend; stop a little before that.
-        for _ in 0..<420 {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if Task.isCancelled { return }
-            let result = try? await APIClient.shared.checkPairingStatus(code: code, childId: pairingChildId)
-            if result?.paired == true {
-                await AppSync.shared.syncBackendData()
-                redeemed = true
-                onPaired?()
-                return
-            }
-        }
-        self.code = nil
-        errorText = "That code expired."
-    }
-
-    private func codeCard(_ code: String) -> some View {
-        VStack(spacing: 16) {
-            OnboardingV2QRImage(string: OnboardingV2PairPayload.encode(code: code), side: 168)
-            Text(code)
-                .font(Typography.font(34, weight: .heavy))
-                .kerning(6)
-                .foregroundStyle(EColor.onSurface)
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity)
-        .background(EColor.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(EColor.outlineVariant, lineWidth: 1))
     }
 
     private var redeemedView: some View {
         VStack(spacing: 14) {
             Circle().fill(EColor.secondary).frame(width: 64, height: 64)
                 .overlay(Image(systemName: "checkmark").font(.system(size: 26, weight: .bold)).foregroundStyle(.white))
-            Text("\(child.name)'s device is paired")
+            Text("\(connectedName.isEmpty ? child.name : connectedName)'s device is paired")
                 .font(Typography.font(18, weight: .bold))
                 .foregroundStyle(EColor.onSurface)
             Text("Screen time is now enforced on this device.")

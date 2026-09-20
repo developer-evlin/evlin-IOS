@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import models
 from tests.conftest import auth, make_child, make_device, make_parent
 
@@ -74,62 +76,100 @@ def test_event_end_before_start_rejected(client, db_session):
     assert r.status_code == 400
 
 
-# ---- pairing ------------------------------------------------------------
+# ---- pairing (kid shows the code, parent claims it) ---------------------
 
-def test_generate_code_default_reuses_first_child_or_creates_one(client, db_session):
-    p = make_parent(db_session, "pa")
-    r = client.post("/auth/generate-pairing-code", headers=auth("pa"))
+def _request(client, name="Esen"):
+    r = client.post("/auth/pairing/request", json={"child_name": name, "platform": "ios"})
     assert r.status_code == 200, r.text
-    cid = r.json()["child_id"]
-    assert len(r.json()["pairing_code"]) == 6
-    again = client.post("/auth/generate-pairing-code", headers=auth("pa")).json()
-    assert again["child_id"] == cid
+    return r.json()
+
+
+def _status(client, req):
+    return client.post("/auth/pairing/status", json={"code": req["code"], "secret": req["secret"]})
+
+
+def test_kid_requests_code_parent_claims_kid_collects_token(client, db_session):
+    p = make_parent(db_session, "pa")
+    req = _request(client)
+    assert len(req["code"]) == 6 and req["secret"]
+    assert _status(client, req).json() == {"status": "pending", "access_token": None, "child": None}
+
+    claimed = client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req["code"]})
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["name"] == "Esen"          # the name typed on the kid's device
+
+    done = _status(client, req).json()
+    assert done["status"] == "paired" and done["access_token"] and done["child"]["name"] == "Esen"
+    # the token really is a device token for that child, and it is single-use
+    assert client.get("/device/me", headers=auth(done["access_token"])).json()["id"] == done["child"]["id"]
+    assert _status(client, req).status_code == 404
+    kid = client.get("/children", headers=auth("pa")).json()[0]
+    assert kid["is_paired"] is True
     assert db_session.query(models.ParentChild).filter_by(parent_id=p.id).count() == 1
 
 
-def test_generate_code_for_new_child_and_specific_child(client, db_session):
-    a, b = make_parent(db_session, "pa"), make_parent(db_session, "pb")
-    first = make_child(db_session, a)
-    new = client.post("/auth/generate-pairing-code", headers=auth("pa"), json={"new_child": True}).json()
-    assert new["child_id"] != str(first.id)
-    assert db_session.query(models.ParentChild).filter_by(parent_id=a.id).count() == 2
-    specific = client.post("/auth/generate-pairing-code", headers=auth("pa"), json={"child_id": str(first.id)}).json()
-    assert specific["child_id"] == str(first.id)
-    assert client.post("/auth/generate-pairing-code", headers=auth("pb"), json={"child_id": str(first.id)}).status_code == 404
-
-
-def _pair(client, code, name):
-    return client.post("/auth/pair-child", json={"pairing_code": code, "platform": "ios", "child_name": name})
-
-
-def test_full_pairing_flow_updates_name_and_reports_paired(client, db_session):
+def test_only_the_requesting_device_can_collect_the_token(client, db_session):
     make_parent(db_session, "pa")
-    g = client.post("/auth/generate-pairing-code", headers=auth("pa")).json()
-    status = client.get(f"/auth/check-pairing/{g['pairing_code']}?child_id={g['child_id']}", headers=auth("pa")).json()
-    assert status == {"paired": False}
-    r = _pair(client, g["pairing_code"], "Esen")
-    assert r.status_code == 200 and r.json()["access_token"]
-    status = client.get(f"/auth/check-pairing/{g['pairing_code']}?child_id={g['child_id']}", headers=auth("pa")).json()
-    assert status == {"paired": True, "kid_name": "Esen"}
-    kid = client.get("/children", headers=auth("pa")).json()[0]
-    assert kid["name"] == "Esen" and kid["is_paired"] is True
+    req = _request(client)
+    client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req["code"]})
+    stolen = client.post("/auth/pairing/status", json={"code": req["code"], "secret": "guess"})
+    assert stolen.status_code == 404
+    assert _status(client, req).json()["status"] == "paired"   # the real device still can
 
 
-def test_numeric_name_is_ignored_and_code_is_single_use(client, db_session):
-    make_parent(db_session, "pa")
-    g = client.post("/auth/generate-pairing-code", headers=auth("pa")).json()
-    assert _pair(client, g["pairing_code"], "423186").status_code == 200
-    assert client.get("/children", headers=auth("pa")).json()[0]["name"] == "Your Child"
-    assert _pair(client, g["pairing_code"], "Esen").status_code == 400
-
-
-def test_expired_unused_code_is_not_reported_as_paired(client, db_session):
-    make_parent(db_session, "pa")
-    g = client.post("/auth/generate-pairing-code", headers=auth("pa")).json()
-    db_session.query(models.PairingCode).delete()   # what expiry cleanup does
+def test_claim_rejects_bad_expired_and_reused_codes(client, db_session):
+    make_parent(db_session, "pa"), make_parent(db_session, "pb")
+    assert client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": "000000"}).status_code == 400
+    req = _request(client)
+    assert client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req["code"]}).status_code == 200
+    assert client.post("/auth/pairing/claim", headers=auth("pb"), json={"code": req["code"]}).status_code == 409
+    req2 = _request(client)
+    db_session.query(models.DevicePairing).filter_by(code=req2["code"]).update({"expires_at": datetime(2020, 1, 1, tzinfo=timezone.utc)})
     db_session.commit()
-    status = client.get(f"/auth/check-pairing/{g['pairing_code']}?child_id={g['child_id']}", headers=auth("pa")).json()
-    assert status == {"paired": False}
+    assert client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req2["code"]}).status_code == 400
+    assert _status(client, req2).status_code == 404
+
+
+def test_claim_requires_a_parent_login(client, db_session):
+    req = _request(client)
+    assert client.post("/auth/pairing/claim", json={"code": req["code"]}).status_code in (401, 403)
+    assert client.post("/auth/pairing/claim", headers=auth("nope"), json={"code": req["code"]}).status_code == 401
+
+
+def test_claim_targets_new_specific_or_unpaired_child(client, db_session):
+    a, b = make_parent(db_session, "pa"), make_parent(db_session, "pb")
+    existing = make_child(db_session, a, "Your Child")
+    # default: reuse the unpaired profile that already exists
+    r1 = client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": _request(client, "Ada")["code"]}).json()
+    assert r1["id"] == str(existing.id) and r1["name"] == "Ada"
+    # new_child: always another profile
+    r2 = client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": _request(client, "Bo")["code"], "new_child": True}).json()
+    assert r2["id"] != str(existing.id) and r2["name"] == "Bo"
+    assert db_session.query(models.ParentChild).filter_by(parent_id=a.id).count() == 2
+    # specific child, but only your own
+    code = _request(client, "Cy")["code"]
+    assert client.post("/auth/pairing/claim", headers=auth("pb"), json={"code": code, "child_id": str(existing.id)}).status_code == 404
+    r3 = client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": code, "child_id": str(existing.id)}).json()
+    assert r3["id"] == str(existing.id) and r3["name"] == "Ada"   # an already-named profile keeps its name
+
+
+def test_numeric_kid_name_is_ignored(client, db_session):
+    make_parent(db_session, "pa")
+    req = _request(client, "423186")
+    c = client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req["code"]}).json()
+    assert c["name"] == "Your Child"
+
+
+def test_repairing_replaces_the_old_device(client, db_session):
+    a = make_parent(db_session, "pa")
+    kid = make_child(db_session, a, "Esen")
+    make_device(db_session, kid, "old-dev")
+    req = _request(client, "Esen")
+    client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req["code"], "child_id": str(kid.id)})
+    token = _status(client, req).json()["access_token"]
+    assert client.get("/device/me", headers=auth(token)).status_code == 200
+    assert client.get("/device/me", headers=auth("old-dev")).status_code == 401
+    assert db_session.query(models.Device).filter_by(child_id=kid.id).count() == 1
 
 
 def test_delete_account_removes_children_and_devices(client, db_session):
@@ -204,3 +244,30 @@ def test_state_update_and_ownership(client, db_session):
     body = {"manual_lock": True, "task_gate_override": False}
     assert client.put(f"/children/{kid.id}/state", headers=auth("pa"), json=body).json()["manual_lock"] is True
     assert client.put(f"/children/{kid.id}/state", headers=auth("pb"), json=body).status_code == 404
+
+
+def test_rules_persist_toggle_and_custom_rules(client, db_session):
+    p = make_parent(db_session, "pa")
+    kid = make_child(db_session, p)
+    custom = [{"id": "r1", "title": "No TikTok", "detail": "Blocked", "icon": "block", "on": True}]
+    r = client.put(f"/children/{kid.id}/rules", headers=auth("pa"), json={
+        "daily_limit_minutes": 45, "downtime_enabled": True, "downtime_start": "20:00:00", "downtime_end": "07:00:00",
+        "daily_limit_enabled": False, "custom_rules": custom})
+    assert r.status_code == 200, r.text
+    got = client.get(f"/children/{kid.id}/rules", headers=auth("pa")).json()
+    assert got["daily_limit_enabled"] is False and got["custom_rules"] == custom
+    assert got["downtime_start"] == "20:00:00" and got["downtime_end"] == "07:00:00"
+    # an update that omits them leaves them alone
+    client.put(f"/children/{kid.id}/rules", headers=auth("pa"), json={"daily_limit_minutes": 30, "downtime_enabled": True})
+    again = client.get(f"/children/{kid.id}/rules", headers=auth("pa")).json()
+    assert again["custom_rules"] == custom and again["daily_limit_minutes"] == 30
+
+
+def test_deleting_the_downtime_rule_clears_its_times(client, db_session):
+    p = make_parent(db_session, "pa")
+    kid = make_child(db_session, p)
+    put = lambda body: client.put(f"/children/{kid.id}/rules", headers=auth("pa"), json=body)
+    put({"daily_limit_minutes": 60, "downtime_enabled": True, "downtime_start": "20:00:00", "downtime_end": "07:00:00"})
+    put({"daily_limit_minutes": 60, "downtime_enabled": False, "downtime_clear": True})
+    got = client.get(f"/children/{kid.id}/rules", headers=auth("pa")).json()
+    assert got["downtime_enabled"] is False and got["downtime_start"] is None and got["downtime_end"] is None

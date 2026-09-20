@@ -231,10 +231,7 @@ struct TaskReviewDeckView: View {
 
     private func approve(_ task: ChildTask) {
         if let occId = task.occurrenceId {
-            Task {
-                try? await APIClient.shared.approveTask(occurrenceId: occId, reject: false)
-                await AppSync.shared.syncBackendData()
-            }
+            BackendWrite.run("Approving the task") { _ = try await APIClient.shared.approveTask(occurrenceId: occId) }
         }
         if let i = tasks.firstIndex(where: { $0.id == task.id }) {
             tasks[i].state = task.state == .bypass ? .bypassed : .done
@@ -264,11 +261,16 @@ struct TaskReviewDeckView: View {
         tasks[i].state = .pending
         tasks[i].redoNote = note.isEmpty ? nil : note
         tasks[i].redoHasVoiceNote = hasVoice
+        // Send the redo (and the note) to the server so the kid sees it and a
+        // sync doesn't put the task back in review.
+        if let occId = task.occurrenceId {
+            BackendWrite.run("The redo request") { try await APIClient.shared.rejectTask(occurrenceId: occId, note: note) }
+        }
     }
 
     private func applyEdit(_ updated: ChildTask) {
-        Task {
-            try? await APIClient.shared.updateTask(
+        BackendWrite.run("Your task edit") {
+            _ = try await APIClient.shared.updateTask(
                 taskId: updated.id,
                 title: updated.title,
                 instructions: updated.description,
@@ -276,7 +278,6 @@ struct TaskReviewDeckView: View {
                 bucket: updated.category,
                 submissionKind: updated.photoCount > 0 ? "photo" : "button"
             )
-            await AppSync.shared.syncBackendData()
         }
         if let i = tasks.firstIndex(where: { $0.id == updated.id }) {
             tasks[i] = updated
@@ -285,10 +286,7 @@ struct TaskReviewDeckView: View {
     }
 
     private func applyDelete(_ task: ChildTask) {
-        Task {
-            try? await APIClient.shared.deleteTask(taskId: task.id)
-            await AppSync.shared.syncBackendData()
-        }
+        BackendWrite.run("Deleting the task") { _ = try await APIClient.shared.deleteTask(taskId: task.id) }
         tasks.removeAll { $0.id == task.id }
         editingTask = nil
     }

@@ -6,6 +6,12 @@ enum APIError: Error {
 
 }
 
+extension Notification.Name {
+    /// Posted when the backend says the stored login/device token is no
+    /// longer valid and can't be refreshed.
+    static let evlinSessionExpired = Notification.Name("EvlinSessionExpired")
+}
+
 /// A non-2xx answer from the backend, with the status and FastAPI's `detail`.
 struct APIFailure: Error, LocalizedError {
     let status: Int
@@ -124,92 +130,62 @@ class APIClient {
         return false
     }
 
-    func deleteAccount() async throws -> Bool {
-        let url = URL(string: "\(baseURL)/auth/account")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        
-        if let token = SessionManager.shared.parentAccessToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let (_, response) = try await session.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            return true
-        }
-        return false
+    func deleteAccount() async throws {
+        try await send("DELETE", "/auth/account")
     }
 
-    /// Asks the backend for a pairing code. With no arguments it pairs the
-    /// parent's first child (onboarding); `childId` re-pairs that child;
-    /// `newChild` creates another child and pairs that one.
-    func generatePairingCode(childId: String? = nil, newChild: Bool = false) async throws -> (code: String, expiresAt: String, childId: String?) {
-        var body: [String: Any] = [:]
-        if let childId { body["child_id"] = childId }
-        if newChild { body["new_child"] = true }
-        let data: Data
-        do {
-            data = try await send("POST", "/auth/generate-pairing-code", body: body)
-        } catch {
-            throw APIError.serverError("Failed to generate code")
-        }
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let code = json?["pairing_code"] as? String, let expiresAt = json?["expires_at"] as? String else {
+    // MARK: - Pairing (the kid's device shows a code; a parent claims it)
+
+    struct PairingRequestResult { let code: String; let secret: String }
+
+    /// Kid's device: start pairing. Show `code` as text and a QR, then poll
+    /// `pairingStatus`. `secret` proves later that this device is the one that asked.
+    func requestPairing(childName: String?) async throws -> PairingRequestResult {
+        var body: [String: Any] = ["platform": "ios"]
+        if let childName, !childName.isEmpty { body["child_name"] = childName }
+        let json = try JSONSerialization.jsonObject(with: try await sendAnonymous("POST", "/auth/pairing/request", body: body)) as? [String: Any]
+        guard let code = json?["code"] as? String, let secret = json?["secret"] as? String else {
             throw APIError.serverError("Failed to decode response")
         }
-        return (code, expiresAt, json?["child_id"] as? String)
+        return PairingRequestResult(code: code, secret: secret)
     }
-    
-    func pairChildDevice(pairingCode: String, childName: String? = nil) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/auth/pair-child")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        var body: [String: Any] = ["pairing_code": pairingCode, "platform": "ios"]
-        if let childName = childName, !childName.isEmpty {
-            body["child_name"] = childName
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        // A network failure throws (the caller shows "Network error") instead
-        // of pretending pairing worked with a fake token.
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            return false
-        }
-        
+
+    /// Kid's device: has a parent claimed the code yet? On success the device
+    /// token is stored in the session.
+    func pairingStatus(code: String, secret: String) async throws -> ApiChild? {
+        let data = try await sendAnonymous("POST", "/auth/pairing/status", body: ["code": code, "secret": secret])
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let token = json?["access_token"] as? String {
-            SessionManager.shared.childDeviceToken = token
-            return true
-        }
-        return false
+        guard json?["status"] as? String == "paired", let token = json?["access_token"] as? String else { return nil }
+        SessionManager.shared.childDeviceToken = token
+        let childData = try JSONSerialization.data(withJSONObject: json?["child"] ?? [:])
+        let child: ApiChild = try decode(childData)
+        SessionManager.shared.activeChildId = child.id
+        return child
     }
-    
-        func checkPairingStatus(code: String, childId: String? = nil) async throws -> (paired: Bool, kidName: String?) {
-        let query = childId.map { "?child_id=\($0)" } ?? ""
-        let url = URL(string: "\(baseURL)/auth/check-pairing/\(code)\(query)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        
-        if let token = SessionManager.shared.parentAccessToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+    /// Parent: attach the device showing `code` to a child. With no `childId`
+    /// the backend uses an unpaired profile or makes a new one.
+    @discardableResult
+    func claimPairing(code: String, childId: String? = nil, newChild: Bool = false) async throws -> ApiChild {
+        var body: [String: Any] = ["code": code]
+        if let childId { body["child_id"] = childId }
+        if newChild { body["new_child"] = true }
+        return try decode(try await send("POST", "/auth/pairing/claim", body: body))
+    }
+
+    /// Request without the session's token (the kid isn't signed in yet).
+    private func sendAnonymous(_ method: String, _ path: String, body: [String: Any]) async throws -> Data {
+        var request = URLRequest(url: URL(string: "\(baseURL)\(path)")!)
+        request.httpMethod = method
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"]
+            throw APIFailure(status: http.statusCode, detail: detail.map { "\($0)" })
         }
-        
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                return (false, nil)
-            }
-            
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let paired = json?["paired"] as? Bool ?? false
-            let kidName = json?["kid_name"] as? String
-            return (paired, kidName)
-        } catch {
-            return (false, nil)
-        }
+        return data
     }
     
     // MARK: - API Fetching
@@ -257,10 +233,20 @@ class APIClient {
         do {
             return try await sendOnce(method, path, body: body)
         } catch let failure as APIFailure where failure.status == 401 {
-            // Supabase access tokens last about an hour: trade the refresh
-            // token for a new one and retry once before giving up.
-            guard SessionManager.shared.parentAccessToken != nil, await refreshParentToken() else { throw failure }
-            return try await sendOnce(method, path, body: body)
+            let hadParent = SessionManager.shared.parentAccessToken != nil
+            if hadParent {
+                // Supabase access tokens last about an hour: trade the refresh
+                // token for a new one and retry once.
+                switch await refreshParentToken() {
+                case .refreshed: return try await sendOnce(method, path, body: body)
+                case .unreachable: throw failure // don't sign out over a network blip
+                case .rejected: break
+                }
+            }
+            // Nothing left that could authenticate: sign out (the kid's device
+            // token is 401 only if it was revoked or the child was removed).
+            NotificationCenter.default.post(name: .evlinSessionExpired, object: nil)
+            throw failure
         }
     }
 
@@ -283,31 +269,35 @@ class APIClient {
         return data
     }
 
-    private var refreshInFlight: Task<Bool, Never>?
+    enum RefreshResult { case refreshed, rejected, unreachable }
+    private var refreshInFlight: Task<RefreshResult, Never>?
 
     /// Exchanges the stored refresh token for a new access token. Concurrent
     /// callers share one request (refresh tokens are single-use).
     @discardableResult
-    func refreshParentToken() async -> Bool {
+    func refreshParentToken() async -> RefreshResult {
         if let inFlight = refreshInFlight { return await inFlight.value }
-        guard let refresh = SessionManager.shared.parentRefreshToken else { return false }
-        let task = Task { () -> Bool in
+        guard let refresh = SessionManager.shared.parentRefreshToken else { return .rejected }
+        let task = Task { () -> RefreshResult in
             var request = URLRequest(url: URL(string: "\(baseURL)/auth/refresh")!)
             request.httpMethod = "POST"
             request.addValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": refresh])
             guard let (data, response) = try? await session.data(for: request),
-                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let http = response as? HTTPURLResponse else { return .unreachable }
+            guard http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let access = json["access_token"] as? String else { return false }
+                  let access = json["access_token"] as? String else {
+                return http.statusCode >= 500 ? .unreachable : .rejected
+            }
             SessionManager.shared.parentAccessToken = access
             if let newRefresh = json["refresh_token"] as? String { SessionManager.shared.parentRefreshToken = newRefresh }
-            return true
+            return .refreshed
         }
         refreshInFlight = task
-        let ok = await task.value
+        let result = await task.value
         refreshInFlight = nil
-        return ok
+        return result
     }
 
     private func decode<T: Decodable>(_ data: Data) throws -> T {
@@ -400,6 +390,18 @@ class APIClient {
         return true
     }
 
+    /// Parent asks for a redo; the note is shown to the kid.
+    func rejectTask(occurrenceId: String, note: String?) async throws {
+        var body: [String: Any] = ["status": "rejected"]
+        if let note, !note.isEmpty { body["rejection_note"] = note }
+        try await send("PUT", "/occurrences/\(occurrenceId)/status", body: body)
+    }
+
+    /// Kid asks to skip a task today.
+    func requestBypass(occurrenceId: String, note: String?) async throws {
+        try await send("POST", "/occurrences/\(occurrenceId)/bypass", body: ["bypass_note": note ?? ""])
+    }
+
     func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> Bool {
         var body: [String: Any] = [
             "title": title,
@@ -417,6 +419,11 @@ class APIClient {
     func deleteTask(taskId: String) async throws -> Bool {
         try await send("DELETE", "/tasks/\(taskId)")
         return true
+    }
+
+    /// Saves the whole rules picture for a child (see `RuleSync.payload`).
+    func saveRules(childId: String, body: [String: Any]) async throws {
+        try await send("PUT", "/children/\(childId)/rules", body: body)
     }
 
     func updateChildRules(childId: String, dailyLimitMin: Int, downtimeEnabled: Bool) async throws -> Bool {
@@ -437,28 +444,38 @@ class APIClient {
 
 }
 
-import Foundation
 import SwiftUI
-
 import Observation
 
 @MainActor @Observable
 public class SessionManager {
     static let shared = SessionManager()
-    
-    var parentAccessToken: String?
-    var parentRefreshToken: String?
-    var childDeviceToken: String?
-    
+
+    // Tokens live in the Keychain so the app survives being closed: a parent
+    // stays signed in and a kid's phone stays paired.
+    var parentAccessToken: String? { didSet { KeychainStore.set(parentAccessToken, for: "parentAccess") } }
+    var parentRefreshToken: String? { didSet { KeychainStore.set(parentRefreshToken, for: "parentRefresh") } }
+    var childDeviceToken: String? { didSet { KeychainStore.set(childDeviceToken, for: "childDevice") } }
+
     // The UUID of the child whose data is currently being viewed/managed.
     // For MVP, if a parent has multiple children, they would switch this.
     // On the kid's device, this is just their own ID.
-    var activeChildId: String?
-    
+    var activeChildId: String? { didSet { KeychainStore.set(activeChildId, for: "activeChild") } }
+
+    init() {
+        parentAccessToken = KeychainStore.get("parentAccess")
+        parentRefreshToken = KeychainStore.get("parentRefresh")
+        childDeviceToken = KeychainStore.get("childDevice")
+        activeChildId = KeychainStore.get("activeChild")
+    }
+
     var activeToken: String? {
         return parentAccessToken ?? childDeviceToken
     }
-    
+
+    var hasParentSession: Bool { parentAccessToken != nil || parentRefreshToken != nil }
+    var hasChildSession: Bool { childDeviceToken != nil }
+
     func clear() {
         parentAccessToken = nil
         parentRefreshToken = nil

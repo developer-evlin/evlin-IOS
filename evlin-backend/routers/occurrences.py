@@ -129,6 +129,7 @@ def submit_occurrence(occurrence_id: UUID, body: schemas.OccurrenceBypassRequest
     if not occurrence or occurrence.child_id != current_device.child_id:
         raise HTTPException(status_code=404, detail="Occurrence not found")
     occurrence.status = "submitted"
+    occurrence.rejection_note = None   # a resubmission answers the earlier redo request
     occurrence.completed_at = datetime.now(timezone.utc)
     if body.bypass_note:
         occurrence.bypass_note = body.bypass_note

@@ -39,5 +39,5 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>evlin</string></array></dict></array></dict>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>evlin</string></array></dict></array><key>NSCameraUsageDescription</key><string>Evlin uses the camera to scan the pairing QR code shown on your child's device.</string></dict>
 </plist>

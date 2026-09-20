@@ -62,6 +62,21 @@ class PairingCode(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+class DevicePairing(Base):
+    """A pairing started by the kid's device: it shows `code` (as text and a
+    QR) and waits. A parent claims it, which fills in child_id; the device then
+    trades its `secret` for a long-lived token."""
+    __tablename__ = "device_pairings"
+    __table_args__ = {"schema": "app"}
+
+    code = Column(String, primary_key=True)
+    secret_hash = Column(String, nullable=False)
+    child_name = Column(String)
+    platform = Column(String, nullable=False, default="ios")
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"))
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
 class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = {"schema": "app"}
@@ -131,6 +146,10 @@ class ChildRule(Base):
     bedtime_start = Column(Time)
     bedtime_end = Column(Time)
     blocked_categories = Column(ARRAY(String), nullable=False, default=[])
+    # Whether the daily screen-time limit is switched on, and the parent's
+    # free-form rules (from chat): [{"id","title","detail","icon","on"}].
+    daily_limit_enabled = Column(Boolean, nullable=False, default=True)
+    custom_rules = Column(JSON, nullable=False, default=list)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class ChildState(Base):

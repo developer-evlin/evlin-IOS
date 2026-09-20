@@ -10,20 +10,51 @@ struct RootView: View {
     @State private var session = SessionManager.shared
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var mode: AppMode? = nil
+    @State private var mode: AppMode?
     // Separate per role — a parent and a kid go through entirely different
     // onboarding chains (accounts/PIN/pairing vs. consent/permissions), so
     // finishing one must never skip the other. (A single shared flag used to
     // gate both; that made switching to Child mode after parent onboarding
-    // skip OnboardingV2Coordinator(role: .child) entirely.) Reset by nothing
-    // (no persistence): a fresh app launch always re-onboards both.
-    @State private var parentOnboarded = false
-    @State private var childOnboarded = false
+    // skip OnboardingV2Coordinator(role: .child) entirely.) Remembered across
+    // launches (UserDefaults) but only honoured while the matching login /
+    // device token is still in the Keychain — see init.
+    @State private var parentOnboarded: Bool
+    @State private var childOnboarded: Bool
+    @State private var signedOutNotice = false
     // Brief brand splash before the mode picker, matching the reference
     // flow's full-bleed logo screen ahead of onboarding.
     @State private var showSplash = true
-    // Filled by the parent's pairing poll (see ParentShowCodeStep).
+    // Filled by the parent's pairing poll (see ParentScanCodeStep).
     @State private var pairedKidName: String?
+
+    private enum Saved {
+        static let mode = "evlin.mode"
+        static let parent = "evlin.parentOnboarded"
+        static let child = "evlin.childOnboarded"
+    }
+
+    init() {
+        let d = UserDefaults.standard
+        let s = SessionManager.shared
+        let parentOK = s.hasParentSession && d.bool(forKey: Saved.parent)
+        let childOK = s.hasChildSession && d.bool(forKey: Saved.child)
+        _parentOnboarded = State(initialValue: parentOK)
+        _childOnboarded = State(initialValue: childOK)
+        // Reopen straight into the role that was in use last.
+        let last = d.string(forKey: Saved.mode).flatMap(AppMode.init(rawValue:))
+        _mode = State(initialValue: (last == .parent && parentOK) || (last == .tablet && childOK) ? last : nil)
+    }
+
+    /// The backend refused the stored login/device token for good: forget
+    /// everything local and start over from the mode picker.
+    private func signOutBecauseSessionEnded() {
+        SessionManager.shared.clear()
+        FamilyStore.clear()
+        parentOnboarded = false
+        childOnboarded = false
+        mode = nil
+        signedOutNotice = true
+    }
 
     var body: some View {
         Group {
@@ -79,6 +110,17 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.25), value: mode)
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("EvlinKidPaired"))) { note in
             if let name = note.object as? String, !name.isEmpty { pairedKidName = name }
+        }
+        .onChange(of: mode) { _, new in UserDefaults.standard.set(new?.rawValue, forKey: Saved.mode) }
+        .onChange(of: parentOnboarded) { _, new in UserDefaults.standard.set(new, forKey: Saved.parent) }
+        .onChange(of: childOnboarded) { _, new in UserDefaults.standard.set(new, forKey: Saved.child) }
+        .onReceive(NotificationCenter.default.publisher(for: .evlinSessionExpired)) { _ in
+            if parentOnboarded || childOnboarded { signOutBecauseSessionEnded() }
+        }
+        .alert("You've been signed out", isPresented: $signedOutNotice) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your session ended. Please sign in again.")
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, parentOnboarded || childOnboarded {

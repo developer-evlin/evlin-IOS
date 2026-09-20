@@ -93,15 +93,17 @@ struct ChildProfileStep: View {
     }
 }
 
-// MARK: - 5/// MARK: - 6 · Enter Code (kid)
+// MARK: - 6 · Show code (kid)
 
-struct ChildEnterCodeStep: View {
+/// The kid's device asks the backend for a pairing code and shows it as a QR
+/// and as digits. A parent scans/types it in their app; this screen polls
+/// until that happens, then keeps the device token it is handed.
+struct ChildShowCodeStep: View {
     var childName: String = ""
     let onConnected: () -> Void
     var onBack: (() -> Void)? = nil
 
-    @State private var code = ""
-    @State private var isPairing = false
+    @State private var code: String?
     @State private var errorText: String?
 
     var body: some View {
@@ -114,37 +116,30 @@ struct ChildEnterCodeStep: View {
             subtitle: nil,
             onBack: onBack,
             content: {
-                VStack(spacing: 24) {
+                VStack(spacing: 22) {
                     VStack(spacing: 8) {
                         Text("Link to Parent")
                             .onboardingV2TitleL()
                             .fontWeight(.bold)
                             .multilineTextAlignment(.center)
-                        
-                        Text("Ask your parent for the 6-digit code shown on their Evlin app.")
+                        Text("On your parent's phone, open Evlin, then scan this QR code or type the code below.")
                             .onboardingV2Body()
                             .multilineTextAlignment(.center)
                     }
 
-                    OnboardingV2CodeField(code: $code)
-                        .onChange(of: code) { _, newVal in
-                            // Native iOS 17 onChange, completely crash-free layout filtering
-                            let filtered = String(newVal.filter { $0.isNumber }.prefix(6))
-                            if filtered != newVal {
-                                code = filtered
-                            }
-                            errorText = nil
-                            if code.count == 6 && !isPairing {
-                                Task { await pairDevice() }
-                            }
-                        }
-
-                    if isPairing {
+                    if let code {
+                        OnboardingV2QRImage(string: OnboardingV2PairPayload.encode(code: code), side: 200)
+                        Text(code)
+                            .font(.system(size: 44, weight: .bold, design: .monospaced))
+                            .tracking(8)
+                            .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Pairing device...")
+                            Text("Waiting for your parent…")
                                 .onboardingV2BodyXS()
                         }
+                    } else if errorText == nil {
+                        ProgressView("Getting your code…")
                     }
 
                     if let errorText {
@@ -154,34 +149,42 @@ struct ChildEnterCodeStep: View {
                             .multilineTextAlignment(.center)
                     }
                 }
+                .frame(maxWidth: .infinity)
             },
-            footer: {
-                OnboardingV2PrimaryButton(isPairing ? "Pairing..." : "Pair Device", role: .child) {
-                    Task { await pairDevice() }
-                }
-                .disabled(code.count != 6 || isPairing)
-            }
+            footer: { }
         )
+        // Cancelled when the screen goes away, which also stops the polling.
+        .task { await run() }
     }
 
     @MainActor
-    private func pairDevice() async {
-        guard code.count == 6, !isPairing else { return }
-        isPairing = true
-        errorText = nil
-        
-        do {
-            let success = try await APIClient.shared.pairChildDevice(pairingCode: code, childName: childName)
-            if success {
-                onConnected()
-            } else {
-                errorText = "Invalid or expired code."
+    private func run() async {
+        while !Task.isCancelled {
+            do {
+                let request = try await APIClient.shared.requestPairing(childName: childName)
+                code = request.code
+                errorText = nil
+                // Codes last 15 minutes; poll until claimed, then start over if it lapses.
+                for _ in 0..<440 {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if Task.isCancelled { return }
+                    do {
+                        if try await APIClient.shared.pairingStatus(code: request.code, secret: request.secret) != nil {
+                            onConnected()
+                            return
+                        }
+                    } catch let f as APIFailure where f.status == 404 {
+                        break // expired: get a fresh code
+                    } catch {
+                        // Transient network trouble: keep the same code and keep polling.
+                    }
+                }
+            } catch {
+                code = nil
+                errorText = "Couldn't reach the server. Retrying…"
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
             }
-        } catch {
-            errorText = "Network error. Please try again."
         }
-        
-        isPairing = false
     }
 }
 

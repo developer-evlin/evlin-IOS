@@ -42,26 +42,32 @@ class ChildUpdate(BaseModel):
     color_index: Optional[int] = None
     birth_year: Optional[int] = None
 
-class GeneratePairingCodeRequest(BaseModel):
-    # Neither set: pair the parent's first child, creating a placeholder if
-    # they have none (onboarding). child_id: re-pair that existing child.
-    # new_child: create another child for this parent and pair that one.
+class PairingRequest(BaseModel):
+    """Sent by the kid's device to start pairing."""
+    child_name: Optional[str] = None
+    platform: str = "ios"
+
+class PairingRequestResponse(BaseModel):
+    code: str
+    secret: str        # kept by the device; needed to collect the token
+    expires_at: datetime
+
+class PairingClaimRequest(BaseModel):
+    """Sent by a parent who scanned / typed the code shown on the kid's device.
+    Neither field: use the parent's first unpaired child, else create one.
+    child_id: re-pair that child.  new_child: always create another."""
+    code: str
     child_id: Optional[UUID] = None
     new_child: bool = False
 
-class GeneratePairingCodeResponse(BaseModel):
-    pairing_code: str
-    expires_at: datetime
-    child_id: Optional[UUID] = None
+class PairingStatusRequest(BaseModel):
+    code: str
+    secret: str
 
-class PairChildRequest(BaseModel):
-    pairing_code: str
-    platform: str = "ios" # Add platform, defaults to ios
-    child_name: Optional[str] = None
-
-class PairChildResponse(BaseModel):
-    access_token: str
-    child: ChildResponse
+class PairingStatusResponse(BaseModel):
+    status: str        # "pending" | "paired"
+    access_token: Optional[str] = None
+    child: Optional[ChildResponse] = None
 
 class TaskBase(BaseModel):
     title: str
@@ -194,8 +200,20 @@ class ChildRuleUpdate(BaseModel):
     bedtime_start: Optional[str] = None
     bedtime_end: Optional[str] = None
     blocked_categories: Optional[List[str]] = None
+    daily_limit_enabled: Optional[bool] = None
+    custom_rules: Optional[List[dict]] = None
+    # True when the parent deleted the Downtime rule: forgets its times.
+    downtime_clear: Optional[bool] = None
 
 class ChildRuleResponse(ChildRuleBase):
+    # ORM rows hold time objects; the API exposes "HH:MM:SS" strings.
+    @field_validator("downtime_start", "downtime_end", "bedtime_start", "bedtime_end", mode="before")
+    @classmethod
+    def _iso_time(cls, v):
+        return v.isoformat() if hasattr(v, "isoformat") else v
+
+    daily_limit_enabled: bool = True
+    custom_rules: List[dict] = []
     child_id: UUID
     updated_at: datetime
 

@@ -42,6 +42,13 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
     if rules_update.bedtime_end:
         rules.bedtime_end = time.fromisoformat(rules_update.bedtime_end)
 
+    if rules_update.downtime_clear:
+        rules.downtime_start = None
+        rules.downtime_end = None
+    if rules_update.daily_limit_enabled is not None:
+        rules.daily_limit_enabled = rules_update.daily_limit_enabled
+    if rules_update.custom_rules is not None:
+        rules.custom_rules = rules_update.custom_rules
     if rules_update.blocked_categories is not None:
         rules.blocked_categories = rules_update.blocked_categories
     rules.updated_at = datetime.now(timezone.utc)

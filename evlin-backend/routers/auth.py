@@ -148,17 +148,20 @@ def verify_parent(request: VerifyTokenRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=str(e))
 
 def generate_unique_pairing_code(db: Session) -> str:
-    """Generate a unique 6-digit pairing code"""
+    """A 6-digit code not currently used by any live pairing."""
     while True:
-        code = ''.join(random.choices(string.digits, k=6))
-        # Check if the code is already active
-        existing = db.query(models.PairingCode).filter(models.PairingCode.code == code).first()
-        if not existing:
+        code = "".join(random.choices(string.digits, k=6))
+        if not db.query(models.DevicePairing).filter(models.DevicePairing.code == code).first():
             return code
 
-def _create_placeholder_child(db: Session, parent: models.Parent) -> models.Child:
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _create_placeholder_child(db: Session, parent: models.Parent, name: str = "Your Child") -> models.Child:
     count = db.query(models.ParentChild).filter(models.ParentChild.parent_id == parent.id).count()
-    new_child = models.Child(name="Your Child", birth_year=2015, color_index=count % 8, avatar_url="")
+    new_child = models.Child(name=name, birth_year=2015, color_index=count % 8, avatar_url="")
     db.add(new_child)
     db.commit()
     db.refresh(new_child)
@@ -170,13 +173,57 @@ def _create_placeholder_child(db: Session, parent: models.Parent) -> models.Chil
     return new_child
 
 
-@router.post("/generate-pairing-code", response_model=schemas.GeneratePairingCodeResponse)
-def generate_pairing_code(request: Optional[schemas.GeneratePairingCodeRequest] = None,
-                          current_parent: models.Parent = Depends(get_current_parent),
-                          db: Session = Depends(get_db)):
-    """Parent generates a pairing code for a child (see GeneratePairingCodeRequest)."""
-    request = request or schemas.GeneratePairingCodeRequest()
+def _usable_name(name: Optional[str]) -> Optional[str]:
+    # A name with no letters ("423186") is a mistyped code, not a name.
+    if name and any(ch.isalpha() for ch in name):
+        return name.strip()[:60]
+    return None
 
+
+def _live_pairing(db: Session, code: str) -> Optional[models.DevicePairing]:
+    p = db.query(models.DevicePairing).filter(models.DevicePairing.code == code).first()
+    if not p:
+        return None
+    exp = p.expires_at if p.expires_at.tzinfo else p.expires_at.replace(tzinfo=timezone.utc)
+    return p if exp >= datetime.now(timezone.utc) else None
+
+
+@router.post("/pairing/request", response_model=schemas.PairingRequestResponse)
+def request_pairing(request: schemas.PairingRequest, db: Session = Depends(get_db)):
+    """Kid's device: start pairing. Show `code` (text + QR) and poll /pairing/status."""
+    now = datetime.now(timezone.utc)
+    for old in db.query(models.DevicePairing).all():
+        exp = old.expires_at if old.expires_at.tzinfo else old.expires_at.replace(tzinfo=timezone.utc)
+        if exp < now:
+            db.delete(old)
+    db.commit()
+
+    code = generate_unique_pairing_code(db)
+    secret = secrets.token_urlsafe(32)
+    pairing = models.DevicePairing(
+        code=code,
+        secret_hash=hash_token(secret),
+        child_name=_usable_name(request.child_name),
+        platform=request.platform,
+        expires_at=now + timedelta(minutes=15),
+    )
+    db.add(pairing)
+    db.commit()
+    return {"code": code, "secret": secret, "expires_at": pairing.expires_at}
+
+
+@router.post("/pairing/claim", response_model=schemas.ChildResponse)
+def claim_pairing(request: schemas.PairingClaimRequest,
+                  current_parent: models.Parent = Depends(get_current_parent),
+                  db: Session = Depends(get_db)):
+    """Parent: attach the device showing `code` to one of their children."""
+    pairing = _live_pairing(db, request.code.strip())
+    if not pairing:
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    if pairing.child_id is not None:
+        raise HTTPException(status_code=409, detail="That code was already used")
+
+    kid_name = pairing.child_name
     if request.child_id:
         link = db.query(models.ParentChild).filter(
             models.ParentChild.parent_id == current_parent.id,
@@ -184,114 +231,51 @@ def generate_pairing_code(request: Optional[schemas.GeneratePairingCodeRequest] 
         ).first()
         if not link:
             raise HTTPException(status_code=404, detail="Child not found")
-        child_id = link.child_id
+        child = db.query(models.Child).filter(models.Child.id == request.child_id).first()
     elif request.new_child:
-        child_id = _create_placeholder_child(db, current_parent).id
+        child = _create_placeholder_child(db, current_parent, kid_name or "Your Child")
     else:
-        first = db.query(models.ParentChild).filter(models.ParentChild.parent_id == current_parent.id).first()
-        child_id = first.child_id if first else _create_placeholder_child(db, current_parent).id
+        # Reuse a child that has no device yet (e.g. profile made earlier), else make one.
+        child = None
+        for link in db.query(models.ParentChild).filter(models.ParentChild.parent_id == current_parent.id).all():
+            has_device = db.query(models.Device).filter(models.Device.child_id == link.child_id, models.Device.revoked_at == None).first()  # noqa: E711
+            if not has_device:
+                child = db.query(models.Child).filter(models.Child.id == link.child_id).first()
+                break
+        if child is None:
+            child = _create_placeholder_child(db, current_parent, kid_name or "Your Child")
 
-    now = datetime.now(timezone.utc)
-    db.query(models.PairingCode).filter(models.PairingCode.expires_at < now).delete()
-    
-    code = generate_unique_pairing_code(db)
-    expires_at = now + timedelta(minutes=15)
-    
-    pairing_code = models.PairingCode(
-        code=code,
-        child_id=child_id,
-        parent_id=current_parent.id,
-        expires_at=expires_at
-    )
-    
-    db.add(pairing_code)
+    # The kid typed their own name on their device; use it unless the parent
+    # already gave this profile a real one.
+    if kid_name and child.name in ("Your Child", "Child", ""):
+        child.name = kid_name
+    pairing.child_id = child.id
     db.commit()
-    
-    return {"pairing_code": code, "expires_at": expires_at, "child_id": child_id}
+    db.refresh(child)
+    child.is_paired = False  # becomes true once the device collects its token
+    return child
 
 
-def hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+@router.post("/pairing/status", response_model=schemas.PairingStatusResponse)
+def pairing_status(request: schemas.PairingStatusRequest, db: Session = Depends(get_db)):
+    """Kid's device: has a parent claimed my code? If so, returns the device
+    token exactly once."""
+    pairing = _live_pairing(db, request.code.strip())
+    if not pairing or not secrets.compare_digest(pairing.secret_hash, hash_token(request.secret)):
+        raise HTTPException(status_code=404, detail="Pairing not found or expired")
+    if pairing.child_id is None:
+        return {"status": "pending"}
 
-@router.get("/check-pairing/{code}")
-def check_pairing(code: str, child_id: Optional[uuid.UUID] = None,
-                  current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
-    """Has the device for this code paired yet?
-
-    With child_id (what the app sends) the answer is whether that child has a
-    device — a code that merely expired is *not* "paired". Without it, fall
-    back to the old behaviour: the code being consumed means paired.
-    """
-    pairing_code = db.query(models.PairingCode).filter(models.PairingCode.code == code).first()
-    if child_id is None:
-        link = db.query(models.ParentChild).filter(models.ParentChild.parent_id == current_parent.id).first()
-        child_id = pairing_code.child_id if pairing_code else (link.child_id if link else None)
-    if child_id is None:
-        return {"paired": False}
-
-    owns = db.query(models.ParentChild).filter(
-        models.ParentChild.parent_id == current_parent.id,
-        models.ParentChild.child_id == child_id,
-    ).first()
-    if not owns:
-        raise HTTPException(status_code=404, detail="Child not found")
-
-    child = db.query(models.Child).filter(models.Child.id == child_id).first()
-    has_device = db.query(models.Device).filter(
-        models.Device.child_id == child_id, models.Device.revoked_at == None  # noqa: E711
-    ).count() > 0
-    if has_device and pairing_code is None:
-        return {"paired": True, "kid_name": child.name if child and child.name else "Your child"}
-    return {"paired": False}
-
-@router.post("/pair-child", response_model=schemas.PairChildResponse)
-def pair_child(request: schemas.PairChildRequest, db: Session = Depends(get_db)):
-    """Child enters the code to authenticate their device"""
-    # 1. Find the code
-    pairing_code = db.query(models.PairingCode).filter(
-        models.PairingCode.code == request.pairing_code
-    ).first()
-    
-    now = datetime.now(timezone.utc)
-    
-    if not pairing_code or pairing_code.expires_at < now:
-        raise HTTPException(status_code=400, detail="Invalid or expired pairing code")
-    
-    # 2. Get the child
-    child = db.query(models.Child).filter(models.Child.id == pairing_code.child_id).first()
-    if not child:
-        raise HTTPException(status_code=404, detail="Child not found")
-        
-    # Update child name if provided from the pairing device
-    # A name with no letters ("423186") is a mistyped pairing code, not a
-    # name — keep whatever the profile already had.
-    if request.child_name and any(ch.isalpha() for ch in request.child_name):
-        child.name = request.child_name.strip()[:60]
-        db.commit()
-        db.refresh(child)
-        
-    # 3. Generate a secure long-lived token
+    child = db.query(models.Child).filter(models.Child.id == pairing.child_id).first()
     access_token = secrets.token_urlsafe(32)
-    token_hash = hash_token(access_token)
-    
-    # 4. Create the device record (enforce 1 active device by clearing old ones for MVP)
+    # MVP: one active device per child.
     db.query(models.Device).filter(models.Device.child_id == child.id).delete()
-    
-    device = models.Device(
-        child_id=child.id,
-        platform=request.platform,
-        token_hash=token_hash
-    )
-    db.add(device)
-    
-    # 5. Delete the pairing code (first-come, first-served)
-    db.delete(pairing_code)
+    db.add(models.Device(child_id=child.id, platform=pairing.platform, token_hash=hash_token(access_token)))
+    db.delete(pairing)
     db.commit()
-    
-    return {
-        "access_token": access_token,
-        "child": child
-    }
+    child.is_paired = True
+    return {"status": "paired", "access_token": access_token, "child": child}
+
 
 def get_current_device(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> models.Device:
     """Dependency to authenticate child devices using the token generated during pairing"""

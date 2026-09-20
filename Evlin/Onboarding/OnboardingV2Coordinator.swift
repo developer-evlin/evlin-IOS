@@ -109,8 +109,8 @@ struct OnboardingV2Coordinator: View {
                 )
 
             case .parentPairScan:
-                ParentShowCodeStep(
-                    onContinue: { step = .parentConnected },
+                ParentScanCodeStep(
+                    onPaired: { name in kidName = name; step = .parentConnected },
                     onBack: { step = .parentBetaAgreement }
                 )
 
@@ -153,7 +153,7 @@ struct OnboardingV2Coordinator: View {
                 )
 
             case .childShowCode:
-                ChildEnterCodeStep(
+                ChildShowCodeStep(
                     childName: childName,
                     onConnected: { step = .childConnected },
                     onBack: { step = .childProfile }

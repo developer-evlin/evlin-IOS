@@ -100,11 +100,19 @@ struct ScreenProfile: View {
     // UnlockConfirmCard's onUnlock uses — approving everything is what
     // earns the unlock here, not a separate manual slide.
     private func approveAllPendingReview() {
+        var occurrenceIds: [String] = []
         for i in tasks.indices where isDueToday(tasks[i]) {
             switch tasks[i].state {
             case .review: tasks[i].state = .done
             case .bypass: tasks[i].state = .bypassed
-            default: break
+            default: continue
+            }
+            if let occ = tasks[i].occurrenceId { occurrenceIds.append(occ) }
+        }
+        // Tell the server too, or the next sync would put them all back in review.
+        if !occurrenceIds.isEmpty {
+            BackendWrite.run("Approving these tasks") {
+                for id in occurrenceIds { _ = try await APIClient.shared.approveTask(occurrenceId: id) }
             }
         }
         child.timeLeft = formatMinutes(child.dailyLimitMin)
@@ -243,6 +251,7 @@ struct ScreenProfile: View {
                     onTurnOff: {
                         if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
                             child.rules[i].on = false
+                            child.pushRules()
                         }
                         withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = false }
                     },
@@ -530,16 +539,18 @@ struct ScreenProfile: View {
 
     private func applyManualLock(locked: Bool) {
         child.manualLock = locked
-        Task {
-            try? await APIClient.shared.updateChildState(childId: child.id, manualLock: locked, taskGateOverride: child.taskGateOverride)
+        let id = child.id, gate = child.taskGateOverride
+        BackendWrite.run(locked ? "Locking the phone" : "Unlocking the phone") {
+            _ = try await APIClient.shared.updateChildState(childId: id, manualLock: locked, taskGateOverride: gate)
         }
     }
     
     private func applyGateOverride() {
         child.manualLock = false
         child.taskGateOverride = true
-        Task {
-            try? await APIClient.shared.updateChildState(childId: child.id, manualLock: false, taskGateOverride: true)
+        let id = child.id
+        BackendWrite.run("Unlocking the phone") {
+            _ = try await APIClient.shared.updateChildState(childId: id, manualLock: false, taskGateOverride: true)
         }
     }
     
@@ -550,6 +561,7 @@ struct ScreenProfile: View {
         child.timeLeft = formatMinutes(child.dailyLimitMin)
         child.timePct = 100
         child.downtimeUntil = nil
+        applyGateOverride()
     }
 
     private var tasksSection: some View {
@@ -697,6 +709,7 @@ struct ScreenProfile: View {
                                     }
                                     rule.on = newValue
                                     if rule.kind == .downtime && !newValue { exitDowntimeIfActive() }
+                                    child.pushRules()
                                 }
                             ))
                             Button {
@@ -719,11 +732,13 @@ struct ScreenProfile: View {
         .sheet(item: $editingRule) { rule in
             EditRuleSheet(rule: rule, onSave: { updated in
                 if let i = child.rules.firstIndex(where: { $0.id == updated.id }) { child.rules[i] = updated }
+                child.pushRules()
                 editingRule = nil
             }, onCancel: { editingRule = nil }, onDelete: {
                 child.rules.removeAll { $0.id == rule.id }
                 editingRule = nil
                 if rule.kind == .downtime { exitDowntimeIfActive() }
+                child.pushRules()
             })
             .interactiveDismissDisabled()
         }
@@ -737,14 +752,7 @@ struct ScreenProfile: View {
                         child.rules[i].detail = "\(formatMinutes(limit)) per day"
                     }
                     
-                    let downtimeEnabled = child.rules.contains(where: { $0.kind == .downtime && $0.on })
-                    Task {
-                        try? await APIClient.shared.updateChildRules(
-                            childId: child.id,
-                            dailyLimitMin: limit,
-                            downtimeEnabled: downtimeEnabled
-                        )
-                    }
+                    child.pushRules()
                     editingScreenTimeLimit = false
                 },
                 onCancel: { editingScreenTimeLimit = false }

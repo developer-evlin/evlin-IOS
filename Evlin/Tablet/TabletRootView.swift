@@ -11,6 +11,7 @@ struct TabletRootView: View {
     // completing/redoing a task from either place needs to land in the
     // same source of truth rather than each tab keeping its own copy.
     @State private var selectedTask: KidTask?
+    @State private var kidSaveError: String?
 
     // Screen-time numbers used to live only in the immutable TabletData.child
     // snapshot — lifted into @State here so it can actually mutate.
@@ -66,9 +67,13 @@ struct TabletRootView: View {
                 k.title = t.title
                 k.desc = t.description
                 k.due = t.dueLabel
-                k.done = t.state == .done || t.state == .review
-                k.pendingApproval = t.state == .review
-                k.approved = t.state == .done
+                k.done = t.state == .done || t.state == .review || t.state == .bypassed
+                k.pendingApproval = t.state == .review || t.state == .bypass
+                k.approved = t.state == .done || t.state == .bypassed
+                k.bypassRequested = t.state == .bypass || t.state == .bypassed
+                k.bypassNote = k.bypassRequested ? t.note : nil
+                k.redoRequested = t.redoNote != nil
+                k.redoNote = t.redoNote
                 return k
             }
     }
@@ -134,6 +139,11 @@ struct TabletRootView: View {
                 didCelebrateThisCompletion = false
             }
         }
+        .alert("Couldn't send", isPresented: Binding(get: { kidSaveError != nil }, set: { if !$0 { kidSaveError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(kidSaveError ?? "")
+        }
         // Load what the parent assigned, now and whenever a sync lands.
         .onAppear { loadTasksFromStore() }
         .onChange(of: SyncState.shared.version) { _, _ in loadTasksFromStore() }
@@ -151,7 +161,8 @@ struct TabletRootView: View {
                             _ = try await APIClient.shared.submitTask(occurrenceId: occId, bypassNote: note)
                             await AppSync.shared.syncBackendData()
                         } catch {
-                            print("Submit failed", error)
+                            kidSaveError = "Your task wasn't sent. \(error.apiUserMessage)"
+                            await AppSync.shared.syncBackendData()
                         }
                     }
                 }
@@ -172,6 +183,13 @@ struct TabletRootView: View {
                 }
                 selectedTask = nil
             }, onRequestBypass: { reason, hasVoice in
+                if let occId = task.occurrenceId {
+                    Task {
+                        do { try await APIClient.shared.requestBypass(occurrenceId: occId, note: reason.isEmpty ? nil : reason) }
+                        catch { kidSaveError = "Your request wasn't sent. \(error.apiUserMessage)" }
+                        await AppSync.shared.syncBackendData()
+                    }
+                }
                 if let i = tasks.firstIndex(where: { $0.id == task.id }) {
                     tasks[i].bypassRequested = true
                     tasks[i].bypassNote = reason.isEmpty ? nil : reason

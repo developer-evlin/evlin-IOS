@@ -46,6 +46,16 @@ struct ApiChildRule: Codable {
     let bedtimeEnabled: Bool
     let bedtimeStart: String?
     let bedtimeEnd: String?
+    let dailyLimitEnabled: Bool?
+    let customRules: [ApiCustomRule]?
+}
+
+struct ApiCustomRule: Codable {
+    let id: String
+    let title: String
+    let detail: String
+    let icon: String
+    let on: Bool
 }
 
 struct ApiChildState: Codable {
