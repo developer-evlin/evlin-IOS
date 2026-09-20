@@ -34,7 +34,7 @@ targets:
         UILaunchScreen: {}
         CFBundleURLTypes:
           - CFBundleURLSchemes: [evlin]
-        NSCameraUsageDescription: Evlin uses the camera to scan the pairing QR code shown on your child's device.
+        NSCameraUsageDescription: Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UISupportedInterfaceOrientations~ipad:

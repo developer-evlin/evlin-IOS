@@ -3,23 +3,41 @@ import UIKit
 
 private let taskDetailBottomAnchorID = "task-detail-bottom-anchor"
 
+/// One photo a kid has captured for this task. `image` is set the moment
+/// it's taken (so the tile shows something real immediately, not a
+/// placeholder); `downloadURL` is set instead when this photo came from
+/// reopening an already-submitted task (the backend's copy — there's no
+/// local UIImage left once the app has relaunched). `submissionId` and
+/// `uploadState` track the real upload to the backend, independent of the
+/// local capture.
+private struct CapturedPhoto: Identifiable, Equatable {
+    let id = UUID()
+    var image: UIImage?
+    var downloadURL: String?
+    var submissionId: String?
+    var uploadState: UploadState = .idle
+
+    enum UploadState: Equatable { case idle, uploading, uploaded, failed }
+
+    static func == (l: CapturedPhoto, r: CapturedPhoto) -> Bool { l.id == r.id }
+}
+
 struct TaskDetailView: View {
     let task: KidTask
     var onComplete: (_ photoCount: Int, _ note: String?, _ hasVoiceNote: Bool) -> Void
     var onRequestBypass: (String, Bool) -> Void = { _, _ in }
     @Environment(\.dismiss) private var dismiss
-    // Several photos, not one — mirrors the parent side's multi-page
-    // submissions (e.g. Math Practice's photoCount 3 in TaskStore). Each
-    // entry is a stable id so a single photo can be retaken/removed without
-    // disturbing the others.
-    @State private var photos: [UUID] = []
+    @State private var photos: [CapturedPhoto] = []
+    @State private var showCamera = false
     @State private var note = ""
     @State private var hasVoiceNote = false
     @State private var submitted: Bool
-    // Distinguishes "just tapped All done! this session" (shows the
-    // "waiting for approval" beat) from "reopened an already-done task"
-    // (shows a plain recap instead) — both share the same photo grid/note
-    // below, only the header card differs.
+    // Distinguishes "just tapped All done! this session" (a brief fresh-
+    // confirmation beat) from "reopened an already-done task" (goes
+    // straight to the plain recap) — both share the same photo grid/note
+    // below, only the header card differs. Neither one tells the kid their
+    // evidence is still pending review — that's the parent's business, not
+    // something to make the kid sit and wonder about.
     @State private var justSubmitted = false
     @State private var showBypassSheet = false
     @State private var bypassSent = false
@@ -41,17 +59,18 @@ struct TaskDetailView: View {
     // same-sized-but-more-of-it version of the phone layout.
     private var photoGridColumns: [GridItem] { [GridItem(.adaptive(minimum: kid.of(90, 150), maximum: kid.of(160, 190)), spacing: 10)] }
 
-    // Seeds submitted/photos/note from the task itself — without this, a
-    // kid reopening an already-done task would land back on the "take a
-    // photo" capture flow instead of seeing what they actually turned in,
-    // since photos/note otherwise start empty every time this view is
-    // freshly created.
+    // Seeds submitted/note from the task itself — without this, a kid
+    // reopening an already-done task would land back on the "take a photo"
+    // capture flow instead of seeing what they actually turned in, since
+    // this state otherwise starts empty every time this view is freshly
+    // created. Photos themselves load separately (see .task below) — a
+    // reopened task has no local UIImage any more, only what the backend
+    // has, so they can't be seeded synchronously here.
     init(task: KidTask, onComplete: @escaping (_ photoCount: Int, _ note: String?, _ hasVoiceNote: Bool) -> Void, onRequestBypass: @escaping (String, Bool) -> Void = { _, _ in }) {
         self.task = task
         self.onComplete = onComplete
         self.onRequestBypass = onRequestBypass
         _submitted = State(initialValue: task.done)
-        _photos = State(initialValue: (0..<task.submittedPhotoCount).map { _ in UUID() })
         _note = State(initialValue: task.submissionNote ?? "")
         _hasVoiceNote = State(initialValue: task.submissionHasVoiceNote)
     }
@@ -61,277 +80,33 @@ struct TaskDetailView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                    if bypassSent {
-                        bypassSentCard
-                    } else if !submitted {
-                        HStack(alignment: .top, spacing: 12) {
-                            Text(task.title)
-                                .font(Typography.display(28, weight: .heavy))
-                                .foregroundStyle(KidTheme.ink)
-                            Spacer()
-                            Circle().fill(KidTheme.green).frame(width: 44, height: 44)
-                                .overlay(Image(systemName: "speaker.wave.2.fill").font(.system(size: 18)).foregroundStyle(.white))
-                        }
-                        Text(task.desc)
-                            .font(Typography.font(16, weight: .medium))
-                            .foregroundStyle(KidTheme.inkSoft)
-                            .padding(.top, 16)
-
-                        // The list card (ScreenTabletHome) already shows a
-                        // one-line preview of this, but that's easy to miss
-                        // on the way in — showing the full note again right
-                        // where the kid is about to act on it means they
-                        // don't have to remember or go back to reread it.
-                        if task.redoRequested {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Label("Your parent asked for a redo", systemImage: "arrow.counterclockwise")
-                                    .font(Typography.font(14, weight: .heavy))
-                                    .foregroundStyle(Color(hex: "EA580C"))
-                                if let redoNote = task.redoNote, !redoNote.isEmpty {
-                                    Text(redoNote)
-                                        .font(Typography.font(14, weight: .regular))
-                                        .foregroundStyle(KidTheme.ink)
-                                }
-                                if task.redoHasVoiceNote {
-                                    Label("They also left a voice note", systemImage: "waveform")
-                                        .font(Typography.font(12.5, weight: .bold))
-                                        .foregroundStyle(Color(hex: "EA580C"))
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(Color(hex: "FFEDD5"))
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .padding(.top, 16)
-                        }
-
-                        Text(photos.isEmpty ? "Take a photo to show you're done" : "Add another photo, or you're all set")
-                            .font(Typography.display(18, weight: .bold))
-                            .foregroundStyle(KidTheme.ink)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 32).padding(.bottom, 16)
-
-                        if photos.isEmpty {
-                            Button { withAnimation(.easeOut(duration: 0.15)) { photos.append(UUID()) } } label: {
-                                VStack(spacing: 16) {
-                                    Circle().fill(KidTheme.green).frame(width: 84, height: 84)
-                                        .overlay(Image(systemName: "camera.fill").font(.system(size: 36, weight: .bold)).foregroundStyle(.white))
-                                    Text("Tap to take a photo").font(Typography.display(20, weight: .bold))
-                                    Text("Show us what you did").font(Typography.font(14, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 280)
-                                .background(KidTheme.cream)
-                                .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(KidTheme.line, style: StrokeStyle(lineWidth: 2.5, dash: [7])))
-                                .clipShape(RoundedRectangle(cornerRadius: 24))
-                            }
-                            .buttonStyle(.plain)
+                        if bypassSent {
+                            bypassSentCard
+                        } else if !submitted {
+                            notYetSubmittedContent
                         } else {
-                            LazyVGrid(columns: photoGridColumns, spacing: 10) {
-                                ForEach(Array(photos.enumerated()), id: \.element) { index, id in
-                                    KidCapturedPhotoTile(pageNumber: index + 1) {
-                                        // A retake removes and expects the kid
-                                        // to tap "Add another photo" again,
-                                        // rather than silently swapping the
-                                        // same mock image back in — makes the
-                                        // retry an explicit, visible action.
-                                        withAnimation(.easeOut(duration: 0.15)) { photos.removeAll { $0 == id } }
-                                    }
-                                }
-                                Button { withAnimation(.easeOut(duration: 0.15)) { photos.append(UUID()) } } label: {
-                                    // GeometryReader, not aspectRatio directly on the VStack — a
-                                    // VStack of just an icon + label has real intrinsic content
-                                    // size, so aspectRatio(.fit) sizes itself to fit THAT (a tiny
-                                    // square) rather than expanding to the grid column's proposed
-                                    // width, no matter what order .frame(maxWidth:.infinity) is
-                                    // applied in. GeometryReader itself has no intrinsic size, so
-                                    // aspectRatio on it is forced to size from the column's
-                                    // proposed width instead — the same reason KidCapturedPhotoTile
-                                    // works: MockHomeworkPhoto is GeometryReader-based internally.
-                                    GeometryReader { geo in
-                                        VStack(spacing: 6) {
-                                            Image(systemName: "plus")
-                                                .font(.system(size: 20, weight: .bold))
-                                                .foregroundStyle(KidTheme.green)
-                                            Text("Add photo")
-                                                .font(Typography.font(11.5, weight: .bold))
-                                                .foregroundStyle(KidTheme.inkSoft)
-                                        }
-                                        .frame(width: geo.size.width, height: geo.size.height)
-                                        .background(KidTheme.cream)
-                                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, style: StrokeStyle(lineWidth: 2, dash: [6])))
-                                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                                    }
-                                    .aspectRatio(3.0/4.0, contentMode: .fit)
-                                }
-                                .buttonStyle(.plain)
-                            }
+                            submittedContent
                         }
 
-                        Text("Add a note (optional)")
-                            .font(Typography.display(15.5, weight: .bold))
-                            .foregroundStyle(KidTheme.ink)
-                            .padding(.top, 22).padding(.bottom, 8)
-
-                        TextField("Tell your parent anything about it…", text: $note, axis: .vertical)
-                            .font(Typography.font(15, weight: .regular))
-                            .lineLimit(2...4)
-                            .padding(14)
-                            .background(KidTheme.cream)
-                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, lineWidth: 1.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-
-                        KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
-                            .padding(.top, 10)
-
-                        // Elevated "kid" pill per the style guide: mascot green face,
-                        // a solid green-deep base for the 3D lift — a duplicate
-                        // offset rectangle behind the face, not a `.shadow()`
-                        // (which would also shadow the label text itself,
-                        // ghosting a second copy of it below).
-                        Button { if !photos.isEmpty { submitted = true; justSubmitted = true } } label: {
-                            Text("All done!")
-                                .font(Typography.display(20, weight: .heavy))
-                                .foregroundStyle(!photos.isEmpty ? .white : Color(hex: "B5C8BC"))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 58)
-                                .background(
-                                    ZStack {
-                                        if !photos.isEmpty {
-                                            RoundedRectangle(cornerRadius: 20).fill(KidTheme.greenDeep).offset(y: 5)
-                                        }
-                                        RoundedRectangle(cornerRadius: 20).fill(!photos.isEmpty ? KidTheme.green : KidTheme.line)
-                                    }
-                                    // Flattened into one layer first so any
-                                    // future press/disabled dimming can't
-                                    // split the two rectangles apart into a
-                                    // smeared double edge.
-                                    .compositingGroup()
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(photos.isEmpty)
-                        .padding(.top, photos.isEmpty ? 18 : 22)
-                        .padding(.bottom, 5)
-
-                        Button { showBypassSheet = true } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "hand.raised.fill")
-                                    .font(.system(size: 13, weight: .semibold))
-                                Text("Can't do this today?")
-                                    .font(Typography.font(14, weight: .bold))
-                            }
-                            .foregroundStyle(KidTheme.lavenderText)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 4)
-                    } else {
-                        if justSubmitted {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Evidence submitted 🎉").font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                                Text("Waiting for a parent to approve. You'll get a little ping when they do.")
-                                    .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
-                                HStack(spacing: 10) {
-                                    ProgressView().tint(KidTheme.greenDeep)
-                                    Text("Sent just now").font(Typography.font(13.5, weight: .bold)).foregroundStyle(KidTheme.greenDeep)
-                                }
-                                .padding(12)
-                                .background(.white.opacity(0.7))
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
-                                .padding(.top, 12)
-                            }
-                            .padding(22)
-                            .background(KidTheme.cream)
-                            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                        } else if task.pendingApproval && !task.approved {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Waiting for your parent ⏳").font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                                Text("Here's what you turned in — they haven't checked it yet.")
-                                    .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
-                            }
-                            .padding(22)
-                            .background(Color(hex: "DBEAFE"))
-                            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                        } else {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("All done! ✅").font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                                Text("Here's what you turned in for this one.")
-                                    .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
-                            }
-                            .padding(22)
-                            .background(KidTheme.cream)
-                            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                        }
-
-                        if !photos.isEmpty {
-                            Text("Your photo\(photos.count == 1 ? "" : "s")")
-                                .font(Typography.display(16, weight: .bold))
-                                .foregroundStyle(KidTheme.ink)
-                                .padding(.top, 20).padding(.bottom, 10)
-
-                            LazyVGrid(columns: photoGridColumns, spacing: 10) {
-                                ForEach(Array(photos.enumerated()), id: \.element) { index, _ in
-                                    Button { viewerIndex = index } label: {
-                                        MockHomeworkPhoto(pageNumber: index + 1)
-                                            .aspectRatio(3.0/4.0, contentMode: .fit)
-                                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, lineWidth: 1.5))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-
-                        if !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Your note")
-                                    .font(Typography.display(16, weight: .bold))
-                                    .foregroundStyle(KidTheme.ink)
-                                Text(note)
-                                    .font(Typography.font(14.5, weight: .regular))
-                                    .foregroundStyle(KidTheme.inkSoft)
-                            }
-                            .padding(.top, 20)
-                        }
-
-                        if hasVoiceNote {
-                            Label("Voice note attached", systemImage: "waveform")
-                                .font(Typography.font(13.5, weight: .bold))
-                                .foregroundStyle(KidTheme.lavenderText)
-                                .padding(.top, 10)
-                        }
-
-                        Button {
-                            if justSubmitted { onComplete(photos.count, note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note, hasVoiceNote) }
-                            dismiss()
-                        } label: {
-                            Text("Back to today")
-                                .font(Typography.font(18, weight: .heavy))
-                                .foregroundStyle(KidTheme.ink)
-                                .frame(maxWidth: .infinity).frame(height: 56)
-                                .background(.white)
-                                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(KidTheme.line, lineWidth: 2))
-                                .clipShape(RoundedRectangle(cornerRadius: 18))
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 20)
+                        // Nothing sits below "Add a note" but the (short) rest
+                        // of the form, so the keyboard alone can cover it —
+                        // scrolling to this anchor on keyboard-open brings the
+                        // note field and "All done!" back into view instead of
+                        // leaving them hidden behind it.
+                        Color.clear.frame(height: 1).id(taskDetailBottomAnchorID)
                     }
-
-                    // Nothing sits below "Add a note" but the (short) rest
-                    // of the form, so the keyboard alone can cover it —
-                    // scrolling to this anchor on keyboard-open brings the
-                    // note field and "All done!" back into view instead of
-                    // leaving them hidden behind it.
-                    Color.clear.frame(height: 1).id(taskDetailBottomAnchorID)
+                    .padding(20)
+                    .kidContentColumn(kid.contentMaxWidth)
                 }
-                .padding(20)
-                .kidContentColumn(kid.contentMaxWidth)
-                }
+                // Replaces a blanket dismissKeyboardOnTap() that used to sit
+                // on this whole screen: that gesture fired on *any* tap,
+                // including the tap trying to focus the note field itself —
+                // the same "short tap doesn't register" fight documented on
+                // RootView's own dismissKeyboardOnTap usage, here showing up
+                // as the keyboard feeling glitchy to open/type into. Scroll-
+                // driven dismissal only touches drags on empty scroll space,
+                // never the field's own tap-to-focus.
+                .scrollDismissesKeyboard(.interactively)
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                     withAnimation(.easeOut(duration: 0.25)) {
                         proxy.scrollTo(taskDetailBottomAnchorID, anchor: .bottom)
@@ -339,7 +114,6 @@ struct TaskDetailView: View {
                 }
             }
             .background(KidTheme.background)
-            .dismissKeyboardOnTap()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
@@ -347,11 +121,30 @@ struct TaskDetailView: View {
                 }
             }
         }
+        // Non-interactive: this screen owns a ScrollView (and a text field),
+        // so the swipe only triggers on a clearly deliberate big/fast
+        // downward drag rather than fighting normal scrolling for every
+        // touch — see SwipeToDismiss's own doc comment.
+        .swipeToDismiss(interactive: false) { dismiss() }
+        .task {
+            guard let occurrenceId = task.occurrenceId else { return }
+            await loadExistingSubmissions(occurrenceId: occurrenceId)
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraCapture(
+                onCapture: { image in
+                    showCamera = false
+                    capture(image)
+                },
+                onCancel: { showCamera = false }
+            )
+            .ignoresSafeArea()
+        }
         .fullScreenCover(item: Binding(
             get: { viewerIndex.map { IdentifiedInt(value: $0) } },
             set: { viewerIndex = $0?.value }
         )) { wrapped in
-            KidPhotoViewer(count: photos.count, index: wrapped.value) { viewerIndex = nil }
+            KidPhotoViewer(photos: photos, index: wrapped.value) { viewerIndex = nil }
         }
         // fullScreenCover, not .sheet — a .sheet always renders in compact
         // horizontal size class on iPad regardless of the actual device
@@ -370,6 +163,283 @@ struct TaskDetailView: View {
                 },
                 onCancel: { showBypassSheet = false }
             )
+        }
+    }
+
+    // MARK: - Not-yet-submitted flow (capture + note + "All done!")
+
+    @ViewBuilder private var notYetSubmittedContent: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(task.title)
+                .font(Typography.display(28, weight: .heavy))
+                .foregroundStyle(KidTheme.ink)
+            Spacer()
+            Circle().fill(KidTheme.green).frame(width: 44, height: 44)
+                .overlay(Image(systemName: "speaker.wave.2.fill").font(.system(size: 18)).foregroundStyle(.white))
+        }
+        Text(task.desc)
+            .font(Typography.font(16, weight: .medium))
+            .foregroundStyle(KidTheme.inkSoft)
+            .padding(.top, 16)
+
+        // The list card (ScreenTabletHome) already shows a one-line preview
+        // of this, but that's easy to miss on the way in — showing the full
+        // note again right where the kid is about to act on it means they
+        // don't have to remember or go back to reread it.
+        if task.redoRequested {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Your parent asked for a redo", systemImage: "arrow.counterclockwise")
+                    .font(Typography.font(14, weight: .heavy))
+                    .foregroundStyle(Color(hex: "EA580C"))
+                if let redoNote = task.redoNote, !redoNote.isEmpty {
+                    Text(redoNote)
+                        .font(Typography.font(14, weight: .regular))
+                        .foregroundStyle(KidTheme.ink)
+                }
+                if task.redoHasVoiceNote {
+                    Label("They also left a voice note", systemImage: "waveform")
+                        .font(Typography.font(12.5, weight: .bold))
+                        .foregroundStyle(Color(hex: "EA580C"))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color(hex: "FFEDD5"))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .padding(.top, 16)
+        }
+
+        // A photo is always optional — this used to block "All done!" until
+        // at least one was attached, which meant a task that never needed
+        // photo evidence at all (submission_kind == "none"/"voice") still
+        // forced a kid through the camera. The copy reflects that instead
+        // of implying it's required.
+        Text(photos.isEmpty ? "Add a photo if you'd like (optional)" : "Add another photo, or you're all set")
+            .font(Typography.display(18, weight: .bold))
+            .foregroundStyle(KidTheme.ink)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 32).padding(.bottom, 16)
+
+        if photos.isEmpty {
+            Button { showCamera = true } label: {
+                VStack(spacing: 16) {
+                    Circle().fill(KidTheme.green).frame(width: 84, height: 84)
+                        .overlay(Image(systemName: "camera.fill").font(.system(size: 36, weight: .bold)).foregroundStyle(.white))
+                    Text("Tap to take a photo").font(Typography.display(20, weight: .bold))
+                    Text("Show us what you did").font(Typography.font(14, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 280)
+                .background(KidTheme.cream)
+                .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(KidTheme.line, style: StrokeStyle(lineWidth: 2.5, dash: [7])))
+                .clipShape(RoundedRectangle(cornerRadius: 24))
+            }
+            .buttonStyle(.plain)
+        } else {
+            LazyVGrid(columns: photoGridColumns, spacing: 10) {
+                ForEach(photos) { photo in
+                    KidCapturedPhotoTile(photo: photo) {
+                        // Removed by identity, not position — an async
+                        // upload-state update landing between render and
+                        // tap could otherwise make a captured index point
+                        // at the wrong photo. A retake removes and expects
+                        // the kid to tap "Add another photo" again, rather
+                        // than silently swapping back in — makes the retry
+                        // an explicit, visible action. Also how a failed
+                        // upload is cleared to try again.
+                        withAnimation(.easeOut(duration: 0.15)) { photos.removeAll { $0.id == photo.id } }
+                    }
+                }
+                Button { showCamera = true } label: {
+                    // GeometryReader, not aspectRatio directly on the VStack — a
+                    // VStack of just an icon + label has real intrinsic content
+                    // size, so aspectRatio(.fit) sizes itself to fit THAT (a tiny
+                    // square) rather than expanding to the grid column's proposed
+                    // width, no matter what order .frame(maxWidth:.infinity) is
+                    // applied in. GeometryReader itself has no intrinsic size, so
+                    // aspectRatio on it is forced to size from the column's
+                    // proposed width instead.
+                    GeometryReader { geo in
+                        VStack(spacing: 6) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundStyle(KidTheme.green)
+                            Text("Add photo")
+                                .font(Typography.font(11.5, weight: .bold))
+                                .foregroundStyle(KidTheme.inkSoft)
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .background(KidTheme.cream)
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, style: StrokeStyle(lineWidth: 2, dash: [6])))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    }
+                    .aspectRatio(3.0/4.0, contentMode: .fit)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+
+        Text("Add a note (optional)")
+            .font(Typography.display(15.5, weight: .bold))
+            .foregroundStyle(KidTheme.ink)
+            .padding(.top, 22).padding(.bottom, 8)
+
+        TextField("Tell your parent anything about it…", text: $note, axis: .vertical)
+            .font(Typography.font(15, weight: .regular))
+            .lineLimit(2...4)
+            .padding(14)
+            .background(KidTheme.cream)
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, lineWidth: 1.5))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+
+        KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
+            .padding(.top, 10)
+
+        // Elevated "kid" pill per the style guide: mascot green face, a
+        // solid green-deep base for the 3D lift — a duplicate offset
+        // rectangle behind the face, not a `.shadow()` (which would also
+        // shadow the label text itself, ghosting a second copy of it
+        // below). Never disabled by photo count any more — a photo is
+        // optional, so "All done!" always has to be reachable.
+        Button { submitted = true; justSubmitted = true } label: {
+            Text("All done!")
+                .font(Typography.display(20, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 58)
+                .background(
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 20).fill(KidTheme.greenDeep).offset(y: 5)
+                        RoundedRectangle(cornerRadius: 20).fill(KidTheme.green)
+                    }
+                    // Flattened into one layer first so any future
+                    // press/disabled dimming can't split the two
+                    // rectangles apart into a smeared double edge.
+                    .compositingGroup()
+                )
+        }
+        .buttonStyle(.plain)
+        .padding(.top, photos.isEmpty ? 18 : 22)
+        .padding(.bottom, 5)
+
+        Button { showBypassSheet = true } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Can't do this today?")
+                    .font(Typography.font(14, weight: .bold))
+            }
+            .foregroundStyle(KidTheme.lavenderText)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 4)
+    }
+
+    // MARK: - Submitted flow (recap, no "waiting for parent" framing)
+
+    @ViewBuilder private var submittedContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(justSubmitted ? "Evidence submitted 🎉" : "All done! ✅")
+                .font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
+            Text(justSubmitted ? "Nice work! Here's what you turned in." : "Here's what you turned in for this one.")
+                .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
+        }
+        .padding(22)
+        .background(KidTheme.cream)
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+
+        if !photos.isEmpty {
+            Text("Your photo\(photos.count == 1 ? "" : "s")")
+                .font(Typography.display(16, weight: .bold))
+                .foregroundStyle(KidTheme.ink)
+                .padding(.top, 20).padding(.bottom, 10)
+
+            LazyVGrid(columns: photoGridColumns, spacing: 10) {
+                ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                    Button { viewerIndex = index } label: {
+                        SubmittedPhotoThumbnail(photo: photo)
+                            .aspectRatio(3.0/4.0, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, lineWidth: 1.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        if !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Your note")
+                    .font(Typography.display(16, weight: .bold))
+                    .foregroundStyle(KidTheme.ink)
+                Text(note)
+                    .font(Typography.font(14.5, weight: .regular))
+                    .foregroundStyle(KidTheme.inkSoft)
+            }
+            .padding(.top, 20)
+        }
+
+        if hasVoiceNote {
+            Label("Voice note attached", systemImage: "waveform")
+                .font(Typography.font(13.5, weight: .bold))
+                .foregroundStyle(KidTheme.lavenderText)
+                .padding(.top, 10)
+        }
+
+        Button {
+            if justSubmitted { onComplete(photos.count, note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note, hasVoiceNote) }
+            dismiss()
+        } label: {
+            Text("Back to today")
+                .font(Typography.font(18, weight: .heavy))
+                .foregroundStyle(KidTheme.ink)
+                .frame(maxWidth: .infinity).frame(height: 56)
+                .background(.white)
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(KidTheme.line, lineWidth: 2))
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 20)
+    }
+
+    // MARK: - Real capture + upload
+
+    private func capture(_ image: UIImage) {
+        let photo = CapturedPhoto(image: image, uploadState: .uploading)
+        let id = photo.id
+        withAnimation(.easeOut(duration: 0.15)) { photos.append(photo) }
+        guard let occurrenceId = task.occurrenceId, let data = PhotoCompression.compress(image) else {
+            // No occurrence to attach evidence to (shouldn't normally
+            // happen — every synced task has one) or compression failed:
+            // keep the photo visible locally rather than losing it, just
+            // without a real upload behind it.
+            if let i = photos.firstIndex(where: { $0.id == id }) { photos[i].uploadState = .failed }
+            return
+        }
+        Task {
+            do {
+                let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "photo", contentType: "image/jpeg")
+                if let i = photos.firstIndex(where: { $0.id == id }) { photos[i].submissionId = result.submissionId }
+                try await APIClient.shared.uploadToPresignedURL(result.uploadURL, data: data, contentType: "image/jpeg")
+                try await APIClient.shared.completeSubmission(id: result.submissionId)
+                if let i = photos.firstIndex(where: { $0.id == id }) { photos[i].uploadState = .uploaded }
+            } catch {
+                if let i = photos.firstIndex(where: { $0.id == id }) { photos[i].uploadState = .failed }
+            }
+        }
+    }
+
+    /// A reopened task has nothing captured locally any more — load the
+    /// real photos the backend actually has instead of showing nothing (or,
+    /// before this existed, a fake placeholder keyed only by a count).
+    private func loadExistingSubmissions(occurrenceId: String) async {
+        guard photos.isEmpty, task.submittedPhotoCount > 0 || task.done else { return }
+        guard let subs = try? await APIClient.shared.fetchSubmissions(occurrenceId: occurrenceId), !subs.isEmpty else { return }
+        photos = subs.filter { $0.kind == "photo" }.map {
+            CapturedPhoto(downloadURL: $0.downloadUrl, submissionId: $0.id, uploadState: $0.status == "uploaded" ? .uploaded : .uploading)
         }
     }
 
@@ -414,12 +484,53 @@ struct TaskDetailView: View {
 
 private struct IdentifiedInt: Identifiable { var value: Int; var id: Int { value } }
 
+/// A real captured/loaded photo, not a decorative placeholder — a local
+/// UIImage if it was just taken this session, else the backend's own copy
+/// via its presigned download URL (a reopened task after relaunch has no
+/// local image left). Falls back to a plain loading tile, never a fake
+/// "photo" standing in for one that doesn't exist yet.
+private struct SubmittedPhotoThumbnail: View {
+    var photo: CapturedPhoto
+
+    var body: some View {
+        Group {
+            if let image = photo.image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else if let urlString = photo.downloadURL, let url = URL(string: urlString) {
+                AsyncImage(url: url) { phase in
+                    if let img = phase.image {
+                        img.resizable().scaledToFill()
+                    } else if phase.error != nil {
+                        loadingPlaceholder(failed: true)
+                    } else {
+                        loadingPlaceholder(failed: false)
+                    }
+                }
+            } else {
+                loadingPlaceholder(failed: photo.uploadState == .failed)
+            }
+        }
+        .clipped()
+    }
+
+    private func loadingPlaceholder(failed: Bool) -> some View {
+        ZStack {
+            KidTheme.cream
+            if failed {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color(hex: "EA580C"))
+            } else {
+                ProgressView().tint(KidTheme.greenDeep)
+            }
+        }
+    }
+}
+
 // Full-screen swipe-through viewer for a kid's own already-submitted
-// photos — plain TabView(.page) is fine here (no nested scroll/drag inside
-// each page to fight with, unlike the parent side's zoomable gallery), so
-// there's no need for that view's hand-built pager.
+// photos — real images (see SubmittedPhotoThumbnail), not a decorative
+// mock. Fully interactive swipe-to-dismiss (no scrollable content here to
+// compete with), plus the same X for a kid who doesn't think to swipe.
 private struct KidPhotoViewer: View {
-    var count: Int
+    var photos: [CapturedPhoto]
     @State var index: Int
     var onClose: () -> Void
 
@@ -428,52 +539,67 @@ private struct KidPhotoViewer: View {
             Color.black.ignoresSafeArea()
 
             TabView(selection: $index) {
-                ForEach(0..<count, id: \.self) { i in
-                    MockHomeworkPhoto(pageNumber: i + 1, detailed: true)
+                ForEach(Array(photos.enumerated()), id: \.element.id) { i, photo in
+                    SubmittedPhotoThumbnail(photo: photo)
+                        .aspectRatio(3.0/4.0, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
                         .padding(28)
                         .tag(i)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: count > 1 ? .always : .never))
+            .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .always : .never))
 
             VStack {
                 HStack {
                     Spacer()
                     Button(action: onClose) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 44, height: 44)
                             .background(Circle().fill(.white.opacity(0.2)))
                     }
                     .buttonStyle(.plain)
                     .padding(16)
                 }
                 Spacer()
+                Text("Swipe down to close")
+                    .font(Typography.font(12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.bottom, 14)
             }
         }
+        .swipeToDismiss(interactive: true, onClose)
     }
 }
 
-// One captured photo in the multi-photo grid — reuses the parent side's
-// mock "photographed page" (MockHomeworkPhoto) so a submission looks
-// identical from either side, with a retake button standing in for a kid
-// pointing the camera again at a photo that came out blurry/wrong.
+// One captured photo in the multi-photo grid, with an upload-state badge
+// (uploading spinner / failed retry) over the real image.
 private struct KidCapturedPhotoTile: View {
-    var pageNumber: Int
+    var photo: CapturedPhoto
     var onRetake: () -> Void
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            MockHomeworkPhoto(pageNumber: pageNumber)
+            SubmittedPhotoThumbnail(photo: photo)
                 .aspectRatio(3.0/4.0, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+
+            if photo.uploadState == .uploading {
+                ProgressView()
+                    .tint(.white)
+                    .padding(6)
+                    .background(Circle().fill(KidTheme.ink.opacity(0.6)))
+                    .padding(6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            }
 
             Button(action: onRetake) {
-                Image(systemName: "arrow.counterclockwise")
+                Image(systemName: photo.uploadState == .failed ? "exclamationmark.arrow.circlepath" : "arrow.counterclockwise")
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 26, height: 26)
-                    .background(Circle().fill(KidTheme.ink.opacity(0.8)))
+                    .background(Circle().fill(photo.uploadState == .failed ? Color(hex: "EA580C") : KidTheme.ink.opacity(0.8)))
             }
             .buttonStyle(.plain)
             .padding(6)
@@ -549,11 +675,12 @@ private struct BypassRequestSheet: View {
             .kidContentColumn(kid.isRegular ? 620 : nil)
             .frame(maxHeight: .infinity, alignment: kid.isRegular ? .center : .top)
             .background(KidTheme.background)
-            .dismissKeyboardOnTap()
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel", action: onCancel) }
             }
         }
+        .swipeToDismiss(interactive: false, onCancel)
     }
 }
 
@@ -662,6 +789,10 @@ private struct KidVoiceRecorderButton: View {
             try? await Task.sleep(nanoseconds: 50_000_000)
             guard !Task.isCancelled, voiceState == .recording else { return }
             withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { dotPulse = true }
+        }
+        .onDisappear {
+            recordingTask?.cancel()
+            recordingTask = nil
         }
     }
 }

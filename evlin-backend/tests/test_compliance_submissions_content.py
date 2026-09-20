@@ -129,3 +129,37 @@ def test_content_requires_a_device_token(client, db_session):
     p = make_parent(db_session, "pa")
     r = client.post("/content/upload-url", headers=auth("pa"), json={"content_type": "image/png"})
     assert r.status_code == 401
+
+
+# ---- list submissions -----------------------------------------------------
+
+def test_list_submissions_includes_download_url_only_once_uploaded(client, db_session):
+    kid, occ = _occurrence(client, db_session)
+    sub = client.post(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid"),
+                       json={"kind": "photo", "content_type": "image/jpeg"}).json()["submission"]
+
+    pending = client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid")).json()
+    assert len(pending) == 1 and pending[0]["status"] == "pending" and pending[0]["download_url"] is None
+
+    client.post(f"/submissions/{sub['id']}/complete", headers=auth("dev-kid"))
+    done = client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid")).json()
+    assert done[0]["status"] == "uploaded" and done[0]["download_url"].startswith("https://")
+
+
+def test_list_submissions_visible_to_the_parent_too(client, db_session):
+    kid, occ = _occurrence(client, db_session)
+    client.post(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid"),
+                json={"kind": "photo", "content_type": "image/jpeg"})
+    # kid's parent is "pa" per _occurrence's make_parent(..., "pa")
+    r = client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("pa"))
+    assert r.status_code == 200 and len(r.json()) == 1
+
+
+def test_list_submissions_hidden_from_other_families(client, db_session):
+    kid, occ = _occurrence(client, db_session)
+    other_parent = make_parent(db_session, "pb")
+    other_kid = make_child(db_session, other_parent)
+    make_device(db_session, other_kid, "dev-other")
+    assert client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-other")).status_code == 404
+    assert client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("pb")).status_code == 404
+    assert client.get(f"/occurrences/{occ['id']}/submissions").status_code in (401, 403)

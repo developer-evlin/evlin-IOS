@@ -166,6 +166,11 @@ class SubmissionUploadResponse(BaseModel):
     submission: SubmissionResponse
     upload_url: str
 
+class SubmissionListItem(SubmissionResponse):
+    # Only present once status == "uploaded" — a still-pending submission
+    # has nothing in R2 yet to generate a link for.
+    download_url: Optional[str] = None
+
 class EventBase(BaseModel):
     title: str
     start_at: datetime

@@ -5,9 +5,30 @@ from datetime import datetime, timezone
 import models, schemas
 from database import get_db
 from routers.auth import get_current_device
-from storage import generate_presigned_upload_url
+from storage import generate_presigned_upload_url, generate_presigned_download_url
+from access import get_occurrence_for_device_or_parent
 
 router = APIRouter(tags=["submissions"])
+
+
+@router.get("/occurrences/{occurrence_id}/submissions", response_model=list[schemas.SubmissionListItem])
+def list_submissions(
+    occurrence: models.Occurrence = Depends(get_occurrence_for_device_or_parent),
+    db: Session = Depends(get_db),
+):
+    """Real evidence for one occurrence — the child's own device (to show what
+    it already turned in after relaunching, with nothing left in local
+    memory) or that child's parent (to actually see it, not a placeholder)."""
+    subs = db.query(models.Submission).filter(
+        models.Submission.occurrence_id == occurrence.id
+    ).order_by(models.Submission.created_at).all()
+    out = []
+    for s in subs:
+        item = schemas.SubmissionListItem.model_validate(s)
+        if s.status == "uploaded":
+            item.download_url = generate_presigned_download_url(s.r2_key)
+        out.append(item)
+    return out
 
 @router.post("/occurrences/{occurrence_id}/submissions", response_model=schemas.SubmissionUploadResponse)
 def create_submission(

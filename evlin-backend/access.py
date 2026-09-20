@@ -58,3 +58,27 @@ def assert_child_access(
         return
     parent = get_current_parent(credentials, db)
     assert_parent_owns_child(db, parent, child_id)
+
+
+def get_occurrence_for_device_or_parent(
+    occurrence_id: UUID,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> models.Occurrence:
+    """Same either/or rule as assert_child_access, resolved from an
+    occurrence id instead of a child id — used by routes that only take the
+    occurrence (submissions)."""
+    occ = db.query(models.Occurrence).filter(models.Occurrence.id == occurrence_id).first()
+    if not occ:
+        raise HTTPException(status_code=404, detail="Occurrence not found")
+    device = db.query(models.Device).filter(
+        models.Device.token_hash == hash_token(credentials.credentials),
+        models.Device.revoked_at == None,  # noqa: E711
+    ).first()
+    if device:
+        if device.child_id != occ.child_id:
+            raise HTTPException(status_code=404, detail="Occurrence not found")
+        return occ
+    parent = get_current_parent(credentials, db)
+    assert_parent_owns_child(db, parent, occ.child_id)
+    return occ

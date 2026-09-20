@@ -76,3 +76,11 @@ struct ApiParent: Codable {
     let email: String
     let name: String?
 }
+
+struct ApiSubmission: Codable {
+    let id: String
+    let occurrenceId: String
+    let kind: String
+    let status: String
+    let downloadUrl: String?
+}

@@ -375,6 +375,49 @@ class APIClient {
         try await send("DELETE", "/events/\(eventId)")
     }
 
+    // MARK: - Submissions (real photo/voice evidence)
+
+    struct SubmissionUploadResult { let submissionId: String; let uploadURL: String }
+
+    /// Starts a submission and gets back a one-time presigned URL to PUT the
+    /// file straight to R2 — the file itself never passes through this API.
+    func createSubmission(occurrenceId: String, kind: String, contentType: String) async throws -> SubmissionUploadResult {
+        let data = try await send("POST", "/occurrences/\(occurrenceId)/submissions", body: [
+            "kind": kind, "content_type": contentType,
+        ])
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let uploadUrl = json["upload_url"] as? String,
+              let submission = json["submission"] as? [String: Any],
+              let submissionId = submission["id"] as? String else {
+            throw APIError.serverError("Failed to decode response")
+        }
+        return SubmissionUploadResult(submissionId: submissionId, uploadURL: uploadUrl)
+    }
+
+    /// Uploads bytes straight to R2 via a presigned URL — not through our own
+    /// backend, and not authenticated with our own bearer token (the URL
+    /// itself is the credential). The Content-Type must match exactly what
+    /// the URL was signed with, or R2 rejects the PUT.
+    func uploadToPresignedURL(_ urlString: String, data: Data, contentType: String) async throws {
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.addValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
+    func completeSubmission(id: String) async throws {
+        try await send("POST", "/submissions/\(id)/complete")
+    }
+
+    func fetchSubmissions(occurrenceId: String) async throws -> [ApiSubmission] {
+        try decode(try await send("GET", "/occurrences/\(occurrenceId)/submissions"))
+    }
+
     // MARK: - Task Management (Bi-directional Sync)
     
     /// Creates the task on the backend and returns the saved row, so callers
