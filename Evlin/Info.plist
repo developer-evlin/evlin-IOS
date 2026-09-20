@@ -1,5 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<?xml version='1.0' encoding='UTF-8'?>
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -31,7 +30,7 @@
 		<string>Baloo2-Medium.ttf</string>
 	</array>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict />
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -40,5 +39,5 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-</dict>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>evlin</string></array></dict></array></dict>
 </plist>

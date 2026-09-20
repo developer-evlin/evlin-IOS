@@ -1,4 +1,45 @@
 import SwiftUI
+import AuthenticationServices
+
+class OAuthManager: NSObject, ASWebAuthenticationPresentationContextProviding {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        return UIApplication.shared.windows.first { $0.isKeyWindow } ?? ASPresentationAnchor()
+    }
+
+    func signInWithGoogle() async throws -> String {
+        let supabaseURL = "https://czvuqumlmuarcltgsxag.supabase.co"
+        let urlString = "\(supabaseURL)/auth/v1/authorize?provider=google&redirect_to=evlin://auth-callback"
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "evlin") { callbackURL, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let callbackURL = callbackURL else {
+                    continuation.resume(throwing: URLError(.badURL))
+                    return
+                }
+                
+                let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
+                let fragment = components?.fragment ?? ""
+                let dummyURL = URL(string: "http://dummy?\(fragment)")
+                let fragmentComponents = URLComponents(url: dummyURL!, resolvingAgainstBaseURL: false)
+                
+                if let token = fragmentComponents?.queryItems?.first(where: { $0.name == "access_token" })?.value {
+                    continuation.resume(returning: token)
+                } else {
+                    continuation.resume(throwing: URLError(.cannotParseResponse))
+                }
+            }
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+            session.start()
+        }
+    }
+}
+
 import UIKit
 import FamilyControls
 
@@ -343,7 +384,23 @@ struct ParentSignInStep: View {
 
     
     private func signInWithProvider() async {
-        providersError = "Apple & Google Auth require setup in the Apple Developer / Google Cloud portals. Please tap 'Continue with Email' to use real Supabase authentication."
+        busy = true
+        providersError = nil
+        do {
+            let manager = OAuthManager()
+            let token = try await manager.signInWithGoogle()
+            let success = try await APIClient.shared.verifyParent(token: token)
+            if success {
+                await MainActor.run {
+                    onSignedIn()
+                }
+            } else {
+                providersError = "Failed to sync Google login with backend."
+            }
+        } catch {
+            providersError = error.localizedDescription
+        }
+        busy = false
     }
 }
 

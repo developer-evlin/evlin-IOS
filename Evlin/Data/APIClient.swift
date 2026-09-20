@@ -11,7 +11,7 @@ class APIClient {
     static let shared = APIClient()
     
     // Switch to your Render URL:
-    let baseURL = "https://evlin-ios.onrender.com"
+    let baseURL = "http://10.0.30.196:8000"
     
     // Tokens and active child state are now managed by SessionManager
     
@@ -42,6 +42,25 @@ class APIClient {
         return false
     }
     
+    
+    func verifyParent(token: String) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/auth/verify-parent")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = ["access_token": token]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            return false
+        }
+        
+        SessionManager.shared.parentAccessToken = token
+        return true
+    }
+
     func login(email: String, password: String) async throws -> Bool {
         let url = URL(string: "\(baseURL)/auth/login")!
         var request = URLRequest(url: url)
