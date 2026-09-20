@@ -132,6 +132,11 @@ enum FamilyStore {
     // from onboarding instead.
     static var children: [Child] = []
 
+    static func clear() {
+        children = []
+    }
+
+
     // What onboarding calls once pairing finishes — mirrors Settings' own
     // "Add a child" defaults (dailyLimitMin: 60, status: .unlocked, no
     // tasks yet) since that's the existing precedent for "what a brand-new
@@ -191,4 +196,17 @@ func formatMinutes(_ min: Int) -> String {
     if h == 0 { return "\(m)m" }
     if m == 0 { return "\(h)h" }
     return "\(h)h \(m)m"
+}
+
+/// Downsample an image to a maximum pixel dimension, preventing multi-MB
+/// photos from living in memory at full resolution just to display a
+/// 104-pt avatar circle.
+func downsampledAvatar(_ image: UIImage, maxPixels: CGFloat = 312) -> UIImage {
+    let size = image.size
+    let longer = max(size.width, size.height)
+    guard longer > maxPixels else { return image }
+    let scale = maxPixels / longer
+    let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+    let renderer = UIGraphicsImageRenderer(size: newSize)
+    return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
 }
