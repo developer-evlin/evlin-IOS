@@ -316,4 +316,50 @@ public class SessionManager {
         }
         return false
     }
+
+    func updateChildRules(childId: String, dailyLimitMin: Int, downtimeEnabled: Bool) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/children/\(childId)/rules")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let body: [String: Any] = [
+            "daily_limit_minutes": dailyLimitMin,
+            "downtime_enabled": downtimeEnabled
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
+    }
+
+    func updateChildState(childId: String, manualLock: Bool, taskGateOverride: Bool) async throws -> Bool {
+        let url = URL(string: "\(baseURL)/children/\(childId)/state")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let body: [String: Any] = [
+            "manual_lock": manualLock,
+            "task_gate_override": taskGateOverride
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
+    }
 }

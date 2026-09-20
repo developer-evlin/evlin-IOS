@@ -171,8 +171,7 @@ struct ScreenProfile: View {
                     childName: child.name,
                     remaining: todaysTasks.count - doneCount,
                     onUnlock: {
-                        child.manualLock = false
-                        child.taskGateOverride = true
+                        applyGateOverride()
                         child.timeLeft = formatMinutes(child.dailyLimitMin)
                         child.timePct = 100
                         withAnimation(.easeOut(duration: 0.2)) { showUnlockConfirm = false }
@@ -192,8 +191,7 @@ struct ScreenProfile: View {
                     dailyLimitMin: child.dailyLimitMin,
                     usageTodayMin: child.usageTodayMin,
                     onGrant: { minutes in
-                        child.manualLock = false
-                        child.taskGateOverride = true
+                        applyGateOverride()
                         child.timeLeft = formatMinutes(minutes)
                         let pct = (Double(minutes) / Double(max(child.dailyLimitMin, 1))) * 100
                         child.timePct = min(100, Int(pct))
@@ -469,7 +467,7 @@ struct ScreenProfile: View {
                             // above only reads it in the .unlocked branch)
                             // and comes back as-is on unlock instead of
                             // being reported as used up.
-                            child.manualLock = true
+                            applyManualLock(locked: true)
                         } else if todaysTasks.count - doneCount > 0 {
                             // Unlocking (unlike locking) needs a confirm — it's
                             // the easy-to-regret direction, especially with
@@ -694,6 +692,15 @@ struct ScreenProfile: View {
                     child.dailyLimitMin = limit
                     if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
                         child.rules[i].detail = "\(formatMinutes(limit)) per day"
+                    }
+                    
+                    let downtimeEnabled = child.rules.contains(where: { $0.kind == .downtime && $0.on })
+                    Task {
+                        try? await APIClient.shared.updateChildRules(
+                            childId: child.id,
+                            dailyLimitMin: limit,
+                            downtimeEnabled: downtimeEnabled
+                        )
                     }
                     editingScreenTimeLimit = false
                 },
