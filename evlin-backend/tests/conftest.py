@@ -11,6 +11,13 @@ import uuid
 from datetime import datetime, timezone
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+# generate_presigned_url is pure local signing (no network call), so the
+# submissions/content routers are fully testable with made-up credentials.
+os.environ.setdefault("R2_ACCOUNT_ID", "test-account")
+os.environ.setdefault("R2_ACCESS_KEY_ID", "test-key")
+os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret")
+os.environ.setdefault("R2_BUCKET_NAME", "test-bucket")
+os.environ.setdefault("R2_PUBLIC_BUCKET_NAME", "test-public")
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest

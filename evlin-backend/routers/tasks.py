@@ -80,6 +80,7 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         title=task.title,
         instructions=task.instructions,
         category=task.category,
+        icon=task.icon,
         bucket=_derive_bucket(parsed_time),
         due_time=parsed_time,
         due_date=parsed_date,
@@ -103,6 +104,8 @@ def update_task(task_id: UUID, task_update: schemas.TaskCreate, current_parent: 
     db_task.instructions = task_update.instructions
     if "category" in task_update.model_fields_set:
         db_task.category = task_update.category
+    if "icon" in task_update.model_fields_set:
+        db_task.icon = task_update.icon
     # Only touch the schedule when the client actually sent it, so a partial
     # edit (e.g. a title change from the review screen) doesn't wipe it.
     if "due_time" in task_update.model_fields_set:

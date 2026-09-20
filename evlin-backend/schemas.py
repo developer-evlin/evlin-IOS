@@ -86,6 +86,7 @@ class TaskBase(BaseModel):
     # wire for backward compatibility with any client that still sends it,
     # but the server no longer trusts it — see routers/tasks.py.
     category: Optional[str] = None
+    icon: Optional[str] = None
     bucket: str = "anytime"
     due_time: Optional[str] = None # Will store time as string "HH:MM:SS"
     due_date: Optional[str] = None # "YYYY-MM-DD"

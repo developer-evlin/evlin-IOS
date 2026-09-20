@@ -71,6 +71,8 @@ _MIGRATIONS = [
     "ALTER TABLE app.children DROP COLUMN IF EXISTS created_at",
     "ALTER TABLE app.occurrences DROP COLUMN IF EXISTS created_at",
     "ALTER TABLE app.events DROP COLUMN IF EXISTS created_at",
+    # Reserved for a future kid-side per-task icon — see models.py.
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS icon text",
     """CREATE TABLE IF NOT EXISTS app.device_pairings (
         code text PRIMARY KEY,
         secret_hash text NOT NULL,

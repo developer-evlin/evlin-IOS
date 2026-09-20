@@ -26,7 +26,7 @@ def record_audit(audit: schemas.AuditLogCreate, current_device: models.Device = 
     new_audit = models.AuditLog(
         child_id=current_device.child_id,
         kind=audit.kind,
-        metadata_json=audit.metadata
+        payload=audit.metadata or {}
     )
     db.add(new_audit)
     db.commit()

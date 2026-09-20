@@ -88,6 +88,11 @@ class Task(Base):
     # the same thing as `bucket` below, which the DB constrains to a fixed
     # time-of-day vocabulary and is derived server-side (see routers/tasks.py).
     category = Column(String)
+    # Reserved for a future kid-side per-task icon picker — nothing sets or
+    # reads this yet, kept nullable/free-form on purpose so that feature can
+    # land without another migration (an SF Symbol name or an asset key,
+    # whichever the UI ends up using).
+    icon = Column(String)
     bucket = Column(String, nullable=False, default="anytime")
     due_time = Column(Time)
     # Day a one-off task is for / the day a repeating task starts. NULL means
@@ -224,7 +229,7 @@ class AuditLog(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id"))
     kind = Column(String, nullable=False)
-    metadata_json = Column("metadata", JSON)
+    payload = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class ComicGuide(Base):

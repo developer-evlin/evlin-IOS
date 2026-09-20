@@ -239,3 +239,27 @@ def test_kid_bypass_request_is_visible_and_approval_keeps_the_flag(client, db_se
     assert seen["bypass_requested"] and seen["bypass_note"] == "sick today"
     ok = client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("pa")).json()
     assert ok["status"] == "approved" and ok["bypass_requested"] is True   # app shows it as "bypassed"
+
+
+# ---- icon: reserved for a future kid-side per-task icon picker ----------
+
+def test_icon_is_stored_and_returned_but_optional(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    without = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={"title": "x"}).json()
+    assert without["icon"] is None
+    with_icon = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                             json={"title": "y", "icon": "pawprint.fill"}).json()
+    assert with_icon["icon"] == "pawprint.fill"
+
+
+def test_icon_update_is_partial_like_category(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    t = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                     json={"title": "x", "icon": "star.fill"}).json()
+    renamed = client.put(f"/tasks/{t['id']}", headers=auth("pa"), json={"title": "renamed"}).json()
+    assert renamed["icon"] == "star.fill"  # untouched when the update omits it
+    changed = client.put(f"/tasks/{t['id']}", headers=auth("pa"),
+                          json={"title": "renamed", "icon": "moon.fill"}).json()
+    assert changed["icon"] == "moon.fill"
