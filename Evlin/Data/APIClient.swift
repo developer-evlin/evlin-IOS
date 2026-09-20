@@ -92,7 +92,7 @@ class APIClient {
     }
 
     func generatePairingCode() async throws -> (code: String, expiresAt: String) {
-        let url = URL(string: "\(baseURL)/auth/pairing-code")!
+        let url = URL(string: "\(baseURL)/auth/generate-pairing-code")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         
