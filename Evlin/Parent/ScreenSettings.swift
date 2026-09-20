@@ -1037,6 +1037,17 @@ private struct ChildSettingsSheet: View {
     @State private var showRemoveConfirm = false
     @State private var showPairing = false
     @State private var nameOnOpen = ""
+    // Screen time — moved here from the child's task-list profile (used to
+    // be a generic "Active Rules" accordion, downtime shown as just another
+    // row inside it). This is that child's actual settings/profile page,
+    // so screen-time control belongs here, presented as what it is (a
+    // limit and a schedule) rather than a generic rule list.
+    @State private var editingRule: ChildRule?
+    @State private var editingScreenTimeLimit = false
+    // Turning off the daily limit removes a core protection entirely (not
+    // just pausing a parent-authored rule), so it gets a confirm step the
+    // other toggle below doesn't.
+    @State private var showScreenTimeOffConfirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1085,6 +1096,16 @@ private struct ChildSettingsSheet: View {
                     FormField(label: "Device") {
                         deviceRow
                     }
+
+                    FormField(label: "Screen Time") {
+                        screenTimeSection
+                    }
+
+                    if !customRules.isEmpty {
+                        FormField(label: "Custom Rules") {
+                            customRulesSection
+                        }
+                    }
                 }
                 .padding(.horizontal, 20)
             }
@@ -1092,6 +1113,50 @@ private struct ChildSettingsSheet: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .background(Color.white)
+        .overlay {
+            if showScreenTimeOffConfirm {
+                ScreenTimeOffConfirmCard(
+                    childName: child.name,
+                    onTurnOff: {
+                        if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
+                            child.rules[i].on = false
+                            child.pushRules()
+                        }
+                        withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = false }
+                    },
+                    onCancel: { withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = false } }
+                )
+            }
+        }
+        .sheet(item: $editingRule) { rule in
+            EditRuleSheet(rule: rule, onSave: { updated in
+                if let i = child.rules.firstIndex(where: { $0.id == updated.id }) { child.rules[i] = updated }
+                child.pushRules()
+                editingRule = nil
+            }, onCancel: { editingRule = nil }, onDelete: {
+                child.rules.removeAll { $0.id == rule.id }
+                editingRule = nil
+                if rule.kind == .downtime { exitDowntimeIfActive() }
+                child.pushRules()
+            })
+            .interactiveDismissDisabled()
+        }
+        .sheet(isPresented: $editingScreenTimeLimit) {
+            EditDailyScreenTimeLimitSheet(
+                childName: child.name,
+                current: child.dailyLimitMin,
+                onSave: { limit in
+                    child.dailyLimitMin = limit
+                    if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
+                        child.rules[i].detail = "\(formatMinutes(limit)) per day"
+                    }
+                    child.pushRules()
+                    editingScreenTimeLimit = false
+                },
+                onCancel: { editingScreenTimeLimit = false }
+            )
+            .interactiveDismissDisabled()
+        }
         .photosPicker(isPresented: $showChangePicture, selection: $libraryItem, matching: .images)
         .onChange(of: libraryItem) { _, item in
             guard let item else { return }
@@ -1233,6 +1298,399 @@ private struct ChildSettingsSheet: View {
             .foregroundStyle(FormGreen.accent)
             .frame(width: 34, height: 34)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(FormGreen.accentBg))
+    }
+
+    // MARK: - Screen time
+
+    private var dailyLimitRule: ChildRule? { child.rules.first { $0.kind == .screenTimeLimit } }
+    private var downtimeRule: ChildRule? { child.rules.first { $0.kind == .downtime } }
+    private var customRules: [ChildRule] { child.rules.filter { $0.kind == .custom } }
+
+    // Two explicit, purpose-built rows — not a generic list iterating
+    // child.rules the way this used to (which is also what buried Downtime
+    // as just another row inside a collapsed "Active Rules" accordion).
+    private var screenTimeSection: some View {
+        VStack(spacing: 0) {
+            if let rule = dailyLimitRule { screenTimeRow(rule, isBuiltIn: true) }
+            if let rule = downtimeRule {
+                Divider().padding(.leading, 16)
+                screenTimeRow(rule, isBuiltIn: false)
+            }
+        }
+        .background(FormGreen.fieldBg)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var customRulesSection: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(customRules.enumerated()), id: \.element.id) { index, rule in
+                if index > 0 { Divider().padding(.leading, 16) }
+                ruleRow(rule)
+            }
+        }
+        .background(FormGreen.fieldBg)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func screenTimeRow(_ rule: ChildRule, isBuiltIn: Bool) -> some View {
+        ruleRow(rule, onTap: { if isBuiltIn { editingScreenTimeLimit = true } else { editingRule = rule } })
+    }
+
+    private func ruleRow(_ rule: ChildRule, onTap: (() -> Void)? = nil) -> some View {
+        let tap = onTap ?? { editingRule = rule }
+        return HStack(spacing: 12) {
+            Button(action: tap) {
+                HStack(spacing: 12) {
+                    Image(systemName: EIcon.sf(rule.icon))
+                        .frame(width: 36, height: 36)
+                        .background(EColor.primaryContainer)
+                        .clipShape(RoundedRectangle(cornerRadius: 11))
+                        .foregroundStyle(EColor.primary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(rule.title).font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
+                        Text(rule.detail).font(Typography.font(12, weight: .semibold)).foregroundStyle(EColor.primary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 12)
+            EToggle(on: Binding(
+                get: { rule.on },
+                set: { newValue in
+                    guard let i = child.rules.firstIndex(where: { $0.id == rule.id }) else { return }
+                    // Screen Time Limit is the one built-in protection here —
+                    // switching it off removes the daily cap entirely, not
+                    // just pausing a rule, so it needs a beat to confirm
+                    // rather than flipping instantly like the others.
+                    if rule.kind == .screenTimeLimit && !newValue {
+                        withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = true }
+                        return
+                    }
+                    child.rules[i].on = newValue
+                    if rule.kind == .downtime && !newValue { exitDowntimeIfActive() }
+                    child.pushRules()
+                }
+            ))
+            Button(action: tap) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 15))
+                    .foregroundStyle(EColor.onSurfaceVariant)
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 4)
+        }
+        .padding(16)
+    }
+
+    // Downtime is a schedule lock — turning the rule off (or deleting it)
+    // while it's actively in effect needs to actually end the lock right
+    // now, not just stop applying the *next* time downtime would start.
+    private func exitDowntimeIfActive() {
+        guard child.status == .downtime else { return }
+        child.manualLock = false
+        child.taskGateOverride = true
+        child.timeLeft = formatMinutes(child.dailyLimitMin)
+        child.timePct = 100
+        child.downtimeUntil = nil
+        let id = child.id
+        BackendWrite.run("Unlocking the phone") {
+            _ = try await APIClient.shared.updateChildState(childId: id, manualLock: false, taskGateOverride: true)
+        }
+    }
+}
+
+// MARK: - Screen Time edit sheets (moved here from ScreenProfile.swift —
+// this child's settings/profile sheet is now where screen time is actually
+// controlled, not the task-list profile)
+
+// Screen Time Limit is the one built-in protection here — flipping it off
+// removes the daily cap entirely (unlimited access until turned back on),
+// unlike pausing a custom rule, so it gets its own confirm step instead of
+// toggling instantly.
+private struct ScreenTimeOffConfirmCard: View {
+    var childName: String
+    var onTurnOff: () -> Void
+    var onCancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.32)
+                .ignoresSafeArea()
+                .onTapGesture { onCancel() }
+                .transition(.opacity)
+
+            VStack(spacing: 0) {
+                Spacer()
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "hourglass")
+                            .font(.system(size: 17))
+                            .foregroundStyle(EColor.danger)
+                        Text("Turn off Screen Time Limit?")
+                            .font(Typography.font(18, weight: .heavy))
+                            .foregroundStyle(EColor.onSurface)
+                    }
+
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(EColor.danger)
+                        Text("\(childName) will have unlimited screen time for the rest of today — the daily allowance won't apply at all. The Screen Time Limit rule turns back on by itself tomorrow.")
+                            .font(Typography.font(14, weight: .regular))
+                            .foregroundStyle(EColor.onSurface)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                    .background(EColor.danger.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    VStack(spacing: 10) {
+                        cardButton("Turn off anyway", tint: EColor.danger, action: onTurnOff)
+                        cardButton("Keep it on", tint: EColor.onSurfaceVariant, action: onCancel)
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(20)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
+                // Wider than the card's own 24pt corner radius — at 20pt
+                // the margin was tighter than the curve itself, so each
+                // rounded corner read as cramped against the screen's
+                // square edge instead of floating clear of it.
+                .padding(.horizontal, 28)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                Spacer()
+            }
+        }
+    }
+
+    private func cardButton(_ label: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(Typography.font(15, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(.white)
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(EColor.outlineVariant, lineWidth: 1.5))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// Mirrors RULE_TYPES in index.html:2157 — each kind has one fixed icon and
+// builds its own detail string from typed fields.
+private enum RuleTypeMeta {
+    static func label(_ kind: RuleKind) -> String {
+        switch kind {
+        case .downtime: return "Downtime"
+        case .custom: return "Custom rule"
+        case .screenTimeLimit: return "Screen Time Limit"
+        }
+    }
+    static func blurb(_ kind: RuleKind) -> String {
+        switch kind {
+        case .downtime: return "A daily break from the screen — only phone calls and apps you allow will work."
+        case .custom: return ""
+        case .screenTimeLimit: return "The daily screen time allowance — a core protection you can pause but not edit or remove here."
+        }
+    }
+}
+
+private func ruleTimeField(label: String?, date: Binding<Date>) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+        if let label {
+            Text(label.uppercased()).font(Typography.font(10, weight: .bold)).foregroundStyle(EColor.onSurfaceVariant)
+        }
+        DatePicker("", selection: date, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .padding(.horizontal, 14)
+            .frame(height: 48)
+            .frame(maxWidth: .infinity)
+            .background(FormGreen.fieldBg)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+    .frame(maxWidth: .infinity)
+}
+
+private struct EditRuleSheet: View {
+    @State var rule: ChildRule
+    var onSave: (ChildRule) -> Void
+    var onCancel: () -> Void
+    var onDelete: (() -> Void)? = nil
+
+    @State private var showDeleteConfirm = false
+
+    var body: some View {
+        FormShell(title: rule.kind == .custom ? "Edit Rule" : RuleTypeMeta.label(rule.kind), onCancel: onCancel, onSave: {
+            var updated = rule
+            if updated.kind == .downtime {
+                updated.detail = "\(ChildRule.fmtClock(updated.downtimeFrom)) – \(ChildRule.fmtClock(updated.downtimeTo))"
+            }
+            onSave(updated)
+        }, canSave: !rule.title.trimmingCharacters(in: .whitespaces).isEmpty, onDelete: onDelete != nil ? { showDeleteConfirm = true } : nil) {
+            switch rule.kind {
+            case .downtime:
+                FormField(label: "Schedule") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            ruleTimeField(label: "From", date: $rule.downtimeFrom)
+                            ruleTimeField(label: "To", date: $rule.downtimeTo)
+                        }
+                        Text(RuleTypeMeta.blurb(.downtime)).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                }
+            case .custom:
+                FormField(label: "Rule name") {
+                    FormTextField(placeholder: "e.g. No games at dinner", text: $rule.title)
+                }
+                FormField(label: "Details") {
+                    TextField("What this rule does…", text: $rule.detail, axis: .vertical)
+                        .font(Typography.font(15, weight: .regular))
+                        .lineLimit(2...4)
+                        .padding(14)
+                        .background(FormGreen.fieldBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+            case .screenTimeLimit:
+                // Unreachable in practice — the Screen Time row always opens
+                // EditDailyScreenTimeLimitSheet instead — kept only so the
+                // switch stays exhaustive.
+                EmptyView()
+            }
+        }
+        // Trash icon lives in FormShell's top header now (next to Cancel),
+        // matching EditTaskReviewSheet's delete affordance — same alert,
+        // just triggered from the header button instead of a bottom row.
+        .alert("Delete \"\(rule.title)\"?", isPresented: $showDeleteConfirm) {
+            Button("Delete", role: .destructive) { onDelete?() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
+        }
+    }
+}
+
+// The daily allowance backing the built-in Screen Time Limit rule — a quick-
+// pick row of common limits plus a stepper for fine-tuning, mirroring the
+// preset-chip pattern GrantExtraTimeSheet uses for "how much extra time."
+// A native scrolling wheel picker for the actual minutes rather than
+// tapping a stepper 15 minutes at a time; nothing saves until "Save
+// limits" is tapped, so switching days to peek doesn't lose edits.
+private struct EditDailyScreenTimeLimitSheet: View {
+    var childName: String
+    var current: Int
+    var onSave: (Int) -> Void
+    var onCancel: () -> Void
+
+    @State private var limit: Int
+    @State private var scrollID: Int?
+
+    init(childName: String, current: Int, onSave: @escaping (Int) -> Void, onCancel: @escaping () -> Void) {
+        self.childName = childName
+        self.current = current
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _limit = State(initialValue: current)
+        _scrollID = State(initialValue: current)
+    }
+
+    private let options: [Int] = Array(stride(from: 15, through: 480, by: 15))
+    private let warningStart = 135 // 2h15m
+    private let threeHours = 180
+
+    // Mirrors the general pediatric guideline that recreational screen time
+    // above ~2 hours/day is worth a second look, and above 3 is worth an
+    // explicit flag — not a hard block, just something a parent should see
+    // before confirming.
+    private var warning: (color: Color, icon: String, text: String)? {
+        switch limit {
+        case warningStart..<threeHours:
+            return (Color(hex: "B26A00"), "exclamationmark.triangle.fill",
+                    "\(formatMinutes(limit)) a day is at the upper end of the general screen-time guideline for kids.")
+        case threeHours...:
+            return (EColor.danger, "exclamationmark.octagon.fill",
+                    "\(formatMinutes(limit)) a day is above the general guideline — extended screen time like this is linked to worse sleep, mood, and attention in children.")
+        default:
+            return nil
+        }
+    }
+
+    // A UIPickerView-backed wheel Picker only reports its selection on
+    // settle, not continuously during a fast fling — the warning message
+    // below it visibly lagged behind the finger. A ScrollView driven by
+    // live scroll geometry (.scrollPosition) reports position continuously
+    // instead, so the warning keeps pace with the flick.
+    private var limitWheel: some View {
+        let itemHeight: CGFloat = 46
+        let visibleRows: CGFloat = 5
+        return GeometryReader { geo in
+            let topInset = max(0, (geo.size.height - itemHeight) / 2)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    ForEach(options, id: \.self) { m in
+                        Text(formatMinutes(m))
+                            .font(Typography.font(m == limit ? 17 : 14, weight: m == limit ? .heavy : .semibold))
+                            .foregroundStyle(m == limit ? EColor.primary : EColor.onSurfaceVariant)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: itemHeight)
+                            .id(m)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $scrollID)
+            .contentMargins(.vertical, topInset, for: .scrollContent)
+            .overlay {
+                Capsule()
+                    .fill(EColor.primary.opacity(0.1))
+                    .frame(height: itemHeight - 8)
+                    .padding(.horizontal, 32)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(height: itemHeight * visibleRows)
+        .onChange(of: scrollID) { _, newValue in
+            if let newValue { limit = newValue }
+        }
+    }
+
+    var body: some View {
+        FormShell(
+            title: "Screen Time Limit",
+            onCancel: onCancel,
+            onSave: { onSave(limit) },
+            canSave: limit > 0,
+            saveLabel: "Save limit"
+        ) {
+            FormField(label: "Daily limit") {
+                limitWheel
+                    .background(FormGreen.fieldBg)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+
+            // No animation here — the wheel picker can fire many `limit`
+            // changes per second while scrolling, and an animated cross-fade
+            // couldn't keep up, reading as visibly lagging behind the wheel.
+            // Updates instantly instead, in lockstep with the scroll.
+            if let warning {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: warning.icon).foregroundStyle(warning.color)
+                    Text(warning.text).font(Typography.font(13, weight: .medium)).foregroundStyle(EColor.onSurface)
+                }
+                .padding(14)
+                .background(warning.color.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .transaction { $0.animation = nil }
+            }
+
+            Text("\(childName)'s daily allowance resets at midnight.")
+                .font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+        }
     }
 }
 
