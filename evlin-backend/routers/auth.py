@@ -265,3 +265,11 @@ def get_current_device(credentials: HTTPAuthorizationCredentials = Depends(secur
         raise HTTPException(status_code=401, detail="Invalid or revoked device token")
         
     return device
+
+@router.delete("/account")
+def delete_account(current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    # Cascade delete is usually handled by the DB, but let's manually clean up the main links
+    db.query(models.ParentChild).filter(models.ParentChild.parent_id == current_parent.id).delete()
+    db.delete(current_parent)
+    db.commit()
+    return {"message": "Account deleted successfully"}
