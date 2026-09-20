@@ -792,11 +792,16 @@ struct ScreenSettings: View {
                 ],
                 destructiveLabel: "Delete Account",
                 onConfirm: {
-                    showDeleteAccountConfirm = false
-                    showParentProfile = false
-                    SessionManager.shared.clear()
-                    FamilyStore.clear()
-                    onSignOut?() ?? onSwitchMode()
+                    Task {
+                        _ = try? await APIClient.shared.deleteAccount()
+                        await MainActor.run {
+                            showDeleteAccountConfirm = false
+                            showParentProfile = false
+                            SessionManager.shared.clear()
+                            FamilyStore.clear()
+                            onSignOut?() ?? onSwitchMode()
+                        }
+                    }
                 },
                 onCancel: { showDeleteAccountConfirm = false }
             )

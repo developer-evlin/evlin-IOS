@@ -91,6 +91,22 @@ class APIClient {
         return false
     }
 
+    func deleteAccount() async throws -> Bool {
+        let url = URL(string: "\(baseURL)/auth/account")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        
+        if let token = SessionManager.shared.parentAccessToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (_, response) = try await session.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+            return true
+        }
+        return false
+    }
+
     func generatePairingCode() async throws -> (code: String, expiresAt: String) {
         let url = URL(string: "\(baseURL)/auth/generate-pairing-code")!
         var request = URLRequest(url: url)
