@@ -213,6 +213,11 @@ struct OnboardingV2Coordinator: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: step)
+        // Posted by the parent's pairing poll with the name the child typed
+        // on their own device, so the "connected" screens use it.
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("EvlinKidPaired"))) { note in
+            if let name = note.object as? String, !name.isEmpty { kidName = name }
+        }
     }
 
     // MARK: - Mocked "backend" calls

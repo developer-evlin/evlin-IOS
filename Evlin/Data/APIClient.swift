@@ -107,26 +107,24 @@ class APIClient {
         return false
     }
 
-    func generatePairingCode() async throws -> (code: String, expiresAt: String) {
-        let url = URL(string: "\(baseURL)/auth/generate-pairing-code")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        
-        if let token = SessionManager.shared.parentAccessToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+    /// Asks the backend for a pairing code. With no arguments it pairs the
+    /// parent's first child (onboarding); `childId` re-pairs that child;
+    /// `newChild` creates another child and pairs that one.
+    func generatePairingCode(childId: String? = nil, newChild: Bool = false) async throws -> (code: String, expiresAt: String, childId: String?) {
+        var body: [String: Any] = [:]
+        if let childId { body["child_id"] = childId }
+        if newChild { body["new_child"] = true }
+        let data: Data
+        do {
+            data = try await send("POST", "/auth/generate-pairing-code", body: body)
+        } catch {
             throw APIError.serverError("Failed to generate code")
         }
-        
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let code = json?["pairing_code"] as? String, let expiresAt = json?["expires_at"] as? String else {
             throw APIError.serverError("Failed to decode response")
         }
-        
-        return (code, expiresAt)
+        return (code, expiresAt, json?["child_id"] as? String)
     }
     
     func pairChildDevice(pairingCode: String, childName: String? = nil) async throws -> Bool {
@@ -160,8 +158,9 @@ class APIClient {
         }
     }
     
-        func checkPairingStatus(code: String) async throws -> (paired: Bool, kidName: String?) {
-        let url = URL(string: "\(baseURL)/auth/check-pairing/\(code)")!
+        func checkPairingStatus(code: String, childId: String? = nil) async throws -> (paired: Bool, kidName: String?) {
+        let query = childId.map { "?child_id=\($0)" } ?? ""
+        let url = URL(string: "\(baseURL)/auth/check-pairing/\(code)\(query)")!
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         
@@ -227,9 +226,95 @@ class APIClient {
         try await fetch(endpoint: "/children/\(childId)/state")
     }
 
+    // MARK: - Generic request helper
+
+    /// Sends an authenticated JSON request and returns the body of a 2xx
+    /// response; anything else throws, so callers can't mistake a failed
+    /// write for a saved one.
+    @discardableResult
+    private func send(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> Data {
+        var request = URLRequest(url: URL(string: "\(baseURL)\(path)")!)
+        request.httpMethod = method
+        if let token = SessionManager.shared.activeToken {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let body {
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return data
+    }
+
+    private func decode<T: Decodable>(_ data: Data) throws -> T {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(T.self, from: data)
+    }
+
+    // MARK: - Children
+
+    func updateChild(childId: String, name: String? = nil, colorIndex: Int? = nil) async throws {
+        var body: [String: Any] = [:]
+        if let name { body["name"] = name }
+        if let colorIndex { body["color_index"] = colorIndex }
+        try await send("PUT", "/children/\(childId)", body: body)
+    }
+
+    func deleteChild(childId: String) async throws {
+        try await send("DELETE", "/children/\(childId)")
+    }
+
+    // MARK: - Calendar events
+
+    private static let isoOut: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f
+    }()
+
+    func fetchEvents(childId: String, from: Date, to: Date) async throws -> [ApiEvent] {
+        let f = Self.isoOut
+        let q = "start_date=\(f.string(from: from))&end_date=\(f.string(from: to))"
+            .replacingOccurrences(of: "+", with: "%2B")
+        return try decode(try await send("GET", "/children/\(childId)/events?\(q)"))
+    }
+
+    private func eventBody(childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, source: String) -> [String: Any] {
+        var body: [String: Any] = [
+            "title": title,
+            "start_at": Self.isoOut.string(from: start),
+            "end_at": Self.isoOut.string(from: end),
+            "recurrence": recurrence,
+            "source": source,
+        ]
+        if let childId { body["child_id"] = childId }
+        if let category { body["category"] = category }
+        if let note { body["note"] = note }
+        if let location, !location.isEmpty { body["location_or_link"] = location }
+        return body
+    }
+
+    func createEvent(childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, source: String) async throws -> ApiEvent {
+        let body = eventBody(childId: childId, title: title, start: start, end: end, category: category, note: note, location: location, recurrence: recurrence, source: source)
+        return try decode(try await send("POST", "/events", body: body))
+    }
+
+    func updateEvent(eventId: String, childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, source: String) async throws {
+        let body = eventBody(childId: childId, title: title, start: start, end: end, category: category, note: note, location: location, recurrence: recurrence, source: source)
+        try await send("PUT", "/events/\(eventId)", body: body)
+    }
+
+    func deleteEvent(eventId: String) async throws {
+        try await send("DELETE", "/events/\(eventId)")
+    }
+
     // MARK: - Task Management (Bi-directional Sync)
     
-    func createTask(childId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String) async throws -> Bool {
+    /// Creates the task on the backend and returns the saved row, so callers
+    /// can use the real database id instead of a locally generated one.
+    func createTask(childId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> ApiTask {
         let url = URL(string: "\(baseURL)/children/\(childId)/tasks")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -239,20 +324,24 @@ class APIClient {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "title": title,
             "instructions": instructions ?? "",
             "recurrence": recurrence,
             "bucket": bucket,
             "submission_kind": submissionKind
         ]
+        if let dueTime { body["due_time"] = dueTime }
+        if let dueDate { body["due_date"] = dueDate }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (_, response) = try await session.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            return true
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw URLError(.badServerResponse)
         }
-        return false
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(ApiTask.self, from: data)
     }
     
     func submitTask(occurrenceId: String, bypassNote: String? = nil) async throws -> Bool {
@@ -294,30 +383,18 @@ class APIClient {
         }
         return false
     }
-    func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/tasks/\(taskId)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if let token = SessionManager.shared.activeToken {
-            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let body: [String: Any] = [
+    func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, bucket: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> Bool {
+        var body: [String: Any] = [
             "title": title,
             "instructions": instructions ?? "",
             "recurrence": recurrence,
             "bucket": bucket,
             "submission_kind": submissionKind
         ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        let (_, response) = try await session.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-            return true
-        }
-        return false
+        if let dueTime { body["due_time"] = dueTime }
+        if let dueDate { body["due_date"] = dueDate }
+        try await send("PUT", "/tasks/\(taskId)", body: body)
+        return true
     }
 
     func deleteTask(taskId: String) async throws -> Bool {

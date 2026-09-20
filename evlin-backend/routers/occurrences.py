@@ -5,31 +5,50 @@ from datetime import date, datetime, timezone
 import models, schemas
 from database import get_db
 from routers.auth import get_current_parent, get_current_device
+from access import assert_child_access, get_occurrence_for_parent
 
 router = APIRouter(tags=["occurrences"])
 
+_WEEKDAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def task_applies_on(task: models.Task, day: date) -> bool:
+    """Whether `task` should have an occurrence on `day`.
+
+    recurrence is "none" (only on its start day), "daily", or a comma-joined
+    list of weekday codes ("mon,wed,fri") — the same codes the app stores.
+    """
+    start = task.due_date or (task.created_at.date() if task.created_at else day)
+    if day < start:
+        return False
+    rec = (task.recurrence or "none").strip().lower()
+    if rec in ("", "none"):
+        return day == start
+    if rec == "daily":
+        return True
+    if rec == "weekly":
+        return day.weekday() == start.weekday()
+    codes = {c.strip() for c in rec.split(",") if c.strip()}
+    return _WEEKDAY_CODES[day.weekday()] in codes
+
+
 def _generate_occurrences_for_date(child_id: UUID, target_date: date, db: Session):
-    """
-    On-demand materializer. 
-    Finds active tasks for the child and ensures an occurrence exists for the target date.
-    (Simplified recurrence logic for MVP: 'daily' and 'none' create occurrences)
-    """
+    """On-demand materializer: ensure an occurrence exists for every active
+    task of the child that applies on `target_date`."""
     tasks = db.query(models.Task).filter(
         models.Task.child_id == child_id,
         models.Task.active == True
     ).all()
-    
+
     for task in tasks:
-        # Check if occurrence already exists
+        if not task_applies_on(task, target_date):
+            continue
         existing = db.query(models.Occurrence).filter(
             models.Occurrence.task_id == task.id,
             models.Occurrence.due_date == target_date
         ).first()
-        
         if not existing:
-            # For 'daily' or 'weekly' we can add logic. For now let's just make it daily for everything
-            # MVP: just generate it.
-            new_occurrence = models.Occurrence(
+            db.add(models.Occurrence(
                 task_id=task.id,
                 child_id=child_id,
                 due_date=target_date,
@@ -37,13 +56,13 @@ def _generate_occurrences_for_date(child_id: UUID, target_date: date, db: Sessio
                 status="pending",
                 gates_apps=task.gates_apps,
                 points=task.points
-            )
-            db.add(new_occurrence)
+            ))
     db.commit()
 
 @router.get("/children/{child_id}/occurrences", response_model=list[schemas.OccurrenceResponse])
-def get_occurrences(child_id: UUID, target_date: date = Query(...), db: Session = Depends(get_db)):
-    """Fetch all occurrences for a child on a specific date (Can be called by parent or child)"""
+def get_occurrences(child_id: UUID, target_date: date = Query(...), db: Session = Depends(get_db),
+                    _access: None = Depends(assert_child_access)):
+    """Fetch all occurrences for a child on a specific date (that child's device or their parent)"""
     
     # Materialize if missing
     _generate_occurrences_for_date(child_id, target_date, db)
@@ -60,10 +79,10 @@ def update_occurrence_status(occurrence_id: UUID, status_update: schemas.Occurre
                              current_parent: models.Parent = Depends(get_current_parent), 
                              db: Session = Depends(get_db)):
     """Parent approves or rejects an occurrence"""
-    occurrence = db.query(models.Occurrence).filter(models.Occurrence.id == occurrence_id).first()
-    if not occurrence:
-        raise HTTPException(status_code=404, detail="Occurrence not found")
-        
+    occurrence = get_occurrence_for_parent(db, current_parent, occurrence_id)
+    if status_update.status not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="status must be 'approved' or 'rejected'")
+
     occurrence.status = status_update.status
     if status_update.status == "approved":
         occurrence.approved_at = datetime.now(timezone.utc)
@@ -97,3 +116,47 @@ def request_bypass(occurrence_id: UUID, bypass_req: schemas.OccurrenceBypassRequ
     db.commit()
     db.refresh(occurrence)
     return occurrence
+
+
+# --- Endpoints the iOS client calls under /tasks/occurrences/... ---------
+
+@router.post("/tasks/occurrences/{occurrence_id}/submit", response_model=schemas.OccurrenceResponse)
+def submit_occurrence(occurrence_id: UUID, body: schemas.OccurrenceBypassRequest,
+                      current_device: models.Device = Depends(get_current_device),
+                      db: Session = Depends(get_db)):
+    """Child marks a task done; it then waits for the parent's review."""
+    occurrence = db.query(models.Occurrence).filter(models.Occurrence.id == occurrence_id).first()
+    if not occurrence or occurrence.child_id != current_device.child_id:
+        raise HTTPException(status_code=404, detail="Occurrence not found")
+    occurrence.status = "submitted"
+    occurrence.completed_at = datetime.now(timezone.utc)
+    if body.bypass_note:
+        occurrence.bypass_note = body.bypass_note
+    db.commit()
+    db.refresh(occurrence)
+    return occurrence
+
+
+def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Session):
+    occurrence = get_occurrence_for_parent(db, parent, occurrence_id)
+    if approved:
+        occurrence.status = "approved"
+        occurrence.approved_at = datetime.now(timezone.utc)
+        occurrence.approved_by = parent.id
+    else:
+        occurrence.status = "rejected"
+    db.commit()
+    db.refresh(occurrence)
+    return occurrence
+
+
+@router.post("/tasks/occurrences/{occurrence_id}/approve", response_model=schemas.OccurrenceResponse)
+def approve_occurrence(occurrence_id: UUID, current_parent: models.Parent = Depends(get_current_parent),
+                       db: Session = Depends(get_db)):
+    return _review(occurrence_id, True, current_parent, db)
+
+
+@router.post("/tasks/occurrences/{occurrence_id}/reject", response_model=schemas.OccurrenceResponse)
+def reject_occurrence(occurrence_id: UUID, current_parent: models.Parent = Depends(get_current_parent),
+                      db: Session = Depends(get_db)):
+    return _review(occurrence_id, False, current_parent, db)

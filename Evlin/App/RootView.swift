@@ -8,6 +8,7 @@ enum AppMode: String, CaseIterable, Identifiable {
 
 struct RootView: View {
     @State private var session = SessionManager.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var mode: AppMode? = nil
     // Separate per role — a parent and a kid go through entirely different
@@ -70,6 +71,11 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: mode)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, parentOnboarded || childOnboarded {
+                Task { await AppSync.shared.syncBackendData() }
+            }
+        }
         // Used to be a blanket dismissKeyboardOnTap() here covering the
         // whole app (mode picker, every onboarding step, both tab roots) —
         // sat on top of screens with no text fields at all too, including

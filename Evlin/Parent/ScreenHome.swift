@@ -28,6 +28,9 @@ struct ScreenHome: View {
     private var unreadCount: Int { NotificationsData.notifs.filter(\.unread).count }
 
     var body: some View {
+        // Re-evaluate (and re-read FamilyStore.children, so a name the child
+        // typed while pairing shows up) whenever a backend sync completes.
+        let _ = SyncState.shared.version
         NavigationStack {
             Group {
                 // Onboarding always produces exactly one child before
@@ -69,6 +72,15 @@ struct ScreenHome: View {
             // other unrelated state change happened to force a re-render.
             .id(familyRefreshTick)
             .onAppear { familyRefreshTick += 1 }
+            // A kid can finish pairing (and type their name) at any time on
+            // their own device, so poll while Home is visible instead of only
+            // syncing at launch/onboarding.
+            .task {
+                while !Task.isCancelled {
+                    await AppSync.shared.syncBackendData()
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     homeBrandMark

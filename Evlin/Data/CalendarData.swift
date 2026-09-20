@@ -10,7 +10,10 @@ struct FamilyPerson: Identifiable {
 enum CalTaskState { case pending, submitted, done }
 
 struct CalEvent: Identifiable {
-    let id = UUID()
+    // Backend rows reuse their own UUID so a re-sync keeps the same identity
+    // (open sheets and selections don't reset under the user).
+    var id = UUID()
+    var remoteId: String? = nil
     var personId: String
     var title: String
     var emoji: String
@@ -42,27 +45,42 @@ enum CalendarData {
 
     static let everyone = FamilyPerson(id: "everyone", name: "Family", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))
 
-    static let dataMonth = 9
-    static let dataYear = 2024
-    static let dataDay = 12
-    static let daysInDataMonth = 30
+    // The calendar shows the real current month (the day-of-month Int is its
+    // only date key). These used to be a hardcoded Sep 2024 mock month.
+    private static let today = Date()
+    private static let gregorian = Calendar(identifier: .gregorian)
+    static let dataYear = gregorian.component(.year, from: today)
+    static let dataMonth = gregorian.component(.month, from: today)
+    static let dataDay = gregorian.component(.day, from: today)
+    static let daysInDataMonth = gregorian.range(of: .day, in: .month, for: today)?.count ?? 30
 
-    static let dayNames: [Int: String] = [
-        1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat",
-        8: "Sun", 9: "Mon", 10: "Tue", 11: "Wed", 12: "Thu", 13: "Fri", 14: "Sat",
-        15: "Sun", 16: "Mon", 17: "Tue", 18: "Wed", 19: "Thu", 20: "Fri", 21: "Sat",
-        22: "Sun", 23: "Mon", 24: "Tue", 25: "Wed", 26: "Thu", 27: "Fri", 28: "Sat",
-        29: "Sun", 30: "Mon",
-    ]
+    static func date(day: Int, minutes: Int = 0) -> Date {
+        var c = DateComponents(); c.year = dataYear; c.month = dataMonth; c.day = day
+        c.hour = minutes / 60; c.minute = minutes % 60
+        return gregorian.date(from: c) ?? today
+    }
+
+    /// Short weekday name ("Sun"…"Sat") for each day of the displayed month.
+    static let dayNames: [Int: String] = {
+        let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        var out: [Int: String] = [:]
+        for d in 1...daysInDataMonth {
+            out[d] = names[gregorian.component(.weekday, from: date(day: d)) - 1]
+        }
+        return out
+    }()
     static let fullDayNames: [String: String] = [
         "Sun": "Sunday", "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday",
         "Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday",
     ]
+    static var monthShort: String { String(monthFull[dataMonth - 1].prefix(3)) }
 
     static let allDayCodes = "sun,mon,tue,wed,thu,fri,sat"
     static let weekdayCodes = "mon,tue,wed,thu,fri"
 
-    static let eventsByDay: [Int: [CalEvent]] = [:]
+    /// Filled by AppSync from the backend (events + tasks); the calendar
+    /// reads it instead of owning a local-only copy.
+    static var eventsByDay: [Int: [CalEvent]] = [:]
 
     static let allDayByDay: [Int: [(personId: String, title: String)]] = [:]
 
@@ -82,8 +100,16 @@ enum CalendarData {
         return h * 60 + m
     }
 
+    // A linked task's state is only known for today (that's the one
+    // occurrence the app loads), so on any other day it reads as pending
+    // rather than borrowing today's "done" for every repeat.
+    private static func forDay(_ ev: CalEvent, _ day: Int) -> CalEvent {
+        guard ev.linkedTaskId != nil, day != dataDay else { return ev }
+        var e = ev; e.taskState = .pending; return e
+    }
+
     static func expandedEvents(for day: Int, in store: [Int: [CalEvent]]) -> [CalDayEvent] {
-        let explicit = (store[day] ?? []).map { CalDayEvent(event: $0, day: day, originDay: day, isRecurring: false) }
+        let explicit = (store[day] ?? []).map { CalDayEvent(event: forDay($0, day), day: day, originDay: day, isRecurring: false) }
         var expanded: [CalDayEvent] = []
         for (origin, evs) in store where origin < day {
             for ev in evs {
@@ -93,7 +119,7 @@ enum CalendarData {
                 guard let dayCode = dayNames[day]?.lowercased(), codes.contains(dayCode) else { continue }
                 let alreadyExplicit = explicit.contains { $0.event.title == ev.title && $0.event.start == ev.start && $0.event.personId == ev.personId }
                 if !alreadyExplicit {
-                    expanded.append(CalDayEvent(event: ev, day: day, originDay: origin, isRecurring: true))
+                    expanded.append(CalDayEvent(event: forDay(ev, day), day: day, originDay: origin, isRecurring: true))
                 }
             }
         }

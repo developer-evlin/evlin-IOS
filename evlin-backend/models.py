@@ -72,6 +72,9 @@ class Task(Base):
     instructions = Column(String)
     bucket = Column(String, nullable=False, default="anytime")
     due_time = Column(Time)
+    # Day a one-off task is for / the day a repeating task starts. NULL means
+    # "the day it was created".
+    due_date = Column(Date)
     recurrence = Column(String, nullable=False, default="daily")
     gates_apps = Column(Boolean, nullable=False, default=True)
     points = Column(Integer, nullable=False, default=0)
@@ -164,6 +167,10 @@ class Event(Base):
     gates_apps = Column(Boolean, nullable=False, default=False)
     location_or_link = Column(String)
     source = Column(String, nullable=False, default="manual")
+    category = Column(String)
+    note = Column(String)
+    # Comma-joined weekday codes ("mon,wed") or "none".
+    recurrence = Column(String, nullable=False, default="none")
     ics_feed_id = Column(UUID(as_uuid=True), ForeignKey("app.ics_feeds.id", ondelete="CASCADE"))
     external_uid = Column(String)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

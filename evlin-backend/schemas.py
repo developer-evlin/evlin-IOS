@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -37,12 +37,22 @@ class ChildResponse(ChildBase):
     class Config:
         from_attributes = True
 
+class ChildUpdate(BaseModel):
+    name: Optional[str] = None
+    color_index: Optional[int] = None
+    birth_year: Optional[int] = None
+
 class GeneratePairingCodeRequest(BaseModel):
-    child_id: UUID
+    # Neither set: pair the parent's first child, creating a placeholder if
+    # they have none (onboarding). child_id: re-pair that existing child.
+    # new_child: create another child for this parent and pair that one.
+    child_id: Optional[UUID] = None
+    new_child: bool = False
 
 class GeneratePairingCodeResponse(BaseModel):
     pairing_code: str
     expires_at: datetime
+    child_id: Optional[UUID] = None
 
 class PairChildRequest(BaseModel):
     pairing_code: str
@@ -58,6 +68,7 @@ class TaskBase(BaseModel):
     instructions: Optional[str] = None
     bucket: str = "anytime"
     due_time: Optional[str] = None # Will store time as string "HH:MM:SS"
+    due_date: Optional[str] = None # "YYYY-MM-DD"
     recurrence: str = "daily"
     gates_apps: bool = True
     points: int = 0
@@ -67,7 +78,20 @@ class TaskBase(BaseModel):
 class TaskCreate(TaskBase):
     pass
 
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, v):
+        if not v or not v.strip():
+            raise ValueError("title must not be blank")
+        return v.strip()
+
 class TaskResponse(TaskBase):
+    # ORM rows hold time/date objects; the API exposes them as strings.
+    @field_validator("due_time", "due_date", mode="before")
+    @classmethod
+    def _iso(cls, v):
+        return v.isoformat() if hasattr(v, "isoformat") else v
+
     id: UUID
     child_id: UUID
     comic_id: Optional[UUID] = None
@@ -132,9 +156,12 @@ class EventBase(BaseModel):
     gates_apps: bool = False
     location_or_link: Optional[str] = None
     source: str = "manual"
+    category: Optional[str] = None
+    note: Optional[str] = None
+    recurrence: str = "none"
 
 class EventCreate(EventBase):
-    pass
+    child_id: Optional[UUID] = None # null = family-wide
 
 class EventResponse(EventBase):
     id: UUID

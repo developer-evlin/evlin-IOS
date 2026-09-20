@@ -28,6 +28,7 @@ struct ScreenProfile: View {
     // downtime) now come from chat instead, so the "+" goes straight to
     // adding a task, no intermediate menu with a single choice on it.
     @State private var showAddTask = false
+    @State private var taskSaveFailed = false
     @State private var showUnlockConfirm = false
     @State private var showGrantTimeSheet = false
     @State private var editingScreenTimeLimit = false
@@ -66,6 +67,14 @@ struct ScreenProfile: View {
     private func isDueToday(_ task: ChildTask) -> Bool {
         guard let due = task.dueDate else { return true }
         return Calendar.current.isDateInToday(due)
+    }
+
+    private static func dueTimeString(_ date: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f.string(from: date)
+    }
+
+    private static func dueDateString(_ date: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f.string(from: date)
     }
 
     private var todaysTasks: [ChildTask] { tasks.filter(isDueToday) }
@@ -122,6 +131,9 @@ struct ScreenProfile: View {
     }
 
     var body: some View {
+        // Reading this re-renders the profile whenever a backend sync lands
+        // (TaskStore is a static cache SwiftUI can't observe on its own).
+        let _ = SyncState.shared.version
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 headerCard
@@ -294,22 +306,35 @@ struct ScreenProfile: View {
         .fullScreenCover(isPresented: Binding<Bool>(get: { reviewStartIndex != nil }, set: { if !$0 { reviewStartIndex = nil } })) {
             TaskReviewDeckView(tasks: $tasks, childName: child.name, childId: childId, startIndex: reviewStartIndex ?? 0, onDismiss: { reviewStartIndex = nil })
         }
+        .alert("Couldn't save task", isPresented: $taskSaveFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Check your connection and try again.")
+        }
         .sheet(isPresented: $showAddTask) {
             AddTaskSheet(child: child, onCreate: { newTask in
                 showAddTask = false
                 Task {
                     do {
-                        _ = try await APIClient.shared.createTask(
+                        let saved = try await APIClient.shared.createTask(
                             childId: childId,
                             title: newTask.title,
                             instructions: newTask.description,
                             recurrence: newTask.repeats,
                             bucket: newTask.category,
-                            submissionKind: "button" // Default to button for MVP
+                            submissionKind: "button", // Default to button for MVP
+                            dueTime: newTask.dueDate.map { Self.dueTimeString($0) },
+                            dueDate: newTask.dueDate.map { Self.dueDateString($0) }
                         )
+                        // Show it right away under its real database id; the
+                        // sync below then replaces it with the canonical row.
+                        var created = newTask
+                        created.id = saved.id
+                        tasks.append(created)
                         await AppSync.shared.syncBackendData()
                     } catch {
                         print("Failed to save task to backend: \(error)")
+                        taskSaveFailed = true
                     }
                 }
             }, onCancel: { showAddTask = false })
@@ -530,7 +555,7 @@ struct ScreenProfile: View {
             // No done/total pill here anymore — headerCard's status line
             // ("Locked · 1/5 tasks") already says how many are left, so
             // this was the same count shown twice on one screen.
-            SectionHead("Current Tasks")
+            SectionHead("Today's Tasks")
             VStack(spacing: 10) {
                 // Enumerate the full array first, filter after — `i` has
                 // to stay the task's true index into `tasks` (what

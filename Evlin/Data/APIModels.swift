@@ -9,6 +9,22 @@ struct ApiTask: Codable {
     let points: Int
     let submissionKind: String
     let bucket: String
+    let dueDate: String?   // "YYYY-MM-DD"
+    let dueTime: String?   // "HH:MM:SS"
+    let createdAt: String?
+}
+
+struct ApiEvent: Codable {
+    let id: String
+    let childId: String?   // nil = family-wide
+    let title: String
+    let startAt: String
+    let endAt: String
+    let locationOrLink: String?
+    let source: String
+    let category: String?
+    let note: String?
+    let recurrence: String
 }
 
 struct ApiOccurrence: Codable {

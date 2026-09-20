@@ -198,7 +198,7 @@ struct ScreenTabletCalendar: View {
                 Button { selectedDay = max(1, selectedDay - 1) } label: { kidNavCircle("chevron.left") }
                 Spacer()
                 VStack(spacing: 2) {
-                    Text("\(CalendarData.dayNames[selectedDay] ?? ""), Sep \(selectedDay)")
+                    Text("\(CalendarData.dayNames[selectedDay] ?? ""), \(CalendarData.monthShort) \(selectedDay)")
                         .font(Typography.display(kid.of(18, 22), weight: .bold))
                         .foregroundStyle(KidTheme.ink)
                     if selectedDay == CalendarData.dataDay {

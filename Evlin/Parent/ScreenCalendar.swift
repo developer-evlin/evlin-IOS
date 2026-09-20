@@ -167,7 +167,11 @@ func groupDueTasks(_ events: [CalDayEvent]) -> [TaskDueGroup] {
 struct ScreenCalendar: View {
     @State private var selectedDay = CalendarData.dataDay
     @State private var showDatePicker = false
+    // Backend-backed: CalendarData.eventsByDay is rebuilt by AppSync; edits
+    // below update this copy right away (so the UI feels instant), save to
+    // the backend, and the next sync replaces it with the saved rows.
     @State private var eventsByDay: [Int: [CalEvent]] = CalendarData.eventsByDay
+    @State private var saveFailed = false
     @State private var activeDayEvent: CalDayEvent?
     // Every timed task due at the same moment for the same kid opens as
     // one group sheet, not a per-task detail — see TaskDueGroupSheet.
@@ -258,6 +262,95 @@ struct ScreenCalendar: View {
         }
     }
 
+    // MARK: Backend saves
+
+    private func reloadFromStore() { eventsByDay = CalendarData.eventsByDay }
+
+    private static func dayString(_ day: Int) -> String {
+        String(format: "%04d-%02d-%02d", CalendarData.dataYear, CalendarData.dataMonth, day)
+    }
+
+    private static func dueTimeString(_ clock: String) -> String {
+        let m = CalendarData.minutesSinceMidnight(clock)
+        return String(format: "%02d:%02d:00", m / 60, m % 60)
+    }
+
+    /// personId "family" is the parent's own lane, "everyone" is family-wide;
+    /// neither is a child row, so both are stored with no child_id and told
+    /// apart by `source`.
+    private static func eventScope(_ personId: String) -> (childId: String?, source: String) {
+        if FamilyStore.children.contains(where: { $0.id == personId }) { return (personId, "manual") }
+        return (nil, personId == "family" ? "parent" : "everyone")
+    }
+
+    private static func eventDates(_ ev: CalEvent, day: Int) -> (Date, Date) {
+        let start = CalendarData.date(day: day, minutes: CalendarData.minutesSinceMidnight(ev.start))
+        var end = CalendarData.date(day: day, minutes: CalendarData.minutesSinceMidnight(ev.end))
+        if end < start { end = start.addingTimeInterval(3600) }
+        return (start, end)
+    }
+
+    private func save(_ work: @escaping () async throws -> Void) {
+        Task {
+            do {
+                try await work()
+                await AppSync.shared.syncBackendData()
+            } catch {
+                print("Calendar save failed: \(error)")
+                reloadFromStore()
+                saveFailed = true
+            }
+        }
+    }
+
+    private func createItem(_ ev: CalEvent, day: Int) {
+        eventsByDay[day, default: []].append(ev)
+        save {
+            if ev.category == "Task" {
+                // A task belongs to a real child; the "Parent" lane can't own one.
+                guard FamilyStore.children.contains(where: { $0.id == ev.personId }) else { throw URLError(.badURL) }
+                _ = try await APIClient.shared.createTask(
+                    childId: ev.personId, title: ev.title,
+                    instructions: ev.note.isEmpty ? nil : ev.note,
+                    recurrence: ev.repeats, bucket: ev.isAnytime ? "anytime" : "timed",
+                    submissionKind: "button",
+                    dueTime: ev.isAnytime ? nil : Self.dueTimeString(ev.start),
+                    dueDate: Self.dayString(day)
+                )
+            } else {
+                let scope = Self.eventScope(ev.personId)
+                let (start, end) = Self.eventDates(ev, day: day)
+                _ = try await APIClient.shared.createEvent(
+                    childId: scope.childId, title: ev.title, start: start, end: end,
+                    category: ev.category, note: ev.note, location: ev.location,
+                    recurrence: ev.repeats, source: scope.source
+                )
+            }
+        }
+    }
+
+    private func updateItem(_ updated: CalEvent, originDay: Int) {
+        if let i = eventsByDay[originDay]?.firstIndex(where: { $0.id == updated.id }) {
+            eventsByDay[originDay]?[i] = updated
+        }
+        guard let remoteId = updated.remoteId else { return }
+        save {
+            let scope = Self.eventScope(updated.personId)
+            let (start, end) = Self.eventDates(updated, day: originDay)
+            try await APIClient.shared.updateEvent(
+                eventId: remoteId, childId: scope.childId, title: updated.title, start: start, end: end,
+                category: updated.category, note: updated.note, location: updated.location,
+                recurrence: updated.repeats, source: scope.source
+            )
+        }
+    }
+
+    private func deleteItem(_ ev: CalEvent, originDay: Int) {
+        eventsByDay[originDay]?.removeAll { $0.id == ev.id }
+        guard let remoteId = ev.remoteId else { return }
+        save { try await APIClient.shared.deleteEvent(eventId: remoteId) }
+    }
+
     var body: some View {
         NavigationStack {
             DayTimelineView(
@@ -312,12 +405,10 @@ struct ScreenCalendar: View {
         }
         .sheet(item: $activeDayEvent) { de in
             EventDetailSheet(dayEvent: de, onSave: { updated in
-                if let i = eventsByDay[de.originDay]?.firstIndex(where: { $0.id == de.event.id }) {
-                    eventsByDay[de.originDay]?[i] = updated
-                }
+                updateItem(updated, originDay: de.originDay)
                 activeDayEvent = nil
             }, onDelete: {
-                eventsByDay[de.originDay]?.removeAll { $0.id == de.event.id }
+                deleteItem(de.event, originDay: de.originDay)
                 activeDayEvent = nil
             }, onClose: { activeDayEvent = nil })
         }
@@ -350,9 +441,16 @@ struct ScreenCalendar: View {
         }
         .sheet(isPresented: $showAddEvent) {
             AddCalendarSheet(currentDay: selectedDay, onCreate: { ev, day in
-                eventsByDay[day, default: []].append(ev)
+                createItem(ev, day: day)
                 showAddEvent = false
             }, onCancel: { showAddEvent = false })
+        }
+        .onChange(of: SyncState.shared.version) { _, _ in reloadFromStore() }
+        .onAppear { reloadFromStore() }
+        .alert("Couldn't save", isPresented: $saveFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("That change wasn't saved. Check your connection (and that the task is for a child) and try again.")
         }
         .sheet(isPresented: $showDatePicker) {
             MonthPickerSheet(selectedDay: selectedDay, eventsByDay: eventsByDay, onPickDay: { d in
@@ -604,7 +702,7 @@ private struct DayTimelineView: View {
             Spacer()
             Button(action: onOpenDatePicker) {
                 VStack(spacing: 2) {
-                    Text("\(CalendarData.dayNames[selectedDay] ?? ""), Sep \(selectedDay)")
+                    Text("\(CalendarData.dayNames[selectedDay] ?? ""), \(CalendarData.monthShort) \(selectedDay)")
                         .font(Typography.font(17, weight: .heavy))
                         .foregroundStyle(EColor.onSurface)
                     // Always the tap hint, even on today — "TODAY" alone

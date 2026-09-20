@@ -787,6 +787,7 @@ struct ParentShowCodeStep: View {
 
     
     @State private var pollingTask: Task<Void, Never>? = nil
+    @State private var pairingChildId: String?
 
     private func fetchCode() async {
         busy = true
@@ -796,6 +797,8 @@ struct ParentShowCodeStep: View {
             let result = try await APIClient.shared.generatePairingCode()
             code = result.code
             expiresAt = result.expiresAt
+            pairingChildId = result.childId
+            if let childId = result.childId { SessionManager.shared.activeChildId = childId }
             startPolling()
         } catch {
             errorText = "Failed to generate pairing code. Please try again."
@@ -815,7 +818,7 @@ struct ParentShowCodeStep: View {
                 if Task.isCancelled { break }
                 attempts += 1
                 
-                let result = (try? await APIClient.shared.checkPairingStatus(code: code)) ?? (paired: false, kidName: nil)
+                let result = (try? await APIClient.shared.checkPairingStatus(code: code, childId: pairingChildId)) ?? (paired: false, kidName: nil)
                 if result.paired {
                     await MainActor.run {
                         if let kidName = result.kidName {

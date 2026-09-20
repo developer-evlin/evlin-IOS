@@ -35,7 +35,9 @@ struct ChildProfileStep: View {
     @State private var genderIndex = 0
 
     private var canContinue: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Needs a letter: a name that's only digits is almost always the
+        // pairing code typed into the wrong box.
+        name.contains(where: \.isLetter)
     }
 
     @Environment(\.horizontalSizeClass) private var hSizeClass

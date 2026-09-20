@@ -5,11 +5,13 @@ from datetime import datetime, timezone, time
 import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
+from access import assert_parent_owns_child
 
 router = APIRouter(tags=["rules", "state"])
 
 @router.get("/children/{child_id}/rules", response_model=schemas.ChildRuleResponse)
 def get_child_rules(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    assert_parent_owns_child(db, current_parent, child_id)
     rules = db.query(models.ChildRule).filter(models.ChildRule.child_id == child_id).first()
     if not rules:
         # Default fallback if missing
@@ -21,6 +23,7 @@ def get_child_rules(child_id: UUID, current_parent: models.Parent = Depends(get_
 
 @router.put("/children/{child_id}/rules", response_model=schemas.ChildRuleResponse)
 def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    assert_parent_owns_child(db, current_parent, child_id)
     rules = db.query(models.ChildRule).filter(models.ChildRule.child_id == child_id).first()
     if not rules:
         rules = models.ChildRule(child_id=child_id)
@@ -48,6 +51,7 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
 
 @router.get("/children/{child_id}/state", response_model=schemas.ChildStateResponse)
 def get_child_state(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    assert_parent_owns_child(db, current_parent, child_id)
     state = db.query(models.ChildState).filter(models.ChildState.child_id == child_id).first()
     if not state:
         state = models.ChildState(child_id=child_id)
@@ -58,6 +62,7 @@ def get_child_state(child_id: UUID, current_parent: models.Parent = Depends(get_
 
 @router.put("/children/{child_id}/state", response_model=schemas.ChildStateResponse)
 def update_child_state(child_id: UUID, state_update: schemas.ChildStateUpdate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    assert_parent_owns_child(db, current_parent, child_id)
     state = db.query(models.ChildState).filter(models.ChildState.child_id == child_id).first()
     if not state:
         state = models.ChildState(child_id=child_id)
