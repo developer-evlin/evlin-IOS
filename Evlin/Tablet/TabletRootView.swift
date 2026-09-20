@@ -14,8 +14,8 @@ struct TabletRootView: View {
 
     // Screen-time numbers used to live only in the immutable TabletData.child
     // snapshot — lifted into @State here so it can actually mutate.
-    @State private var usedMin = TabletData.child.usedMin
-    @State private var limitMin = TabletData.child.limitMin
+    // @State private var usedMin = TabletData.child.usedMin
+    // @State private var limitMin = TabletData.child.limitMin
     @State private var onBreakUntil: Date?
 
     // "Your tasks for today" intro — shown once per app session, before the
@@ -68,14 +68,14 @@ struct TabletRootView: View {
             .background(KidTheme.background)
 
             if showDayIntro {
-                TaskDayIntroOverlay(childName: TabletData.child.name, taskCount: tasks.count) {
+                TaskDayIntroOverlay(childName: childName, taskCount: tasks.count) {
                     withAnimation(.easeOut(duration: 0.3)) { showDayIntro = false }
                 }
                 .transition(.opacity)
             }
 
             if let stage = celebrationStage {
-                TaskCompletionOverlay(stage: stage, childName: TabletData.child.name, limitMin: limitMin) {
+                TaskCompletionOverlay(stage: stage, childName: childName, limitMin: limitMin) {
                     switch stage {
                     case .congrats:
                         withAnimation(.easeInOut(duration: 0.25)) { celebrationStage = .reveal }
