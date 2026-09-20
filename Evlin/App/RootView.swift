@@ -45,7 +45,7 @@ struct RootView: View {
                                 // if the network fails so the UI doesn't break, but AppSync will overwrite it
                                 // if the real data exists.
                                 if FamilyStore.children.isEmpty {
-                                    FamilyStore.addOnboardedChild(name: "Liam")
+                                    FamilyStore.addOnboardedChild(name: "Child")
                                 }
                                 parentOnboarded = true
                                 Task { await AppSync.shared.syncBackendData() }

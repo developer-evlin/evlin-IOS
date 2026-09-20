@@ -163,7 +163,7 @@ def generate_pairing_code(current_parent: models.Parent = Depends(get_current_pa
         child_id = parent_child.child_id
     else:
         # Create a default placeholder child
-        new_child = models.Child(name="Liam", birth_year=2012, color_index=0, avatar_url="")
+        new_child = models.Child(name="Your Child", birth_year=2015, color_index=0, avatar_url="")
         db.add(new_child)
         db.commit()
         db.refresh(new_child)
