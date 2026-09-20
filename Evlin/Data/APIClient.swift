@@ -106,7 +106,7 @@ class APIClient {
         }
         
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let code = json?["code"] as? String, let expiresAt = json?["expires_at"] as? String else {
+        guard let code = json?["pairing_code"] as? String, let expiresAt = json?["expires_at"] as? String else {
             throw APIError.serverError("Failed to decode response")
         }
         
