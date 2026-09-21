@@ -32,9 +32,8 @@ struct TaskReviewDeckView: View {
     @State private var showRedoCompose = false
     @State private var editingTask: ChildTask?
     // The current card's live drag position — reset to .zero every time
-    // the card underneath it changes (advance()/back()), or the next
-    // card would render already offset from whatever the previous one
-    // ended up at.
+    // the card underneath it changes (advance()), or the next card would
+    // render already offset from whatever the previous one ended up at.
     @State private var dragOffset: CGSize = .zero
     private let swipeThreshold: CGFloat = 120
 
@@ -99,24 +98,7 @@ struct TaskReviewDeckView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: 4) {
-                        Button("Close") { dismiss(); onDismiss() }
-                        // Swiping used to also mean "go back to the
-                        // previous card" (plain navigation, no decision).
-                        // A drag is spoken for now (approve/redo on a
-                        // submitted card), so this is what replaces it —
-                        // a plain step back, no decision attached.
-                        if index > 0 {
-                            Button { back() } label: {
-                                Image(systemName: "chevron.left")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .frame(width: 32, height: 32)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(EColor.onSurfaceVariant)
-                        }
-                    }
+                    Button("Close") { dismiss(); onDismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if let task = currentTask {
@@ -293,12 +275,6 @@ struct TaskReviewDeckView: View {
 
     private func advance() {
         index += 1
-    }
-
-    private func back() {
-        guard index > 0 else { return }
-        dragOffset = .zero
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { index -= 1 }
     }
 
     // MARK: - Tinder-style card stack
