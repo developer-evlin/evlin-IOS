@@ -13,8 +13,6 @@ struct TabletRootView: View {
     @State private var selectedTask: KidTask?
     @State private var kidSaveError: String?
 
-    // Screen-time numbers used to live only in the immutable TabletData.child
-    // snapshot — lifted into @State here so it can actually mutate.
     // Computed properties pulling live data from the session store
     private var activeChild: Child? {
         if let id = session.activeChildId {

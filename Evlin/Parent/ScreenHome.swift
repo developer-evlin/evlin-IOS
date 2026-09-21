@@ -241,17 +241,10 @@ private struct NotificationPanel: View {
     @State private var notifs = NotificationsData.notifs
     @Environment(\.dismiss) private var dismiss
 
-    // "maya"/"emma" cases used to live here too — dead along with the
-    // notif entries that used to carry those old demo-gallery ids (see
-    // NotificationsData.swift). Any child besides "your child" (multi-child via
-    // Settings' "Add a child" gets a real UUID) falls through to the
-    // default tint rather than a hardcoded per-id color.
-    private func color(for childId: String) -> Color {
-        switch childId {
-        case "your child": return Color(hex: "2563EB")
-        default: return EColor.primary
-        }
-    }
+    // No per-child color mapping exists (children only ever have real
+    // backend UUIDs) — this just tints every notification the same until
+    // there's a real reason to tell children apart here.
+    private func color(for childId: String) -> Color { EColor.primary }
 
     var body: some View {
         NavigationStack {

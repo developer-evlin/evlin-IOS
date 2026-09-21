@@ -183,13 +183,6 @@ enum FamilyStore {
     }
 }
 
-// Mock 7-day family total (Mon–Sun) used to draw the analytics trend chart.
-enum WeekUsage {
-    static let days: [(d: String, min: Int)] = [
-        ("M", 224), ("T", 268), ("W", 191), ("T", 302), ("F", 246), ("S", 355), ("S", 168),
-    ]
-}
-
 func formatMinutes(_ min: Int) -> String {
     if min <= 0 { return "0m" }
     let h = min / 60, m = min % 60

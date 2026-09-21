@@ -7,14 +7,15 @@ import SwiftUI
 struct ScreenTabletSettings: View {
     var onSwitchMode: () -> Void
 
-    // Deliberately NOT TabletData.child (Liam) — the parent-approval demo
-    // is scoped to whichever child is last in FamilyStore.children (Jake
-    // today) so it never fires against the "real" kid this prototype's
-    // other screens are themed around. parentApprovalStatus lives on the
-    // Child record itself, so a status change made from inside the parent's
-    // profile (a mode switch away, on this single-device prototype) is
-    // still reflected here the next time this view checks it.
-    @ObservedObject private var childProfile = FamilyStore.children.last ?? FamilyStore.child(TabletData.child.id)
+    // FamilyStore.children.last is the real synced child on a kid's own
+    // device (AppSync.syncKidDevice keeps exactly one). The fallback only
+    // matters for the brief window before the first sync completes — used
+    // to be FamilyStore.child(TabletData.child.id), a leftover mock id that
+    // never matches a real backend child anyway. SessionManager.shared
+    // (not @Environment — this runs in a property initializer, before the
+    // environment is populated) mirrors what ScreenTabletHome/
+    // ScreenTabletCalendar already key off of.
+    @ObservedObject private var childProfile = FamilyStore.children.last ?? FamilyStore.child(SessionManager.shared.activeChildId ?? "")
     @State private var showApprovalWait = false
     @Environment(\.dismiss) private var dismiss
     // iPad already renders this .sheet as a system form sheet (centered,

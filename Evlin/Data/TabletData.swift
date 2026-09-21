@@ -69,16 +69,7 @@ struct HowToGuide: Identifiable {
     var count: Int
 }
 
-struct KidChild {
-    let id: String
-    var name: String
-    var usedMin: Int
-    var limitMin: Int
-}
-
 enum TabletData {
-    static let child = KidChild(id: "liam", name: "Child", usedMin: 94, limitMin: 120)
-
     static var tasks: [KidTask] = []
 
     // Used by ScreenTabletHome's task rows to render each task's icon.

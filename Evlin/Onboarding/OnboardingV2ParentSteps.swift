@@ -1,5 +1,6 @@
 import SwiftUI
 import AuthenticationServices
+import UserNotifications
 
 class OAuthManager: NSObject, ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -58,11 +59,12 @@ import FamilyControls
 
 // Onboarding v2 — PARENT-side screens, ported from the real app's
 // Parent/V2/ParentV2PlaceholderSteps.swift + ParentBetaAgreementStep.swift +
-// ParentCoParentRecoverySteps.swift. This prototype has no backend, so every
-// screen that used to call AuthService / APIClient now just flips local
-// @State after a short `Task.sleep` (kept only where the source showed a
-// loading state worth preserving for feel — sign-in, pairing, the first-block
-// test, "welcome back").
+// ParentCoParentRecoverySteps.swift. Used to have no backend at all, so
+// every screen just flipped local @State after a short `Task.sleep` — sign
+// in, pairing, notifications, and "waiting for the kid" now call the real
+// APIClient (see submitEmailAuth/checkBackendAndProceed and
+// ParentScanCodeStep below). What's still a timed stand-in rather than a
+// real check is called out at each site instead of blanket-claimed here.
 //
 // Step counter convention kept identical to the source for fidelity: the
 // parent v2 chain is numbered as a 12-step flow (1 welcome · 2 modeSelect are
@@ -83,7 +85,7 @@ struct ParentSignInStep: View {
     let onSignedIn: (Bool) -> Void
     var onBack: (() -> Void)? = nil
 
-    private enum Phase { case providers, emailAddress, password, confirmEmail }
+    private enum Phase { case providers, emailAddress, password }
     private enum AuthMode { case signUp, signIn }
 
     @Environment(\.horizontalSizeClass) private var hSizeClass
@@ -94,10 +96,6 @@ struct ParentSignInStep: View {
     @State private var passwordError: String?
     @State private var password = ""
     @State private var busy = false
-    @State private var confirmCode = ""
-    @State private var codeError: String?
-    @State private var resending = false
-    @State private var justResent = false
     @State private var providersError: String?
 
     private var isValidEmail: Bool {
@@ -119,7 +117,6 @@ struct ParentSignInStep: View {
         case .providers: return onBack
         case .emailAddress: return { phase = .providers }
         case .password: return { phase = .emailAddress }
-        case .confirmEmail: return nil
         }
     }
 
@@ -139,7 +136,6 @@ struct ParentSignInStep: View {
                 case .providers: providersContent
                 case .emailAddress: emailAddressContent
                 case .password: passwordContent
-                case .confirmEmail: confirmEmailContent
                 }
             },
             footer: { EmptyView() }
@@ -287,82 +283,10 @@ struct ParentSignInStep: View {
         }
     }
 
-    // MARK: - Phase 4: confirm email (sign-up only)
-
-    private var confirmEmailContent: some View {
-        VStack(spacing: 11) {
-            ZStack {
-                Circle().fill(OnboardingV2Theme.Palette.primaryContainer).frame(width: 84, height: 84)
-                Image(systemName: "envelope.badge.fill")
-                    .font(.system(size: 32, weight: .semibold))
-                    .foregroundStyle(OnboardingV2Theme.Palette.primary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, Spacing.sm)
-
-            OnboardingV2CodeField(code: $confirmCode)
-                .onChange(of: confirmCode) { _, newValue in
-                    let digits = String(newValue.filter(\.isNumber).prefix(6))
-                    if digits != newValue {
-                        confirmCode = digits
-                    }
-                    codeError = nil
-                    if digits.count == 6 && !busy { Task { await finishSignUp() } }
-                }
-
-            if busy {
-                HStack(spacing: Spacing.md) {
-                    ProgressView().controlSize(.small)
-                    Text("Verifying…").onboardingV2BodyXS()
-                }
-            }
-            if let codeError {
-                Text(codeError).onboardingV2BodyXS().foregroundStyle(OnboardingV2Theme.Palette.error)
-            }
-
-            Button(justResent ? "Code sent" : "Resend code") {
-                Task { await resendEmail() }
-            }
-            .font(OnboardingV2Theme.Typography.bodyXS)
-            .foregroundStyle(justResent ? OnboardingV2Theme.Palette.secondary : OnboardingV2Theme.Palette.primary)
-            .disabled(resending || justResent)
-
-            Button("Wrong email?") { phase = .emailAddress }
-                .font(OnboardingV2Theme.Typography.bodyXS)
-                .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
-        }
-    }
-
-    
-    private func resendEmail() async {
-        resending = true
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        resending = false
-        justResent = true
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
-        justResent = false
-    }
-
-    
-    private func finishSignUp() async {
-        busy = true
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        busy = false
-        // Mocked, matching this app's other "any code succeeds" flows — no
-        // backend to actually issue/check a code against.
-        if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let local = email.split(separator: "@").first.map(String.init) ?? "Morgan"
-            parentName = local.capitalized
-        }
-        await checkBackendAndProceed()
-    }
-
-    
-    
     private func submitEmailAuth() async {
         busy = true
         let success: Bool
-        
+
         var actualError: String? = nil
         do {
             if authMode == .signUp {
@@ -370,16 +294,11 @@ struct ParentSignInStep: View {
             } else {
                 success = try await APIClient.shared.login(email: email, password: password)
             }
-        } catch let apiError as APIError {
-            success = false
-            switch apiError {
-            case .serverError(let msg): actualError = msg
-            }
         } catch {
             success = false
-            actualError = error.localizedDescription
+            actualError = error.apiUserMessage
         }
-        
+
         busy = false
         
         if success {
@@ -387,30 +306,34 @@ struct ParentSignInStep: View {
                 let local = email.split(separator: "@").first.map(String.init) ?? "Morgan"
                 parentName = local.capitalized
             }
-            // Skip the mocked confirm email phase entirely now that backend auth is wired up
-            await checkBackendAndProceed()
+            if let error = await checkBackendAndProceed() { passwordError = error }
         } else {
             passwordError = actualError ?? (authMode == .signUp ? "Failed to create account." : "Incorrect email or password.")
         }
     }
 
-    
-    private func checkBackendAndProceed() async {
+    /// A returning parent with an already-paired kid used to get silently
+    /// routed back through full onboarding (including a fresh pairing scan)
+    /// whenever this fetch failed — the error was only ever printed, and a
+    /// throw here was indistinguishable from "this account really has no
+    /// kids yet." Now a failure returns a real message instead of guessing,
+    /// so the caller can show it and let the parent retry (signing in again
+    /// is safe to repeat — register() already treats an existing account as
+    /// a login).
+    private func checkBackendAndProceed() async -> String? {
         busy = true
-        var hasKids = false
         do {
             let kids = try await APIClient.shared.fetchChildren()
-            hasKids = kids.contains(where: { $0.isPaired })
+            let hasKids = kids.contains(where: { $0.isPaired })
+            busy = false
+            await MainActor.run { onSignedIn(hasKids) }
+            return nil
         } catch {
-            print("Failed to fetch kids during onboarding: \(error)")
-        }
-        busy = false
-        
-        await MainActor.run {
-            onSignedIn(hasKids)
+            busy = false
+            return "Signed in, but couldn't check your account. \(error.apiUserMessage)"
         }
     }
-    
+
     private func signInWithProvider() async {
         busy = true
         providersError = nil
@@ -420,7 +343,7 @@ struct ParentSignInStep: View {
             let success = try await APIClient.shared.verifyParent(token: token)
             if success {
                 SessionManager.shared.parentRefreshToken = OAuthManager.lastRefreshToken
-                await checkBackendAndProceed()
+                if let error = await checkBackendAndProceed() { providersError = error }
             } else {
                 providersError = "Failed to sync Google login with backend."
             }
@@ -808,32 +731,12 @@ struct ParentConnectedStep: View {
 
 struct ParentWaitingForKidStep: View {
     var kidName: String = ""
-    /// Mocked: auto-fires after a short simulated wait, carrying a fake
-    /// first-block app name.
-    let onReady: (String) -> Void
+    let onReady: () -> Void
     var onBack: (() -> Void)? = nil
-
-    @State private var screenTimeGranted = false
-    @State private var pickedApp = false
 
     private var name: String {
         let t = kidName.trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? "your kid" : t
-    }
-
-    private var waitingSubtitle: String {
-        if !screenTimeGranted { return "Waiting for \(name) to allow Screen Time…" }
-        if !pickedApp { return "Waiting for \(name) to pick an app Evlin can lock…" }
-        return "Ready!"
-    }
-
-    private func waitRow(_ done: Bool, _ text: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: done ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(done ? OnboardingV2Theme.Palette.secondary
-                                      : OnboardingV2Theme.Palette.outline)
-            Text(text).onboardingV2BodyXS()
-        }
     }
 
     var body: some View {
@@ -848,13 +751,19 @@ struct ParentWaitingForKidStep: View {
             dotsCurrent: 6,
             onBack: onBack,
             content: {
+                // Used to show a two-item checklist ("Allowed Screen Time" /
+                // "Picked an app Evlin can lock") that flipped to checked on
+                // fixed timers regardless of what the kid's device actually
+                // did — there's no backend field yet reporting either of
+                // those in real time from the kid's own onboarding chain, so
+                // faking specific checkmarks (and a hardcoded "TikTok" as
+                // the "first blocked app") just lied with false precision.
+                // \(name) has already really paired (that's why this step
+                // is reachable at all — see ParentScanCodeStep); the rest of
+                // their own setup happens on their own device's chain, which
+                // asks for Screen Time for real.
                 VStack(spacing: Spacing.lg) {
-                    OnboardingV2WaitingSpinner(name: name, subtitle: waitingSubtitle)
-                    VStack(alignment: .leading, spacing: 8) {
-                        waitRow(screenTimeGranted, "Allowed Screen Time")
-                        waitRow(pickedApp, "Picked an app Evlin can lock")
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    OnboardingV2WaitingSpinner(name: name, subtitle: "Finishing setup…")
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Spacing.section)
@@ -864,13 +773,7 @@ struct ParentWaitingForKidStep: View {
         .task {
             try? await Task.sleep(nanoseconds: 900_000_000)
             guard !Task.isCancelled else { return }
-            screenTimeGranted = true
-            try? await Task.sleep(nanoseconds: 900_000_000)
-            guard !Task.isCancelled else { return }
-            pickedApp = true
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled else { return }
-            onReady("TikTok")
+            onReady()
         }
     }
 }
@@ -1068,7 +971,9 @@ struct ParentOnboardingDoneStep: View {
 }
 
 // MARK: - Parent notifications ask (ported from evlin-next's parent/notifications
-// — mirrors ChildAllowNotificationsStep's mocked iOS-permission-sheet pattern.)
+// — a custom "pre-permission" screen styled like the system dialog; tapping
+// Allow now triggers the real UNUserNotificationCenter prompt on top of it,
+// same as ChildAllowNotificationsStep.)
 
 struct ParentNotificationsAskStep: View {
     let onContinue: () -> Void
@@ -1122,46 +1027,8 @@ struct ParentNotificationsAskStep: View {
     
     private func requestThenAdvance() async {
         requesting = true
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
         requesting = false
         onContinue()
-    }
-}
-
-
-struct CountdownView: View {
-    let expiresAtISO: String
-    @State private var timeRemaining: String = "Calculating..."
-    
-    var body: some View {
-        Text(timeRemaining)
-            .font(OnboardingV2Theme.Typography.bodyStrong(false))
-            .foregroundStyle(OnboardingV2Theme.Palette.primary)
-            .padding(.top, Spacing.xs)
-            .onAppear(perform: updateTimer)
-    }
-    
-    private func updateTimer() {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fallbackFormatter = ISO8601DateFormatter()
-        
-        guard let expiryDate = formatter.date(from: expiresAtISO) ?? fallbackFormatter.date(from: expiresAtISO) else {
-            timeRemaining = "Expires soon"
-            return
-        }
-        
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-            let now = Date()
-            let diff = Int(expiryDate.timeIntervalSince(now))
-            if diff <= 0 {
-                timeRemaining = "Code expired"
-                timer.invalidate()
-            } else {
-                let mins = diff / 60
-                let secs = diff % 60
-                timeRemaining = String(format: "Expires in %d:%02d", mins, secs)
-            }
-        }
     }
 }

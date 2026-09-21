@@ -12,6 +12,7 @@ import SwiftUI
 // ScreenCalendar.swift) so both sides of the app draw an identical
 // timeline from identical data, just with their own chrome.
 struct ScreenTabletCalendar: View {
+    @Environment(SessionManager.self) private var session
     @State private var selectedDay = CalendarData.dataDay
     @State private var showWholeFamily = false
     @State private var selectedEvent: CalDayEvent?
@@ -25,7 +26,14 @@ struct ScreenTabletCalendar: View {
     private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
     private var calendarMaxWidth: CGFloat? { (kid.isRegular && !showWholeFamily) ? 640 : nil }
 
-    private var selfPerson: FamilyPerson { CalendarData.person(TabletData.child.id) }
+    // Was CalendarData.person(TabletData.child.id) — a leftover mock id
+    // ("liam") that never matches a real child's backend UUID, so
+    // filteredEvents below (which filters by lane id) never matched
+    // anything and this kid's own "Just me" calendar always rendered
+    // empty. session.activeChildId is the real synced child (set by
+    // AppSync.syncKidDevice), same source ScreenTabletHome already uses.
+    private var selfChildId: String { session.activeChildId ?? FamilyStore.children.first?.id ?? "" }
+    private var selfPerson: FamilyPerson { CalendarData.person(selfChildId) }
     private var lanes: [FamilyPerson] { showWholeFamily ? CalendarData.people : [selfPerson] }
 
     private var dayEvents: [CalDayEvent] {
@@ -268,7 +276,7 @@ struct ScreenTabletCalendar: View {
                 VStack(spacing: 3) {
                     Circle().fill(p.color).frame(width: kid.of(32, 38), height: kid.of(32, 38))
                         .overlay(Text(String(p.name.prefix(1))).font(Typography.font(kid.of(13, 15), weight: .bold)).foregroundStyle(.white))
-                    Text(p.id == TabletData.child.id ? "Me" : p.name)
+                    Text(p.id == selfChildId ? "Me" : p.name)
                         .font(Typography.font(kid.of(9.5, 11), weight: .semibold))
                         .foregroundStyle(KidTheme.ink)
                 }
@@ -501,10 +509,12 @@ struct ScreenTabletCalendar: View {
 // wherever it already lives (ScreenProfile for tasks, ScreenCalendar for
 // events).
 private struct KidEventDetailSheet: View {
+    @Environment(SessionManager.self) private var session
     var dayEvent: CalDayEvent
 
     private var event: CalEvent { dayEvent.event }
     private var person: FamilyPerson { CalendarData.person(event.personId) }
+    private var selfChildId: String { session.activeChildId ?? FamilyStore.children.first?.id ?? "" }
 
     private var whenLabel: String {
         if event.isAnytime { return "Anytime today" }
@@ -521,7 +531,7 @@ private struct KidEventDetailSheet: View {
                     Text("\(event.emoji) \(event.title)")
                         .font(Typography.display(19, weight: .bold))
                         .foregroundStyle(KidTheme.ink)
-                    Text(person.id == TabletData.child.id ? "Me" : person.name)
+                    Text(person.id == selfChildId ? "Me" : person.name)
                         .font(Typography.font(12, weight: .semibold))
                         .foregroundStyle(KidTheme.inkSoft)
                 }

@@ -65,69 +65,34 @@ class APIClient {
     
     // MARK: - Email Auth
     
+    /// Throws the backend's real `APIFailure` (with its `detail`) on
+    /// anything but 2xx, instead of the plain `Bool` this used to return —
+    /// a wrong password and a rate-limited/duplicate-email/disabled-account
+    /// error used to look identical to the caller, which always fell back
+    /// to one of two generic hardcoded strings ("Failed to create account."
+    /// / "Incorrect email or password.") no matter what actually went wrong.
     func register(email: String, password: String) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/auth/register")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let body: [String: Any] = ["email": email, "password": password]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            return false
-        }
-        
+        let data = try await sendAnonymous("POST", "/auth/register", body: ["email": email, "password": password])
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let token = json?["access_token"] as? String {
-            SessionManager.shared.parentAccessToken = token
-            SessionManager.shared.parentRefreshToken = json?["refresh_token"] as? String
-            return true
-        }
-        return false
+        guard let token = json?["access_token"] as? String else { return false }
+        SessionManager.shared.parentAccessToken = token
+        SessionManager.shared.parentRefreshToken = json?["refresh_token"] as? String
+        return true
     }
-    
-    
+
     func verifyParent(token: String) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/auth/verify-parent")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let body: [String: Any] = ["access_token": token]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        let (_, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            return false
-        }
-        
+        _ = try await sendAnonymous("POST", "/auth/verify-parent", body: ["access_token": token])
         SessionManager.shared.parentAccessToken = token
         return true
     }
 
     func login(email: String, password: String) async throws -> Bool {
-        let url = URL(string: "\(baseURL)/auth/login")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let body: [String: Any] = ["email": email, "password": password]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            return false
-        }
-        
+        let data = try await sendAnonymous("POST", "/auth/login", body: ["email": email, "password": password])
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let token = json?["access_token"] as? String {
-            SessionManager.shared.parentAccessToken = token
-            SessionManager.shared.parentRefreshToken = json?["refresh_token"] as? String
-            return true
-        }
-        return false
+        guard let token = json?["access_token"] as? String else { return false }
+        SessionManager.shared.parentAccessToken = token
+        SessionManager.shared.parentRefreshToken = json?["refresh_token"] as? String
+        return true
     }
 
     func deleteAccount() async throws {

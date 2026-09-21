@@ -2,13 +2,13 @@ import SwiftUI
 import UIKit
 import FamilyControls
 
-// Local-only v2 onboarding coordinator. Modeled on the real app's
-// OnboardingCoordinator's v2 switch statement (Views/Onboarding/OnboardingCoordinator.swift),
-// but stripped of everything that doesn't apply to this prototype: no
-// AuthService / APIClient / FamilyStore, no v1/legacy branches, no DEBUG
-// ladybug menu, no single-device interleave (this app picks ONE role per
-// launch via ModePickerView, so there's no cross-device pairing to simulate —
-// every "wait for the other device" screen just times out into success).
+// v2 onboarding coordinator. Modeled on the real app's OnboardingCoordinator's
+// v2 switch statement (Views/Onboarding/OnboardingCoordinator.swift), but
+// stripped of the v1/legacy branches, the DEBUG ladybug menu, and the
+// single-device interleave (this app picks ONE role per launch via
+// ModePickerView, so parent and kid always run this chain on separate
+// devices — real cross-device pairing, via APIClient's pairing endpoints,
+// not something simulated locally).
 
 enum OnboardingV2Step: Equatable {
     // Parent chain
@@ -56,10 +56,10 @@ struct OnboardingV2Coordinator: View {
 
     @State private var parentName = ""
     @State private var parentAvatar: UIImage?
-    /// Fixed mock kid name — there's no second device to pair with, so the
-    /// parent chain's "kid" is always this fake identity.
+    /// Generic placeholder until the real pairing poll (ParentScanCodeStep)
+    /// reports the name the kid actually typed on their own device — see
+    /// the EvlinKidPaired notification handler below.
     @State private var kidName = "your child"
-    @State private var pairedSucceeded = false
 
     // MARK: Threaded state (kid chain)
 
@@ -133,7 +133,7 @@ struct OnboardingV2Coordinator: View {
                 // straight to done once the kid's device is ready.
                 ParentWaitingForKidStep(
                     kidName: kidName,
-                    onReady: { _ in step = .parentDone },
+                    onReady: { step = .parentDone },
                     onBack: { step = .parentNotificationsAsk }
                 )
 
@@ -218,15 +218,5 @@ struct OnboardingV2Coordinator: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("EvlinKidPaired"))) { note in
             if let name = note.object as? String, !name.isEmpty { kidName = name }
         }
-    }
-
-    // MARK: - Mocked "backend" calls
-
-    /// Mock POST /family/pair: any 6-digit code succeeds.
-    @MainActor
-    private func pairWithKidCode(_ code: String) async -> String? {
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        pairedSucceeded = true
-        return nil
     }
 }

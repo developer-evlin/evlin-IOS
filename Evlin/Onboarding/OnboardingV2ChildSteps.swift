@@ -1,15 +1,16 @@
 import SwiftUI
 import UIKit
 import FamilyControls
+import UserNotifications
 
 // Onboarding v2 — KID-side screens, ported from the real app's
 // Child/V2/ChildV2PlaceholderSteps.swift plus the reused legacy screens
-// (GrantPermissionStep, DeletionProtectionStep, ChildReadyStep). The source
-// versions call FamilyControls (Screen Time authorization), UserNotifications
-// (push permission), and a live backend (POST /family/create, the App
-// Controls v2 picker, pairing-status polling). None of that exists here —
-// every permission "request" and network call is a local @State flip, timed
-// with a short `Task.sleep` where the source showed a loading state.
+// (GrantPermissionStep, DeletionProtectionStep, ChildReadyStep). Screen Time
+// authorization (FamilyControls) and push permission (UserNotifications) are
+// real system calls (see ChildScreenTimeStep / ChildNotificationsStep); the
+// pairing chain (ChildShowCodeStep) polls the real backend. What's still a
+// timed stand-in rather than a real check is called out at each site
+// instead of blanket-claimed here.
 
 private let childTotal = 11
 private let kidGreen = OnboardingV2Theme.Palette.secondary
@@ -320,16 +321,21 @@ struct ChildScreenTimeStep: View {
                     Text(message)
                         .onboardingV2Body()
                         .multilineTextAlignment(.center)
-                    // Not an actual retry of AuthorizationCenter — Screen
-                    // Time authorization reliably fails on the Simulator
-                    // (and can fail for other reasons on-device too), which
-                    // would otherwise strand this prototype's onboarding on
-                    // a real system dialog it can't get past. Matches every
-                    // other "backend" call in this flow (pairing, sign-in):
-                    // mocked to just succeed rather than gating progress on
-                    // something this standalone frontend can't fulfill.
+                    // Really retries AuthorizationCenter — this used to just
+                    // force `stage = .granted` without asking again, so a
+                    // real denial (or a "set a device passcode first"
+                    // failure, even after the kid went and set one) always
+                    // read as granted regardless of the real system state.
+                    // That let onboarding continue into ChildLockableHubStep
+                    // believing FamilyControls was authorized when it might
+                    // not be, which is the one thing everything downstream
+                    // (app-picking, enforcement) actually depends on. Note:
+                    // Screen Time authorization is known to fail/hang on the
+                    // Simulator — this makes that failure honest instead of
+                    // papering over it, so kid-side Simulator testing may
+                    // need a real device for this one step.
                     OnboardingV2PrimaryButton("Try Again", systemImage: "arrow.clockwise", role: .child) {
-                        stage = .granted
+                        Task { await requestScreenTime() }
                     }
                     .padding(.top, 8)
                 }
@@ -419,7 +425,7 @@ struct ChildNotificationsStep: View {
     @MainActor
     private func requestThenAdvance() async {
         requesting = true
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
         requesting = false
         onContinue()
     }

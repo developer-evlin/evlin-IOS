@@ -13,8 +13,7 @@ struct ScreenTabletHome: View {
     // out of the kid's main navigation entirely (see TabletRootView).
     @State private var showSettings = false
     @Environment(SessionManager.self) private var session
-    // The name the parent sees for this child (synced from the backend);
-    // TabletData.child is a fixed mock that always said "Child".
+    // The name the parent sees for this child (synced from the backend).
     private var childName: String {
         _ = SyncState.shared.version
         let kids = FamilyStore.children
