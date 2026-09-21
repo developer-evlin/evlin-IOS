@@ -66,14 +66,29 @@ enum CalendarData {
 
     static let everyone = FamilyPerson(id: "everyone", name: "Family", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))
 
-    // The calendar shows the real current month (the day-of-month Int is its
-    // only date key). These used to be a hardcoded Sep 2024 mock month.
+    // The calendar used to model a single fixed month (the day-of-month Int
+    // was its only date key, always the month the app happened to launch
+    // in). dataYear/dataMonth are now the *displayed* month, which
+    // AppSync.loadCalendarMonth can move — todayYear/todayMonth/dataDay stay
+    // fixed to the real current date so "is this actually today" checks
+    // don't break once the displayed month can differ from it.
     private static let today = Date()
     private static let gregorian = Calendar(identifier: .gregorian)
-    static let dataYear = gregorian.component(.year, from: today)
-    static let dataMonth = gregorian.component(.month, from: today)
+    static let todayYear = gregorian.component(.year, from: today)
+    static let todayMonth = gregorian.component(.month, from: today)
     static let dataDay = gregorian.component(.day, from: today)
-    static let daysInDataMonth = gregorian.range(of: .day, in: .month, for: today)?.count ?? 30
+    static var dataYear = todayYear
+    static var dataMonth = todayMonth
+    static var daysInDataMonth: Int {
+        var c = DateComponents(); c.year = dataYear; c.month = dataMonth; c.day = 1
+        guard let firstOfMonth = gregorian.date(from: c) else { return 30 }
+        return gregorian.range(of: .day, in: .month, for: firstOfMonth)?.count ?? 30
+    }
+
+    /// Whether the displayed month is the real current month — dataDay only
+    /// means "today" while this holds; otherwise a day numerically equal to
+    /// dataDay is just some other month's same-numbered day.
+    static var isDisplayingCurrentMonth: Bool { dataYear == todayYear && dataMonth == todayMonth }
 
     static func date(day: Int, minutes: Int = 0) -> Date {
         var c = DateComponents(); c.year = dataYear; c.month = dataMonth; c.day = day
@@ -82,14 +97,15 @@ enum CalendarData {
     }
 
     /// Short weekday name ("Sun"…"Sat") for each day of the displayed month.
-    static let dayNames: [Int: String] = {
+    /// Computed (not a stored `let`) since dataYear/dataMonth can now change.
+    static var dayNames: [Int: String] {
         let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
         var out: [Int: String] = [:]
         for d in 1...daysInDataMonth {
             out[d] = names[gregorian.component(.weekday, from: date(day: d)) - 1]
         }
         return out
-    }()
+    }
     static let fullDayNames: [String: String] = [
         "Sun": "Sunday", "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday",
         "Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday",
@@ -133,9 +149,13 @@ enum CalendarData {
 
     // A linked task's state is only known for today (that's the one
     // occurrence the app loads), so on any other day it reads as pending
-    // rather than borrowing today's "done" for every repeat.
+    // rather than borrowing today's "done" for every repeat. Now that the
+    // displayed month can move, "today" needs the month check too — day 20
+    // of a different month isn't today just because it shares dataDay's
+    // number.
     private static func forDay(_ ev: CalEvent, _ day: Int) -> CalEvent {
-        guard ev.linkedTaskId != nil, day != dataDay else { return ev }
+        let isActualToday = day == dataDay && isDisplayingCurrentMonth
+        guard ev.linkedTaskId != nil, !isActualToday else { return ev }
         var e = ev; e.taskState = .pending; return e
     }
 

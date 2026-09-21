@@ -453,9 +453,17 @@ struct ScreenCalendar: View {
             Text(saveError)
         }
         .sheet(isPresented: $showDatePicker) {
-            MonthPickerSheet(selectedDay: selectedDay, eventsByDay: eventsByDay, onPickDay: { d in
-                selectedDay = d
-                showDatePicker = false
+            MonthPickerSheet(selectedDay: selectedDay, eventsByDay: eventsByDay, onPickDay: { year, month, d in
+                if year == CalendarData.dataYear && month == CalendarData.dataMonth {
+                    selectedDay = d
+                    showDatePicker = false
+                } else {
+                    Task {
+                        await AppSync.shared.loadCalendarMonth(year: year, month: month)
+                        selectedDay = d
+                        showDatePicker = false
+                    }
+                }
             })
             .presentationDetents([.height(480)])
             .presentationDragIndicator(.visible)
@@ -552,7 +560,7 @@ private struct DayTimelineView: View {
         return (c.hour ?? 0) * 60 + (c.minute ?? 0)
     }
     private var showNowLine: Bool {
-        selectedDay == CalendarData.dataDay
+        selectedDay == CalendarData.dataDay && CalendarData.isDisplayingCurrentMonth
             && nowMinutes >= rangeStartHour * 60 && nowMinutes <= rangeEndHour * 60
     }
 
@@ -696,9 +704,35 @@ private struct DayTimelineView: View {
         }
     }
 
+    // Steps a day at a time, crossing into the neighboring month (and
+    // loading its real data) once the day nav runs past either edge of the
+    // currently loaded month — the chevrons used to just clamp at 1/
+    // daysInDataMonth, which is what made the calendar unable to look
+    // outside its one seeded month at all.
+    private func stepDay(by delta: Int) {
+        let next = selectedDay + delta
+        if next < 1 {
+            var y = CalendarData.dataYear, m = CalendarData.dataMonth - 1
+            if m < 1 { m = 12; y -= 1 }
+            Task {
+                await AppSync.shared.loadCalendarMonth(year: y, month: m)
+                selectedDay = CalendarData.daysInDataMonth
+            }
+        } else if next > CalendarData.daysInDataMonth {
+            var y = CalendarData.dataYear, m = CalendarData.dataMonth + 1
+            if m > 12 { m = 1; y += 1 }
+            Task {
+                await AppSync.shared.loadCalendarMonth(year: y, month: m)
+                selectedDay = 1
+            }
+        } else {
+            selectedDay = next
+        }
+    }
+
     private var dateBar: some View {
         HStack {
-            Button { selectedDay = max(1, selectedDay - 1) } label: { navCircle("chevron.left") }
+            Button { stepDay(by: -1) } label: { navCircle("chevron.left") }
             Spacer()
             Button(action: onOpenDatePicker) {
                 VStack(spacing: 2) {
@@ -711,12 +745,12 @@ private struct DayTimelineView: View {
                     Text("TAP TO CHANGE DATE")
                         .font(Typography.font(10, weight: .bold))
                         .tracking(0.6)
-                        .foregroundStyle(selectedDay == CalendarData.dataDay ? EColor.secondary : EColor.onSurfaceVariant)
+                        .foregroundStyle(selectedDay == CalendarData.dataDay && CalendarData.isDisplayingCurrentMonth ? EColor.secondary : EColor.onSurfaceVariant)
                 }
             }
             .buttonStyle(.plain)
             Spacer()
-            Button { selectedDay = min(CalendarData.daysInDataMonth, selectedDay + 1) } label: { navCircle("chevron.right") }
+            Button { stepDay(by: 1) } label: { navCircle("chevron.right") }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -991,28 +1025,30 @@ private struct DayTimelineView: View {
 
 // Ported from the native Reminders/Calendar "tap to change date" pattern:
 // tapping the day header opens this bottom sheet with a plain Sunday-first
-// month grid; picking a day selects it and dismisses the sheet. Browsing
-// isn't limited to the one month the mock data lives in — arrows and a
-// swipe both page to the next/previous month — but since eventsByDay/
-// dayNames only model that single seeded month (CalendarData.dataMonth/
-// dataYear), a day is only actually pickable there; other months are
-// look-but-don't-touch, same idea as the existing `d == nil` blank cells.
+// month grid; picking a day selects it and dismisses the sheet. Any month
+// is pickable — arrows and a swipe page to it, and picking a day outside
+// the currently loaded month hands (year, month, day) back to the caller,
+// which loads that month's real data before jumping there (see
+// AppSync.loadCalendarMonth). Density dots only show for the loaded month
+// (eventsByDay doesn't hold anything for a month that hasn't been fetched
+// yet), same idea as the existing `d == nil` blank cells.
 private struct MonthPickerSheet: View {
     var selectedDay: Int
     var eventsByDay: [Int: [CalEvent]]
-    var onPickDay: (Int) -> Void
+    var onPickDay: (Int, Int, Int) -> Void
 
     @State private var displayedYear = CalendarData.dataYear
     @State private var displayedMonth = CalendarData.dataMonth
 
     private var cells: [Int?] { CalendarData.monthGrid(year: displayedYear, month: displayedMonth) }
-    private var isDataMonth: Bool { displayedYear == CalendarData.dataYear && displayedMonth == CalendarData.dataMonth }
+    private var isLoadedMonth: Bool { displayedYear == CalendarData.dataYear && displayedMonth == CalendarData.dataMonth }
+    private var isTodayMonth: Bool { displayedYear == CalendarData.todayYear && displayedMonth == CalendarData.todayMonth }
 
     // Up to four dots under a day, one per person with something on it —
     // a quick-glance density hint while browsing, same idea as the mock's
     // pmdots.
     private func dotColors(for day: Int) -> [Color] {
-        guard isDataMonth else { return [] }
+        guard isLoadedMonth else { return [] }
         var seen = Set<String>()
         var colors: [Color] = []
         for de in CalendarData.expandedEvents(for: day, in: eventsByDay) {
@@ -1094,19 +1130,19 @@ private struct MonthPickerSheet: View {
 
     @ViewBuilder
     private func dayCell(_ d: Int?) -> some View {
-        let isToday = isDataMonth && d == CalendarData.dataDay
-        let isSel = isDataMonth && d == selectedDay && !isToday
-        let isPickable = d != nil && isDataMonth
+        let isToday = isTodayMonth && d == CalendarData.dataDay
+        let isSel = isLoadedMonth && d == selectedDay && !isToday
+        let isPickable = d != nil
 
         Button {
-            if let d, isDataMonth { onPickDay(d) }
+            if let d { onPickDay(displayedYear, displayedMonth, d) }
         } label: {
             VStack(spacing: 2) {
                 Group {
                     if let d {
                         Text("\(d)")
                             .font(Typography.font(16, weight: isToday ? .heavy : .semibold))
-                            .foregroundStyle(isToday ? .white : (isPickable ? EColor.onSurface : EColor.onSurfaceVariant.opacity(0.5)))
+                            .foregroundStyle(isToday ? .white : EColor.onSurface)
                     } else {
                         Color.clear
                     }

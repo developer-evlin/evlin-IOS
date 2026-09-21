@@ -196,6 +196,24 @@ class AppSync {
         }
     }
 
+    // Moves the calendar to a different month and loads its real data —
+    // used when the parent browses the month picker or steps the day nav
+    // past the edge of the currently loaded month. Only tasks + events need
+    // refetching (rules/state/occurrences are already current from the last
+    // full sync; occurrence status only exists for today regardless of
+    // which month is on screen — see CalendarData.forDay).
+    func loadCalendarMonth(year: Int, month: Int) async {
+        CalendarData.dataYear = year
+        CalendarData.dataMonth = month
+        let children = FamilyStore.children
+        var apiTasksByChild: [String: [ApiTask]] = [:]
+        for child in children {
+            apiTasksByChild[child.id] = (try? await APIClient.shared.fetchTasks(childId: child.id)) ?? []
+        }
+        await syncCalendar(children: children, tasks: apiTasksByChild)
+        SyncState.shared.version += 1
+    }
+
     // MARK: - One child
 
     private func syncChild(_ apiChild: ApiChild, index: Int, existing: Child?) async throws -> (Child, [ApiTask]) {
