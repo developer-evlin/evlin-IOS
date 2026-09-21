@@ -35,6 +35,7 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLSchemes: [evlin]
         NSCameraUsageDescription: Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.
+        NSMicrophoneUsageDescription: Evlin uses the microphone to record a voice note for a task or a request to a parent.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UISupportedInterfaceOrientations~ipad:
@@ -53,3 +54,5 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.evlin.app
         TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: D9FM36P37F
+        CODE_SIGN_ENTITLEMENTS: Evlin/Evlin.entitlements

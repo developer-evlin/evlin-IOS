@@ -1,4 +1,5 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -15,8 +16,21 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>evlin</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Evlin uses the microphone to record a voice note for a task or a request to a parent.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>PlusJakartaSans-Bold.ttf</string>
@@ -30,7 +44,7 @@
 		<string>Baloo2-Medium.ttf</string>
 	</array>
 	<key>UILaunchScreen</key>
-	<dict />
+	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -39,5 +53,5 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>evlin</string></array></dict></array><key>NSCameraUsageDescription</key><string>Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.</string><key>NSMicrophoneUsageDescription</key><string>Evlin uses the microphone to record a voice note for a task or a request to a parent.</string></dict>
+</dict>
 </plist>

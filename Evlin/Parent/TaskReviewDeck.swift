@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import UIKit
 
 // Tinder-style task review — opened when a parent taps a task row. A
 // submitted task (task.state == .review — the kid has actually turned
@@ -693,6 +694,15 @@ private struct SubmissionPhotoStack: View {
                         }
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
+                // The rotated back layers' corners extend past their own
+                // frame (that's what a rotated rectangle's bounding box
+                // does), and nothing here was clipping that overflow to
+                // this container — it just painted straight over whatever
+                // came next in the card (the note, the voice player). Only
+                // clipped here, not on each individual photo, so their
+                // shadows still render normally right up to this outer
+                // edge instead of each tile clipping its own.
+                .clipped()
             }
             .frame(height: stackHeight)
         }
@@ -712,24 +722,41 @@ struct RemotePhoto: View {
     var cornerRadius: CGFloat = 12
     var contentMode: ContentMode = .fill
 
+    @State private var uiImage: UIImage?
+    @State private var failed = false
+
     var body: some View {
         Group {
-            if let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    if let img = phase.image {
-                        img.resizable().aspectRatio(contentMode: contentMode)
-                    } else if phase.error != nil {
-                        placeholder(failed: true)
-                    } else {
-                        placeholder(failed: false)
-                    }
-                }
+            if let uiImage {
+                Image(uiImage: uiImage).resizable().aspectRatio(contentMode: contentMode)
             } else {
-                placeholder(failed: true)
+                placeholder(failed: failed)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(Color(hex: "E4DFCE"), lineWidth: 1))
+        // A plain AsyncImage re-downloaded the same photo every time a new
+        // instance of this view showed up for it — the stack thumbnail,
+        // then again in the full-screen viewer a moment later — which is
+        // what made opening the viewer feel slow. ImageCache means the
+        // second (and every later) view of the same URL is instant.
+        .task(id: urlString) {
+            uiImage = nil
+            failed = false
+            if let cached = await ImageCache.shared.image(for: urlString) {
+                uiImage = cached
+                return
+            }
+            guard let url = URL(string: urlString) else { failed = true; return }
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                guard let img = UIImage(data: data) else { failed = true; return }
+                await ImageCache.shared.set(img, for: urlString)
+                uiImage = img
+            } catch {
+                failed = true
+            }
+        }
     }
 
     private func placeholder(failed: Bool) -> some View {

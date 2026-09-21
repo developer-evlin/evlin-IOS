@@ -650,19 +650,38 @@ private struct SubmittedPhotoThumbnail: View {
     // fixed 3:4 box.
     var contentMode: ContentMode = .fill
 
+    @State private var remoteImage: UIImage?
+    @State private var remoteFailed = false
+
     var body: some View {
         Group {
             if let image = photo.image {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
-            } else if let urlString = photo.downloadURL, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    if let img = phase.image {
-                        img.resizable().aspectRatio(contentMode: contentMode)
-                    } else if phase.error != nil {
-                        loadingPlaceholder(failed: true)
-                    } else {
-                        loadingPlaceholder(failed: false)
-                    }
+            } else if let urlString = photo.downloadURL {
+                if let remoteImage {
+                    Image(uiImage: remoteImage).resizable().aspectRatio(contentMode: contentMode)
+                } else {
+                    loadingPlaceholder(failed: remoteFailed)
+                        // Grid tile and full-screen viewer both read this
+                        // same photo.downloadURL — cached here for the
+                        // same reason as the parent-side RemotePhoto, so
+                        // opening the viewer doesn't re-download what the
+                        // grid tile just showed a moment earlier.
+                        .task(id: urlString) {
+                            if let cached = await ImageCache.shared.image(for: urlString) {
+                                remoteImage = cached
+                                return
+                            }
+                            guard let url = URL(string: urlString) else { remoteFailed = true; return }
+                            do {
+                                let (data, _) = try await URLSession.shared.data(from: url)
+                                guard let img = UIImage(data: data) else { remoteFailed = true; return }
+                                await ImageCache.shared.set(img, for: urlString)
+                                remoteImage = img
+                            } catch {
+                                remoteFailed = true
+                            }
+                        }
                 }
             } else {
                 loadingPlaceholder(failed: photo.uploadState == .failed)
