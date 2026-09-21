@@ -335,10 +335,23 @@ struct TaskReviewDeckView: View {
                         dragOffset = value.translation
                     }
                     .onEnded { value in
-                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        if value.translation.width < -swipeThreshold {
+                        // Unlike onChanged above, this guard only gates
+                        // whether a commit (approve/redo) is allowed — it
+                        // must never gate whether the gesture resolves at
+                        // all. It used to guard the whole handler and
+                        // return early whenever the *release* translation
+                        // dipped slightly more vertical than horizontal
+                        // (finger drift right as a thumb lifts off is
+                        // common and doesn't mean the drag wasn't
+                        // horizontal), which skipped every branch below
+                        // including the spring-back — dragOffset, and the
+                        // stamp opacity driven by it, just froze wherever
+                        // the last onChanged left them instead of ever
+                        // resetting to zero.
+                        let horizontal = abs(value.translation.width) > abs(value.translation.height)
+                        if horizontal, value.translation.width < -swipeThreshold {
                             approve(task)
-                        } else if value.translation.width > swipeThreshold {
+                        } else if horizontal, value.translation.width > swipeThreshold {
                             // Leans the card out; the compose sheet (opened
                             // below) is the real commit — see its onSend/
                             // onCancel for how the card actually resolves.
