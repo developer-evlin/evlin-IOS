@@ -42,6 +42,11 @@ struct TaskDetailView: View {
     @State private var showBypassSheet = false
     @State private var bypassSent = false
     @State private var viewerIndex: Int?
+    // Drives the note field's tap-to-dismiss below — see the guarded
+    // simultaneousGesture on the ScrollView's content for why this exists
+    // instead of the blanket dismissKeyboardOnTap() this screen used to
+    // have (removed for fighting the field's own tap-to-focus).
+    @FocusState private var noteFocused: Bool
     // A form/detail screen, same reading-shaped treatment as the rest of
     // the kid side — caps to KidAdaptive's content column instead of
     // stretching this full-screen cover's padding(20) across the iPad's
@@ -98,14 +103,21 @@ struct TaskDetailView: View {
                     .padding(20)
                     .kidContentColumn(kid.contentMaxWidth)
                 }
-                // Replaces a blanket dismissKeyboardOnTap() that used to sit
-                // on this whole screen: that gesture fired on *any* tap,
-                // including the tap trying to focus the note field itself —
-                // the same "short tap doesn't register" fight documented on
-                // RootView's own dismissKeyboardOnTap usage, here showing up
-                // as the keyboard feeling glitchy to open/type into. Scroll-
-                // driven dismissal only touches drags on empty scroll space,
-                // never the field's own tap-to-focus.
+                // A blanket dismissKeyboardOnTap() used to sit on this whole
+                // screen and got removed for fighting the field's own tap-
+                // to-focus (see RootView's own usage for the same fight) —
+                // it fired unconditionally on *any* tap, including the one
+                // trying to open the keyboard in the first place. This is
+                // the same idea but guarded: it only ever acts when the
+                // field is *already* focused, so it can only ever take
+                // focus away, never race a tap that's trying to give it
+                // focus. Kept alongside scrollDismissesKeyboard below (drag-
+                // to-dismiss), not instead of it.
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        if noteFocused { noteFocused = false }
+                    }
+                )
                 .scrollDismissesKeyboard(.interactively)
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                     withAnimation(.easeOut(duration: 0.25)) {
@@ -214,7 +226,7 @@ struct TaskDetailView: View {
         // photo evidence at all (submission_kind == "none"/"voice") still
         // forced a kid through the camera. The copy reflects that instead
         // of implying it's required.
-        Text(photos.isEmpty ? "Add a photo if you'd like (optional)" : "Add another photo, or you're all set")
+        Text(photos.isEmpty ? "Add a photo if you'd like" : "Add another photo, or you're all set")
             .font(Typography.display(18, weight: .bold))
             .foregroundStyle(KidTheme.ink)
             .frame(maxWidth: .infinity, alignment: .center)
@@ -291,6 +303,7 @@ struct TaskDetailView: View {
             .background(KidTheme.cream)
             .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(KidTheme.line, lineWidth: 1.5))
             .clipShape(RoundedRectangle(cornerRadius: 14))
+            .focused($noteFocused)
 
         KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
             .padding(.top, 10)
@@ -701,6 +714,7 @@ private struct BypassRequestSheet: View {
 
     @State private var reason = ""
     @State private var hasVoiceNote = false
+    @FocusState private var reasonFocused: Bool
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
@@ -724,6 +738,7 @@ private struct BypassRequestSheet: View {
                     .padding(kid.of(14, 18))
                     .background(KidTheme.muted)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .focused($reasonFocused)
 
                 KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
 
@@ -759,7 +774,17 @@ private struct BypassRequestSheet: View {
             .kidContentColumn(kid.isRegular ? 620 : nil)
             .frame(maxHeight: .infinity, alignment: kid.isRegular ? .center : .top)
             .background(KidTheme.background)
-            .scrollDismissesKeyboard(.interactively)
+            // Guarded the same way as TaskDetailView's own note field
+            // above: only acts when the field is already focused, so it
+            // can only take focus away, never race the tap that's trying
+            // to give it focus. This screen isn't a ScrollView, so there's
+            // no drag-to-dismiss fallback the way the scroll one has —
+            // this is the only dismiss path here.
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    if reasonFocused { reasonFocused = false }
+                }
+            )
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel", action: onCancel) }
             }
