@@ -172,9 +172,21 @@ class AppSync {
                     syncedChildren.append(child)
                     apiTasksByChild[apiChild.id] = tasks
                 } catch {
-                    // One child failing must not drop them from the UI.
+                    // One child failing must not drop them from the UI. On a
+                    // cold launch (fresh install, or the very first sync of
+                    // the session) there's no `existing` to fall back to —
+                    // that used to mean a single transient failure on any of
+                    // syncChild's several sequential requests (rules, state,
+                    // tasks, occurrences, per-task submissions) made a real,
+                    // fully-paired child vanish into "No child yet," which
+                    // then pointed the parent at "Add a child" — exactly the
+                    // wrong fix, since the real backend data was never gone.
+                    // A bare-bones Child built from just the /children
+                    // response (which already succeeded) keeps them visible
+                    // with placeholder stats until the next sync — on
+                    // foreground or the next poll — fills in the rest.
                     print("AppSync: child \(apiChild.id) failed: \(error.localizedDescription)")
-                    if let existing { syncedChildren.append(existing) }
+                    syncedChildren.append(existing ?? placeholderChild(apiChild))
                 }
             }
 
@@ -215,6 +227,21 @@ class AppSync {
     }
 
     // MARK: - One child
+
+    /// A child that exists on the backend (the /children call that produced
+    /// `apiChild` already succeeded) but whose fuller syncChild fetch just
+    /// failed. Built only from what /children already returned, so it's
+    /// always safe to show — no rules/tasks/state guessed, just enough to
+    /// keep the child on screen instead of disappearing.
+    private func placeholderChild(_ apiChild: ApiChild) -> Child {
+        let palette = FamilyStore.childColorPalette
+        return Child(
+            id: apiChild.id, name: apiChild.name, age: 0, dailyLimitMin: 60,
+            color: palette[apiChild.colorIndex % palette.count],
+            timeLeft: "—", timePct: 100, usageTodayMin: 0,
+            subtitle: "Syncing…"
+        )
+    }
 
     private func syncChild(_ apiChild: ApiChild, index: Int, existing: Child?) async throws -> (Child, [ApiTask]) {
         let id = apiChild.id
