@@ -724,47 +724,52 @@ struct RemotePhoto: View {
 
     @State private var uiImage: UIImage?
     @State private var failed = false
+    // Bumped to force a fresh load on manual retry — .task(id:) only
+    // re-fires when its id actually changes, and urlString alone doesn't
+    // change between attempts.
+    @State private var retryToken = 0
 
     var body: some View {
         Group {
             if let uiImage {
                 Image(uiImage: uiImage).resizable().aspectRatio(contentMode: contentMode)
             } else {
-                placeholder(failed: failed)
+                Button {
+                    guard failed else { return }
+                    retryToken += 1
+                } label: {
+                    placeholder(failed: failed)
+                }
+                .buttonStyle(.plain)
+                .disabled(!failed)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(Color(hex: "E4DFCE"), lineWidth: 1))
-        // A plain AsyncImage re-downloaded the same photo every time a new
-        // instance of this view showed up for it — the stack thumbnail,
-        // then again in the full-screen viewer a moment later — which is
-        // what made opening the viewer feel slow. ImageCache means the
-        // second (and every later) view of the same URL is instant.
-        .task(id: urlString) {
+        .task(id: "\(urlString)#\(retryToken)") {
             uiImage = nil
             failed = false
-            if let cached = await ImageCache.shared.image(for: urlString) {
-                uiImage = cached
+            guard let url = URL(string: urlString) else {
+                print("RemotePhoto: not a valid URL: \(urlString)")
+                failed = true
                 return
             }
-            guard let url = URL(string: urlString) else { failed = true; return }
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                guard let img = UIImage(data: data) else { failed = true; return }
-                await ImageCache.shared.set(img, for: urlString)
-                uiImage = img
-            } catch {
-                failed = true
-            }
+            uiImage = await ImageCache.shared.load(url)
+            failed = uiImage == nil
         }
     }
 
     private func placeholder(failed: Bool) -> some View {
         ZStack {
             Color(hex: "FFFDF6")
-            Image(systemName: failed ? "exclamationmark.triangle.fill" : "photo")
-                .font(.system(size: 22))
-                .foregroundStyle(Color(hex: "8A8064"))
+            VStack(spacing: 4) {
+                Image(systemName: failed ? "arrow.clockwise" : "photo")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color(hex: "8A8064"))
+                if failed {
+                    Text("Tap to retry").font(Typography.font(10, weight: .semibold)).foregroundStyle(Color(hex: "8A8064"))
+                }
+            }
         }
     }
 }

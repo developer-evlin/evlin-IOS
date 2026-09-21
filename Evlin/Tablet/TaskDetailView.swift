@@ -652,6 +652,9 @@ private struct SubmittedPhotoThumbnail: View {
 
     @State private var remoteImage: UIImage?
     @State private var remoteFailed = false
+    // Bumped to force a fresh load on manual retry — .task(id:) only
+    // re-fires when its id actually changes.
+    @State private var retryToken = 0
 
     var body: some View {
         Group {
@@ -661,27 +664,29 @@ private struct SubmittedPhotoThumbnail: View {
                 if let remoteImage {
                     Image(uiImage: remoteImage).resizable().aspectRatio(contentMode: contentMode)
                 } else {
-                    loadingPlaceholder(failed: remoteFailed)
-                        // Grid tile and full-screen viewer both read this
-                        // same photo.downloadURL — cached here for the
-                        // same reason as the parent-side RemotePhoto, so
-                        // opening the viewer doesn't re-download what the
-                        // grid tile just showed a moment earlier.
-                        .task(id: urlString) {
-                            if let cached = await ImageCache.shared.image(for: urlString) {
-                                remoteImage = cached
-                                return
-                            }
-                            guard let url = URL(string: urlString) else { remoteFailed = true; return }
-                            do {
-                                let (data, _) = try await URLSession.shared.data(from: url)
-                                guard let img = UIImage(data: data) else { remoteFailed = true; return }
-                                await ImageCache.shared.set(img, for: urlString)
-                                remoteImage = img
-                            } catch {
-                                remoteFailed = true
-                            }
-                        }
+                    Button {
+                        guard remoteFailed else { return }
+                        retryToken += 1
+                    } label: {
+                        loadingPlaceholder(failed: remoteFailed)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!remoteFailed)
+                    // Grid tile and full-screen viewer both read this same
+                    // photo.downloadURL — cached here for the same reason
+                    // as the parent-side RemotePhoto, so opening the
+                    // viewer doesn't re-download what the grid tile just
+                    // showed a moment earlier. ImageCache.load also
+                    // dedupes an in-flight fetch for the same URL instead
+                    // of the tile and the viewer each firing their own —
+                    // both are alive at once, since a fullScreenCover
+                    // doesn't tear down what's presenting it.
+                    .task(id: "\(urlString)#\(retryToken)") {
+                        remoteFailed = false
+                        guard let url = URL(string: urlString) else { remoteFailed = true; return }
+                        remoteImage = await ImageCache.shared.load(url)
+                        remoteFailed = remoteImage == nil
+                    }
                 }
             } else {
                 loadingPlaceholder(failed: photo.uploadState == .failed)
