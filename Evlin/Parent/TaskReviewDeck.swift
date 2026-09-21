@@ -434,8 +434,8 @@ private struct TaskReviewCard: View {
                                 Text("at \(at)").font(Typography.font(11, weight: .medium)).foregroundStyle(EColor.onSurfaceVariant)
                             }
                         }
-                        if task.photoCount >= 1 {
-                            SubmissionPhotoStack(count: task.photoCount) {
+                        if !task.photoURLs.isEmpty {
+                            SubmissionPhotoStack(urls: task.photoURLs) {
                                 viewerIndex = 0
                                 showPhotoViewer = true
                             }
@@ -506,7 +506,7 @@ private struct TaskReviewCard: View {
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(EColor.outlineVariant.opacity(0.6), lineWidth: 1))
         .shadow(color: .black.opacity(0.08), radius: 20, y: 10)
         .fullScreenCover(isPresented: $showPhotoViewer) {
-            PhotoGalleryViewer(count: task.photoCount, index: $viewerIndex, onClose: { showPhotoViewer = false })
+            PhotoGalleryViewer(urls: task.photoURLs, index: $viewerIndex, onClose: { showPhotoViewer = false })
         }
     }
 
@@ -543,7 +543,7 @@ private struct TaskReviewCard: View {
 // what they're even looking at. Tapping opens PhotoGalleryViewer at the
 // first page; swiping/the thumbnail strip there reaches the rest.
 private struct SubmissionPhotoStack: View {
-    var count: Int
+    var urls: [String]
     var onTap: () -> Void
 
     // As large as the card can reasonably give it — this is the whole
@@ -555,30 +555,30 @@ private struct SubmissionPhotoStack: View {
             GeometryReader { geo in
                 let photoWidth = geo.size.width * 0.93
                 ZStack {
-                    if count >= 3 {
-                        MockHomeworkPhoto(pageNumber: 3)
+                    if urls.count >= 3 {
+                        RemotePhoto(urlString: urls[2], cornerRadius: 12)
                             .frame(width: photoWidth, height: stackHeight - 24)
                             .rotationEffect(.degrees(6))
                             .offset(x: geo.size.width * 0.025, y: 10)
                             .opacity(0.75)
                             .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
                     }
-                    if count >= 2 {
-                        MockHomeworkPhoto(pageNumber: 2)
+                    if urls.count >= 2 {
+                        RemotePhoto(urlString: urls[1], cornerRadius: 12)
                             .frame(width: photoWidth, height: stackHeight - 24)
                             .rotationEffect(.degrees(-4))
                             .offset(x: -geo.size.width * 0.02, y: 5)
                             .opacity(0.88)
                             .shadow(color: .black.opacity(0.1), radius: 5, y: 2)
                     }
-                    MockHomeworkPhoto(pageNumber: 1, detailed: true)
+                    RemotePhoto(urlString: urls[0], cornerRadius: 20)
                         .frame(width: photoWidth, height: stackHeight - 24)
                         .shadow(color: .black.opacity(0.16), radius: 8, y: 4)
                         .overlay(alignment: .topTrailing) {
-                            if count > 1 {
+                            if urls.count > 1 {
                                 HStack(spacing: 3) {
                                     Image(systemName: "square.stack.fill").font(.system(size: 10, weight: .bold))
-                                    Text("\(count)").font(Typography.font(11, weight: .bold))
+                                    Text("\(urls.count)").font(Typography.font(11, weight: .bold))
                                 }
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 8).padding(.vertical, 4)
@@ -596,48 +596,45 @@ private struct SubmissionPhotoStack: View {
     }
 }
 
-// A stand-in "photographed homework page" — ruled lines, a bit of
-// handwriting-like scribble, a checkmark — used for both the grid
-// thumbnail and (scaled up) the full-screen viewer, so tapping a thumbnail
-// visibly opens "the same photo" bigger rather than a generic gray box.
-// There's no real camera capture in this prototype (see TaskDetailView),
-// so this is what a submitted photo looks like everywhere it appears.
-// Not private — TaskDetailView (kid side) reuses this same mock
-// "photographed page" visual for its own multi-photo capture UI, so a
-// submitted photo looks identical whichever side is looking at it.
-struct MockHomeworkPhoto: View {
-    var pageNumber: Int
-    var detailed: Bool = false
+// The kid's actual submitted photo, loaded from its real R2 download URL —
+// used everywhere a submission photo appears (the card's stack, the full-
+// screen viewer, its thumbnail strip), so tapping one visibly opens "the
+// same photo" bigger rather than a generic gray box. Used to be a hand-
+// drawn "photographed homework page" stand-in from before the real photo
+// pipeline existed; every task's evidence looked identical then no matter
+// what the kid actually turned in.
+struct RemotePhoto: View {
+    var urlString: String
+    var cornerRadius: CGFloat = 12
+    var contentMode: ContentMode = .fill
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: detailed ? 20 : 12, style: .continuous)
-                    .fill(Color(hex: "FFFDF6"))
-
-                VStack(alignment: .leading, spacing: geo.size.height / (detailed ? 11 : 7)) {
-                    ForEach(0..<(detailed ? 9 : 5), id: \.self) { _ in
-                        Rectangle().fill(Color(hex: "E4DFCE")).frame(height: 1)
+        Group {
+            if let url = URL(string: urlString) {
+                AsyncImage(url: url) { phase in
+                    if let img = phase.image {
+                        img.resizable().aspectRatio(contentMode: contentMode)
+                    } else if phase.error != nil {
+                        placeholder(failed: true)
+                    } else {
+                        placeholder(failed: false)
                     }
                 }
-                .padding(.top, geo.size.height * 0.28)
-                .padding(.horizontal, geo.size.width * 0.12)
-
-                Text("Page \(pageNumber)")
-                    .font(Typography.font(detailed ? 15 : 9, weight: .bold))
-                    .foregroundStyle(Color(hex: "8A8064"))
-                    .padding(.top, geo.size.height * 0.1)
-                    .padding(.leading, geo.size.width * 0.12)
-
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: geo.size.width * 0.16))
-                    .foregroundStyle(Brand.greenDeep.opacity(0.55))
-                    .rotationEffect(.degrees(-12))
-                    .position(x: geo.size.width * 0.82, y: geo.size.height * 0.8)
+            } else {
+                placeholder(failed: true)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: detailed ? 20 : 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: detailed ? 20 : 12, style: .continuous).strokeBorder(Color(hex: "E4DFCE"), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(Color(hex: "E4DFCE"), lineWidth: 1))
+    }
+
+    private func placeholder(failed: Bool) -> some View {
+        ZStack {
+            Color(hex: "FFFDF6")
+            Image(systemName: failed ? "exclamationmark.triangle.fill" : "photo")
+                .font(.system(size: 22))
+                .foregroundStyle(Color(hex: "8A8064"))
+        }
     }
 }
 
@@ -659,9 +656,11 @@ struct MockHomeworkPhoto: View {
 // fighting: panning a zoomed photo can't also change pages, and once
 // zoomed back out, normal swipe-between-photos comes right back.
 private struct PhotoGalleryViewer: View {
-    var count: Int
+    var urls: [String]
     @Binding var index: Int
     var onClose: () -> Void
+
+    private var count: Int { urls.count }
 
     @State private var dragOffset: CGFloat = 0
     @State private var scrollPosition: Int?
@@ -673,8 +672,8 @@ private struct PhotoGalleryViewer: View {
 
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 0) {
-                    ForEach(0..<count, id: \.self) { i in
-                        ZoomablePhotoPage(pageNumber: i + 1, isZoomed: $isZoomed)
+                    ForEach(Array(urls.enumerated()), id: \.offset) { i, url in
+                        ZoomablePhotoPage(urlString: url, isZoomed: $isZoomed)
                             .containerRelativeFrame(.horizontal)
                             .id(i)
                     }
@@ -742,11 +741,11 @@ private struct PhotoGalleryViewer: View {
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 10) {
-                                ForEach(0..<count, id: \.self) { i in
+                                ForEach(Array(urls.enumerated()), id: \.offset) { i, url in
                                     Button {
                                         withAnimation(.easeOut(duration: 0.2)) { index = i }
                                     } label: {
-                                        MockHomeworkPhoto(pageNumber: i + 1)
+                                        RemotePhoto(urlString: url, cornerRadius: 10)
                                             .frame(width: 46, height: 60)
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -799,7 +798,7 @@ private struct PhotoGalleryViewer: View {
 // competes with the pager's own swipe recognition — the pan half is a
 // no-op there anyway (guarded on scale > 1).
 private struct ZoomablePhotoPage: View {
-    var pageNumber: Int
+    var urlString: String
     @Binding var isZoomed: Bool
 
     @State private var scale: CGFloat = 1
@@ -838,7 +837,7 @@ private struct ZoomablePhotoPage: View {
     }
 
     var body: some View {
-        let photo = MockHomeworkPhoto(pageNumber: pageNumber, detailed: true)
+        let photo = RemotePhoto(urlString: urlString, cornerRadius: 20, contentMode: .fit)
             .aspectRatio(3.0 / 4.0, contentMode: .fit)
             .padding(.horizontal, 28)
             .scaleEffect(scale)

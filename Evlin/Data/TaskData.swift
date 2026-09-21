@@ -27,6 +27,12 @@ struct ChildTask: Identifiable {
     // each page separately rather than one photo standing in for the
     // whole submission.
     var photoCount: Int = 0
+    // The real download URLs behind photoCount, in submission order —
+    // always photoURLs.count == photoCount for a synced task; kept as a
+    // separate array (rather than deriving photoCount from it) since a
+    // couple of call sites set photoCount without ever having real URLs
+    // (mock/local-only tasks that never reach the backend).
+    var photoURLs: [String] = []
     var repeats: String = "none"
     // Whether the kid attached a voice note with `note` (e.g. a bypass
     // request explained by voice instead of/along with typing) — mirrors

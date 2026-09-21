@@ -255,6 +255,21 @@ class AppSync {
                 dueLabel = CalendarSync.clock(minutes: time)
             }
 
+            // Real evidence, not a guess from the task's declared kind —
+            // that used to read task.submissionKind (what a task is
+            // *supposed* to require, which nothing in the UI actually lets
+            // a parent set — every task is created with "none") instead of
+            // what the kid actually turned in, so a real photo submission
+            // always showed the review card's empty "waiting for photo"
+            // state no matter what the kid uploaded. Only worth a fetch
+            // once there's something to fetch: a pending occurrence has no
+            // submissions yet.
+            var photoURLs: [String] = []
+            if let occId = occurrence?.id, occurrence?.status == "submitted" || occurrence?.status == "approved" {
+                let subs = (try? await APIClient.shared.fetchSubmissions(occurrenceId: occId)) ?? []
+                photoURLs = subs.filter { $0.kind == "photo" }.compactMap { $0.downloadUrl }
+            }
+
             uiTasks.append(ChildTask(
                 id: task.id,
                 occurrenceId: occurrence?.id,
@@ -265,7 +280,8 @@ class AppSync {
                 note: occurrence?.bypassNote,
                 dueLabel: dueLabel,
                 dueDate: dueDate,
-                photoCount: task.submissionKind == "photo" ? 1 : 0,
+                photoCount: photoURLs.count,
+                photoURLs: photoURLs,
                 repeats: CalendarSync.repeatCodes(task.recurrence),
                 redoNote: redoNote
             ))
