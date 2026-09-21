@@ -12,7 +12,7 @@ struct ParentRootView: View {
             ScreenHome()
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .tag(0)
-            ScreenCalendar()
+            ScreenCalendar(isActive: tab == 1)
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(1)
             ScreenChat()

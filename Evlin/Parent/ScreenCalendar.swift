@@ -165,6 +165,13 @@ func groupDueTasks(_ events: [CalDayEvent]) -> [TaskDueGroup] {
 }
 
 struct ScreenCalendar: View {
+    // True while the Calendar tab is the selected one. TabView keeps every
+    // tab's view alive across switches rather than recreating it, so
+    // .onAppear only ever fires once, the very first time this tab is
+    // visited — not "whenever user enters the calendar," which is what
+    // scrollToNow's own onAppear below was actually trying to mean.
+    // Watching this instead catches every re-entry, not just the first.
+    var isActive: Bool = true
     @State private var selectedDay = CalendarData.dataDay
     @State private var showDatePicker = false
     // Backend-backed: CalendarData.eventsByDay is rebuilt by AppSync; edits
@@ -200,9 +207,15 @@ struct ScreenCalendar: View {
     @State private var openChildId: String?
     // Tapping an avatar in the lane header dims them out and hides their
     // whole column from the grid/ANYTIME row — a quick "just show me
-    // your child" filter, not a destructive action. Starts with everyone on,
-    // the parent included.
-    @State private var activeLaneIds: Set<String> = []
+    // your child" filter, not a destructive action. Starts with everyone
+    // on, the parent included — tracked as who's explicitly been turned
+    // *off* (empty = nobody, i.e. everyone's on) rather than a positive
+    // set of who's on, which used to need seeding with every person's id
+    // up front and silently started empty/all-dimmed instead on a cold
+    // launch, before that seeding ever ran. Tracking the negative means a
+    // newly-added child (or the parent lane itself) is visible the moment
+    // they exist, with nothing to seed.
+    @State private var inactiveLaneIds: Set<String> = []
 
     // The parent gets a real lane too, same as every kid — their own
     // events (a work call, anything personal) belong somewhere, and
@@ -356,7 +369,8 @@ struct ScreenCalendar: View {
             DayTimelineView(
                 selectedDay: $selectedDay,
                 visiblePeople: lanePeople,
-                activeLaneIds: $activeLaneIds,
+                inactiveLaneIds: $inactiveLaneIds,
+                isActive: isActive,
                 events: expandedEvents(for: selectedDay),
                 onSelect: { de in
                     if de.event.category == "Task" {
@@ -486,7 +500,8 @@ struct ScreenCalendar: View {
 private struct DayTimelineView: View {
     @Binding var selectedDay: Int
     var visiblePeople: [FamilyPerson]
-    @Binding var activeLaneIds: Set<String>
+    @Binding var inactiveLaneIds: Set<String>
+    var isActive: Bool
     var events: [CalDayEvent]
     var onSelect: (CalDayEvent) -> Void
     var onSelectGroup: (TaskDueGroup) -> Void
@@ -494,16 +509,18 @@ private struct DayTimelineView: View {
 
     // Only the lanes still toggled on — dimmed-out people disappear from
     // the grid and ANYTIME row entirely, but stay in the header (dimmed)
-    // so tapping them again brings them back.
-    private var activePeople: [FamilyPerson] { visiblePeople.filter { activeLaneIds.contains($0.id) } }
+    // so tapping them again brings them back. Everyone not explicitly
+    // dimmed counts as on, so a person nobody's ever tapped off (the
+    // common case — everyone, on a fresh launch) is on by default.
+    private var activePeople: [FamilyPerson] { visiblePeople.filter { !inactiveLaneIds.contains($0.id) } }
 
     private func toggleLane(_ id: String) {
-        if activeLaneIds.contains(id) {
+        if inactiveLaneIds.contains(id) {
+            inactiveLaneIds.remove(id)
+        } else {
             // Never let the last visible lane be switched off — there'd be
             // nothing left to tap back on.
-            if activeLaneIds.count > 1 { activeLaneIds.remove(id) }
-        } else {
-            activeLaneIds.insert(id)
+            if activePeople.count > 1 { inactiveLaneIds.insert(id) }
         }
     }
 
@@ -699,6 +716,14 @@ private struct DayTimelineView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear { scrollToNow(proxy) }
                 .onChange(of: selectedDay) { _, _ in scrollToNow(proxy) }
+                // onAppear alone only ever fires once — the first time this
+                // tab is visited, per TabView's own comment above — so
+                // switching away and back left the grid wherever it was
+                // last scrolled instead of snapping back to now. This
+                // catches every re-entry, not just the first.
+                .onChange(of: isActive) { _, active in
+                    if active { scrollToNow(proxy) }
+                }
             }
             }
         }
@@ -807,7 +832,7 @@ private struct DayTimelineView: View {
         HStack(spacing: 0) {
             Color.clear.frame(width: timeColW)
             ForEach(visiblePeople) { p in
-                let isActive = activeLaneIds.contains(p.id)
+                let isActive = !inactiveLaneIds.contains(p.id)
                 Button { toggleLane(p.id) } label: {
                     VStack(spacing: 3) {
                         Circle().fill(p.color).frame(width: 32, height: 32)
