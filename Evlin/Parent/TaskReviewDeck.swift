@@ -671,7 +671,19 @@ private struct PhotoGalleryViewer: View {
             Color.black.ignoresSafeArea()
 
             ScrollView(.horizontal) {
-                LazyHStack(spacing: 0) {
+                // A plain HStack, not LazyHStack — a submission is at most
+                // a handful of photos, so eagerly building every page costs
+                // nothing, and it's what fixes three compounding bugs a
+                // *lazy* stack caused once pages started loading real
+                // images instead of MockHomeworkPhoto's instant vector
+                // drawing: a page recycled mid-swipe could cancel its
+                // AsyncImage load and get stuck on the placeholder: reopen
+                // after a close could land on a torn-down/not-yet-built
+                // page instead of the real photo; and a not-yet-laid-out
+                // neighbor could flash a sliver of the wrong image during
+                // the transition. All three go away once every page is
+                // built (and its image request started) up front.
+                HStack(spacing: 0) {
                     ForEach(Array(urls.enumerated()), id: \.offset) { i, url in
                         ZoomablePhotoPage(urlString: url, isZoomed: $isZoomed)
                             .containerRelativeFrame(.horizontal)
@@ -690,6 +702,14 @@ private struct PhotoGalleryViewer: View {
             .scrollPosition(id: $scrollPosition)
             .scrollDisabled(isZoomed)
             .scrollIndicators(.hidden)
+            // .onChange(of: index) below only fires on a *change* — it
+            // never ran on first appearance, which left scrollPosition at
+            // its default nil and relied on the ScrollView's own initial
+            // layout to happen to land on the right page. That's what made
+            // a reopen unreliable: forcing the sync explicitly here means
+            // every presentation starts on the actual current index, not
+            // on whatever the ScrollView guesses.
+            .onAppear { scrollPosition = index }
             .onChange(of: scrollPosition) { _, newValue in
                 guard let newValue else { return }
                 if newValue == count {
