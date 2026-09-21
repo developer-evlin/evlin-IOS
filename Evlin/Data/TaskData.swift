@@ -45,6 +45,27 @@ struct ChildTask: Identifiable {
     var redoHasVoiceNote: Bool = false
 }
 
+extension Array where Element == ChildTask {
+    /// Tasks a parent actually needs to act on (submitted, awaiting review)
+    /// bubble to the top; everything else follows in due-time order, with
+    /// no-due-time ("Anytime") tasks sorted after any task with a real
+    /// time. Applied once at the source (AppSync) so the task list and the
+    /// review deck — which walks this same array by raw index — agree on
+    /// one order instead of an arbitrary backend-return order.
+    func sortedForReview() -> [ChildTask] {
+        sorted { a, b in
+            let aReview = a.state == .review, bReview = b.state == .review
+            if aReview != bReview { return aReview }
+            switch (a.dueDate, b.dueDate) {
+            case let (da?, db?): return da < db
+            case (nil, nil): return false
+            case (nil, _): return false
+            case (_, nil): return true
+            }
+        }
+    }
+}
+
 // Mirrors Evlin_Parent_view/index.html's RULE_TYPES — each kind has a fixed
 // icon and builds its own detail line from typed fields.
 enum RuleKind: String { case downtime, custom, screenTimeLimit }

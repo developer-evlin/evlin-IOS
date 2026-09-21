@@ -286,7 +286,7 @@ class AppSync {
                 redoNote: redoNote
             ))
         }
-        TaskStore.binding(for: id).wrappedValue = uiTasks
+        TaskStore.binding(for: id).wrappedValue = uiTasks.sortedForReview()
 
         // Map Rules — all of them now live on the backend.
         var childRules: [ChildRule] = [ChildRule(

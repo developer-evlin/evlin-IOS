@@ -285,20 +285,39 @@ struct TaskReviewDeckView: View {
     // (task.state == .review: the kid submitted something, nothing to
     // decide otherwise).
     @ViewBuilder
+    // A ForEach keyed by task.id, not two separate `if` branches for
+    // "peek" and "front" — the old version swapped each slot's *content*
+    // by array index, so advancing just popped the peek's data straight
+    // into the front slot with no interpolation (scale/opacity there were
+    // always the same literal values before and after, nothing to
+    // animate) while the front's old content vanished with it. Keying by
+    // id instead means the peek card *is* the same view as it becomes the
+    // front card, so withAnimation(advance()) can actually interpolate its
+    // scale/opacity from peek styling to front styling — the "next card
+    // rises into place" motion this never had.
     private func cardStack(for task: ChildTask) -> some View {
         ZStack {
-            if tasks.indices.contains(index + 1) {
-                TaskReviewCard(task: tasks[index + 1], childName: childName)
-                    .scaleEffect(0.94)
-                    .opacity(0.5)
-                    .allowsHitTesting(false)
-            }
-            if task.state == .review {
-                swipeableCard(for: task)
-            } else {
-                TaskReviewCard(task: task, childName: childName)
+            ForEach(visibleCards) { t in
+                let isFront = t.id == task.id
+                Group {
+                    if isFront && t.state == .review {
+                        swipeableCard(for: t)
+                    } else {
+                        TaskReviewCard(task: t, childName: childName)
+                    }
+                }
+                .scaleEffect(isFront ? 1 : 0.94)
+                .opacity(isFront ? 1 : 0.5)
+                .allowsHitTesting(isFront)
+                .zIndex(isFront ? 1 : 0)
             }
         }
+    }
+
+    private var visibleCards: [ChildTask] {
+        guard tasks.indices.contains(index) else { return [] }
+        let end = min(index + 2, tasks.count)
+        return Array(tasks[index..<end])
     }
 
     private func swipeableCard(for task: ChildTask) -> some View {
@@ -559,9 +578,10 @@ private struct SubmissionPhotoStack: View {
     var urls: [String]
     var onTap: () -> Void
 
-    // As large as the card can reasonably give it — this is the whole
-    // point of opening the card, not a supporting detail.
-    private let stackHeight: CGFloat = 340
+    // Big enough to actually judge the photo, but not so big it pushes the
+    // description/due-time/note below the fold — a parent skimming a
+    // submission needs that context too, not just the picture.
+    private let stackHeight: CGFloat = 230
 
     var body: some View {
         Button(action: onTap) {
