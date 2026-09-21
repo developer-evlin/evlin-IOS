@@ -644,15 +644,20 @@ private struct IdentifiedInt: Identifiable { var value: Int; var id: Int { value
 /// "photo" standing in for one that doesn't exist yet.
 private struct SubmittedPhotoThumbnail: View {
     var photo: CapturedPhoto
+    // .fill (crop to tile, tidy grid look) for the grid; .fit (whole photo,
+    // no cropping) for the full-screen viewer — cropping there was cutting
+    // off real parts of a kid's own evidence photo just to force it into a
+    // fixed 3:4 box.
+    var contentMode: ContentMode = .fill
 
     var body: some View {
         Group {
             if let image = photo.image {
-                Image(uiImage: image).resizable().scaledToFill()
+                Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
             } else if let urlString = photo.downloadURL, let url = URL(string: urlString) {
                 AsyncImage(url: url) { phase in
                     if let img = phase.image {
-                        img.resizable().scaledToFill()
+                        img.resizable().aspectRatio(contentMode: contentMode)
                     } else if phase.error != nil {
                         loadingPlaceholder(failed: true)
                     } else {
@@ -680,30 +685,59 @@ private struct SubmittedPhotoThumbnail: View {
 
 // Full-screen swipe-through viewer for a kid's own already-submitted
 // photos — real images (see SubmittedPhotoThumbnail), not a decorative
-// mock. Fully interactive swipe-to-dismiss (no scrollable content here to
-// compete with), plus the same X for a kid who doesn't think to swipe.
+// mock. Rebuilt on the same ScrollView-paging + pinch-zoom pattern as the
+// parent-side PhotoGalleryViewer (TaskReviewDeck.swift), not TabView(.page)
+// — pinch-to-zoom needs a plain DragGesture for panning while zoomed, which
+// would otherwise fight TabView(.page)'s own paging gesture. Photos show
+// uncropped here (.fit) even though the grid crops them to fill a tidy
+// tile (.fill) — forcing every photo into a fixed 3:4 box here was cutting
+// real content off a kid's own evidence photo just to fit the frame.
 private struct KidPhotoViewer: View {
     var photos: [CapturedPhoto]
     @State var index: Int
     var onClose: () -> Void
 
+    @State private var dragOffset: CGFloat = 0
+    @State private var scrollPosition: Int?
+    @State private var isZoomed = false
+
+    private var count: Int { photos.count }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            TabView(selection: $index) {
-                ForEach(Array(photos.enumerated()), id: \.element.id) { i, photo in
-                    SubmittedPhotoThumbnail(photo: photo)
-                        .aspectRatio(3.0/4.0, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .padding(28)
-                        .tag(i)
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(Array(photos.enumerated()), id: \.element.id) { i, photo in
+                        KidZoomablePhotoPage(photo: photo, isZoomed: $isZoomed)
+                            .containerRelativeFrame(.horizontal)
+                            .id(i)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .always : .never))
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $scrollPosition)
+            .scrollDisabled(isZoomed)
+            .scrollIndicators(.hidden)
+            .onAppear { scrollPosition = index }
+            .onChange(of: scrollPosition) { _, newValue in
+                guard let newValue, newValue != index else { return }
+                index = newValue
+                isZoomed = false
+            }
 
             VStack {
                 HStack {
+                    if count > 1 {
+                        Text("\(index + 1) of \(count)")
+                            .font(Typography.font(13, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(.white.opacity(0.16))
+                            .clipShape(Capsule())
+                    }
                     Spacer()
                     Button(action: onClose) {
                         Image(systemName: "xmark")
@@ -713,16 +747,103 @@ private struct KidPhotoViewer: View {
                             .background(Circle().fill(.white.opacity(0.2)))
                     }
                     .buttonStyle(.plain)
-                    .padding(16)
                 }
+                .padding(16)
                 Spacer()
-                Text("Swipe down to close")
-                    .font(Typography.font(12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .padding(.bottom, 14)
+                if !isZoomed {
+                    Text("Swipe down to close")
+                        .font(Typography.font(12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .padding(.bottom, 14)
+                }
             }
         }
-        .swipeToDismiss(interactive: true, onClose)
+        .offset(y: dragOffset)
+        // Only mostly-vertical, and only while not zoomed — panning a
+        // zoomed photo shouldn't also drag the whole viewer down, and this
+        // never competes with the pager's own horizontal swipe.
+        .gesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { value in
+                    guard !isZoomed, abs(value.translation.height) > abs(value.translation.width) else { return }
+                    dragOffset = max(0, value.translation.height)
+                }
+                .onEnded { value in
+                    guard !isZoomed else { return }
+                    if value.translation.height > 90, abs(value.translation.height) > abs(value.translation.width) {
+                        onClose()
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
+                    }
+                }
+        )
+    }
+}
+
+// Pinch (or double-tap) to zoom, drag to pan while zoomed — mirrors
+// TaskReviewDeck's own ZoomablePhotoPage. Attached with .simultaneousGesture
+// so, at 1x, this never competes with the pager's own swipe recognition.
+private struct KidZoomablePhotoPage: View {
+    var photo: CapturedPhoto
+    @Binding var isZoomed: Bool
+
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    private let maxScale: CGFloat = 4
+
+    private func resetZoom() {
+        scale = 1; lastScale = 1; offset = .zero; lastOffset = .zero
+        isZoomed = false
+    }
+
+    private var magnify: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                scale = min(maxScale, max(1, lastScale * value.magnification))
+                isZoomed = scale > 1.01
+            }
+            .onEnded { _ in
+                lastScale = scale
+                if scale <= 1.01 { withAnimation(.easeOut(duration: 0.2)) { resetZoom() } }
+            }
+    }
+
+    private var pan: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                offset = CGSize(
+                    width: lastOffset.width + value.translation.width,
+                    height: lastOffset.height + value.translation.height
+                )
+            }
+            .onEnded { _ in lastOffset = offset }
+    }
+
+    var body: some View {
+        let photoView = SubmittedPhotoThumbnail(photo: photo, contentMode: .fit)
+            .padding(.horizontal, 12)
+            .scaleEffect(scale)
+            .offset(offset)
+
+        Group {
+            if isZoomed {
+                photoView.simultaneousGesture(magnify.simultaneously(with: pan))
+            } else {
+                photoView.simultaneousGesture(magnify)
+            }
+        }
+        .onTapGesture(count: 2) {
+            withAnimation(.easeOut(duration: 0.25)) {
+                if scale > 1 {
+                    resetZoom()
+                } else {
+                    scale = 2.5; lastScale = 2.5; isZoomed = true
+                }
+            }
+        }
     }
 }
 
