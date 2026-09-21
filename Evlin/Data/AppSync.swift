@@ -247,13 +247,21 @@ class AppSync {
     /// failed. Built only from what /children already returned, so it's
     /// always safe to show — no rules/tasks/state guessed, just enough to
     /// keep the child on screen instead of disappearing.
+    ///
+    /// `devices:` used to be left at its default (empty), which showed a
+    /// real, still-paired child as "No device — Pair" in Settings any time
+    /// this fallback was used (Child.devices is what Settings' deviceRow
+    /// actually reads, not a fresh backend check) — `apiChild.isPaired`
+    /// already came back true from the same /children call everything
+    /// else here is built from, so there's no reason to guess wrong.
     private func placeholderChild(_ apiChild: ApiChild) -> Child {
         let palette = FamilyStore.childColorPalette
         return Child(
             id: apiChild.id, name: apiChild.name, age: 0, dailyLimitMin: 60,
             color: palette[apiChild.colorIndex % palette.count],
             timeLeft: "—", timePct: 100, usageTodayMin: 0,
-            subtitle: "Syncing…"
+            subtitle: "Syncing…",
+            devices: apiChild.isPaired ? FamilyStore.demoDevice(apiChild.name) : []
         )
     }
 
