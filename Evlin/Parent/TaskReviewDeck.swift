@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 // Tinder-style task review — opened when a parent taps a task row. A
 // submitted task (task.state == .review — the kid has actually turned
@@ -516,19 +517,17 @@ private struct TaskReviewCard: View {
                     .padding(.top, 10)
                 }
 
-                if task.hasVoiceNote {
+                if let voiceURL = task.voiceURL {
+                    VoiceNotePlayer(urlString: voiceURL, childName: childName)
+                } else if task.hasVoiceNote {
+                    // hasVoiceNote true but no URL yet means the submission
+                    // row exists but its own upload hasn't reached
+                    // "uploaded" — same as a photo mid-upload, not a
+                    // missing note.
                     HStack(spacing: 10) {
-                        ZStack {
-                            Circle().fill(Color(hex: "7C3AED"))
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                        .frame(width: 34, height: 34)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Voice note").font(Typography.font(13.5, weight: .bold)).foregroundStyle(EColor.onSurface)
-                            Text("From \(childName)").font(Typography.font(11.5, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                        }
+                        ProgressView().tint(Color(hex: "7C3AED"))
+                        Text("Voice note still sending…")
+                            .font(Typography.font(13.5, weight: .bold)).foregroundStyle(EColor.onSurfaceVariant)
                         Spacer(minLength: 0)
                     }
                     .padding(12)
@@ -578,6 +577,64 @@ private struct TaskReviewCard: View {
         )
     }
 
+}
+
+// Tap to actually play the kid's real recording (AVPlayer streams the
+// download URL directly, no need to fetch the whole file first) — this
+// used to be a static label with a play icon that never played anything,
+// same class of bug as the photo stack once did before it had real URLs.
+private struct VoiceNotePlayer: View {
+    var urlString: String
+    var childName: String
+
+    @State private var player: AVPlayer?
+    @State private var isPlaying = false
+
+    private func toggle() {
+        if player == nil, let url = URL(string: urlString) {
+            player = AVPlayer(url: url)
+        }
+        guard let player else { return }
+        if isPlaying {
+            player.pause()
+        } else {
+            // A finished note left the player parked at the end — seeking
+            // back to zero before replaying is what makes tapping again
+            // actually restart it instead of silently doing nothing.
+            if player.currentTime() >= (player.currentItem?.duration ?? .zero) {
+                player.seek(to: .zero)
+            }
+            player.play()
+        }
+        isPlaying.toggle()
+    }
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle().fill(Color(hex: "7C3AED"))
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 34, height: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Voice note").font(Typography.font(13.5, weight: .bold)).foregroundStyle(EColor.onSurface)
+                    Text("From \(childName)").font(Typography.font(11.5, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(Color(hex: "7C3AED").opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .onDisappear { player?.pause() }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { _ in
+            isPlaying = false
+        }
+    }
 }
 
 // A layered stack rather than a flat grid — the front (first) photo shown

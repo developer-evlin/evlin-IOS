@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 
 private let taskDetailBottomAnchorID = "task-detail-bottom-anchor"
 
@@ -30,7 +31,14 @@ struct TaskDetailView: View {
     @State private var photos: [CapturedPhoto] = []
     @State private var showCamera = false
     @State private var note = ""
-    @State private var hasVoiceNote = false
+    // The recorded file for a fresh recording made this session — nil
+    // otherwise. hasVoiceNote below also counts a voice note the backend
+    // already has (task.submissionHasVoiceNote, from a reopened task with
+    // nothing local left to hold), so it stays true across relaunch even
+    // though this URL itself doesn't persist.
+    @State private var voiceNoteURL: URL?
+    @State private var voiceUploadState: CapturedPhoto.UploadState = .idle
+    private var hasVoiceNote: Bool { voiceNoteURL != nil || task.submissionHasVoiceNote }
     @State private var submitted: Bool
     // Distinguishes "just tapped All done! this session" (a brief fresh-
     // confirmation beat) from "reopened an already-done task" (goes
@@ -77,7 +85,6 @@ struct TaskDetailView: View {
         self.onRequestBypass = onRequestBypass
         _submitted = State(initialValue: task.done)
         _note = State(initialValue: task.submissionNote ?? "")
-        _hasVoiceNote = State(initialValue: task.submissionHasVoiceNote)
     }
 
     var body: some View {
@@ -142,6 +149,9 @@ struct TaskDetailView: View {
             guard let occurrenceId = task.occurrenceId else { return }
             await loadExistingSubmissions(occurrenceId: occurrenceId)
         }
+        .onChange(of: voiceNoteURL) { _, newValue in
+            if let newValue { uploadVoiceNote(fileURL: newValue) }
+        }
         .fullScreenCover(isPresented: $showCamera) {
             CameraCapture(
                 onCapture: { image in
@@ -168,6 +178,7 @@ struct TaskDetailView: View {
         .fullScreenCover(isPresented: $showBypassSheet) {
             BypassRequestSheet(
                 taskTitle: task.title,
+                occurrenceId: task.occurrenceId,
                 onSend: { reason, hasVoice in
                     showBypassSheet = false
                     bypassSent = true
@@ -305,7 +316,7 @@ struct TaskDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .focused($noteFocused)
 
-        KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
+        KidVoiceRecorderButton(voiceNoteURL: $voiceNoteURL)
             .padding(.top, 10)
 
         // Elevated "kid" pill per the style guide: mascot green face, a
@@ -424,10 +435,26 @@ struct TaskDetailView: View {
         }
 
         if hasVoiceNote {
-            Label("Voice note attached", systemImage: "waveform")
-                .font(Typography.font(13.5, weight: .bold))
-                .foregroundStyle(KidTheme.lavenderText)
+            if voiceUploadState == .failed, let url = voiceNoteURL {
+                HStack(spacing: 8) {
+                    Label("Voice note didn't send", systemImage: "exclamationmark.triangle.fill")
+                        .font(Typography.font(13.5, weight: .bold))
+                        .foregroundStyle(Color(hex: "EA580C"))
+                    Spacer(minLength: 8)
+                    Button("Retry") { uploadVoiceNote(fileURL: url) }
+                        .font(Typography.font(13, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color(hex: "EA580C"))
+                        .clipShape(Capsule())
+                }
                 .padding(.top, 10)
+            } else {
+                Label(voiceUploadState == .uploading ? "Sending voice note…" : "Voice note attached", systemImage: "waveform")
+                    .font(Typography.font(13.5, weight: .bold))
+                    .foregroundStyle(KidTheme.lavenderText)
+                    .padding(.top, 10)
+            }
         }
 
         // A parent asking for a redo (task.redoRequested) already reopens
@@ -525,6 +552,35 @@ struct TaskDetailView: View {
                 if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .uploaded }
             } catch {
                 if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
+            }
+        }
+    }
+
+    /// Same eager-upload-on-capture shape as a photo — the moment
+    /// KidVoiceRecorderButton hands back a real recorded file, it goes
+    /// straight up, not deferred until "All done!". Previously nothing
+    /// played this role at all: hasVoiceNote was a Bool a kid could set to
+    /// true with zero bytes ever leaving the device.
+    private func uploadVoiceNote(fileURL: URL) {
+        guard let occurrenceId = task.occurrenceId else {
+            voiceUploadState = .failed
+            return
+        }
+        voiceUploadState = .uploading
+        Task { @MainActor in
+            guard let data = await Task.detached(priority: .userInitiated, operation: {
+                try? Data(contentsOf: fileURL)
+            }).value else {
+                voiceUploadState = .failed
+                return
+            }
+            do {
+                let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "voice", contentType: "audio/m4a")
+                try await APIClient.shared.uploadToPresignedURL(result.uploadURL, data: data, contentType: "audio/m4a")
+                try await APIClient.shared.completeSubmission(id: result.submissionId)
+                voiceUploadState = .uploaded
+            } catch {
+                voiceUploadState = .failed
             }
         }
     }
@@ -725,11 +781,18 @@ private struct PhotoUploadRing: View {
 // itself (see ScreenProfile's bypass row / TaskReviewCard's note block).
 private struct BypassRequestSheet: View {
     var taskTitle: String
+    // Needed to actually upload a recorded voice note as a real submission
+    // (same createSubmission/uploadToPresignedURL/completeSubmission
+    // pipeline a photo uses) — nil only in the "no occurrence yet" edge
+    // case TaskDetailView's own photo upload already guards against.
+    var occurrenceId: String?
     var onSend: (String, Bool) -> Void
     var onCancel: () -> Void
 
     @State private var reason = ""
-    @State private var hasVoiceNote = false
+    @State private var voiceNoteURL: URL?
+    @State private var voiceUploadState: CapturedPhoto.UploadState = .idle
+    private var hasVoiceNote: Bool { voiceNoteURL != nil }
     @FocusState private var reasonFocused: Bool
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
@@ -737,6 +800,30 @@ private struct BypassRequestSheet: View {
     // Same either/or rule as the parent-side Redo compose sheet: a typed
     // reason or a recorded one, not necessarily both.
     private var canSend: Bool { !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasVoiceNote }
+
+    private func uploadVoiceNote(fileURL: URL) {
+        guard let occurrenceId else {
+            voiceUploadState = .failed
+            return
+        }
+        voiceUploadState = .uploading
+        Task { @MainActor in
+            guard let data = await Task.detached(priority: .userInitiated, operation: {
+                try? Data(contentsOf: fileURL)
+            }).value else {
+                voiceUploadState = .failed
+                return
+            }
+            do {
+                let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "voice", contentType: "audio/m4a")
+                try await APIClient.shared.uploadToPresignedURL(result.uploadURL, data: data, contentType: "audio/m4a")
+                try await APIClient.shared.completeSubmission(id: result.submissionId)
+                voiceUploadState = .uploaded
+            } catch {
+                voiceUploadState = .failed
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -756,7 +843,22 @@ private struct BypassRequestSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .focused($reasonFocused)
 
-                KidVoiceRecorderButton(hasVoiceNote: $hasVoiceNote)
+                KidVoiceRecorderButton(voiceNoteURL: $voiceNoteURL)
+
+                if voiceUploadState == .failed, let url = voiceNoteURL {
+                    HStack(spacing: 8) {
+                        Label("Voice note didn't send", systemImage: "exclamationmark.triangle.fill")
+                            .font(Typography.font(13, weight: .bold))
+                            .foregroundStyle(Color(hex: "EA580C"))
+                        Spacer(minLength: 8)
+                        Button("Retry") { uploadVoiceNote(fileURL: url) }
+                            .font(Typography.font(12.5, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(Color(hex: "EA580C"))
+                            .clipShape(Capsule())
+                    }
+                }
 
                 if !kid.isRegular { Spacer(minLength: 0) }
 
@@ -805,28 +907,60 @@ private struct BypassRequestSheet: View {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel", action: onCancel) }
             }
         }
+        .onChange(of: voiceNoteURL) { _, newValue in
+            if let newValue { uploadVoiceNote(fileURL: newValue) }
+        }
         .swipeToDismiss(interactive: false, onCancel)
     }
 }
 
 // Idle → recording (live timer + pulsing dot) → recorded (duration, tap to
 // remove) — shared between the bypass compose sheet above and the normal
-// task-submission note field, which used to have no voice option at all.
+// task-submission note field. Used to be a plain Task.sleep timer with no
+// AVAudioRecorder behind it at all — "recording" was a Bool a kid could
+// flip to true, with no actual audio ever captured, which is exactly why a
+// "voice note" never really went anywhere: there was nothing to upload.
 private struct KidVoiceRecorderButton: View {
-    @Binding var hasVoiceNote: Bool
+    // The real recorded file on disk once stopped — nil the rest of the
+    // time. The caller (TaskDetailView/BypassRequestSheet) owns uploading
+    // it; this view only owns capturing it.
+    @Binding var voiceNoteURL: URL?
 
     private enum VoiceState { case idle, recording, recorded }
     @State private var voiceState: VoiceState = .idle
     @State private var recordSeconds = 0
-    @State private var recordingTask: Task<Void, Never>?
+    @State private var timerTask: Task<Void, Never>?
     @State private var dotPulse = false
+    @State private var recorder: AVAudioRecorder?
 
     private var recordedTimeLabel: String { String(format: "%d:%02d", recordSeconds / 60, recordSeconds % 60) }
 
     private func startRecording() {
+        AVAudioApplication.requestRecordPermission { granted in
+            guard granted else { return }
+            DispatchQueue.main.async { beginRecording() }
+        }
+    }
+
+    private func beginRecording() {
+        let session = AVAudioSession.sharedInstance()
+        guard (try? session.setCategory(.playAndRecord, options: [.defaultToSpeaker])) != nil,
+              (try? session.setActive(true)) != nil else { return }
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("m4a")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 44_100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+        ]
+        guard let r = try? AVAudioRecorder(url: fileURL, settings: settings) else { return }
+        recorder = r
+        r.record()
         recordSeconds = 0
         voiceState = .recording
-        recordingTask = Task {
+        timerTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled else { return }
@@ -836,18 +970,23 @@ private struct KidVoiceRecorderButton: View {
     }
 
     private func stopRecording() {
-        recordingTask?.cancel()
-        recordingTask = nil
+        timerTask?.cancel()
+        timerTask = nil
+        recorder?.stop()
+        voiceNoteURL = recorder?.url
+        recorder = nil
         voiceState = .recorded
-        hasVoiceNote = true
     }
 
     private func removeRecording() {
-        recordingTask?.cancel()
-        recordingTask = nil
+        timerTask?.cancel()
+        timerTask = nil
+        recorder?.stop()
+        recorder = nil
+        if let url = voiceNoteURL { try? FileManager.default.removeItem(at: url) }
+        voiceNoteURL = nil
         voiceState = .idle
         recordSeconds = 0
-        hasVoiceNote = false
     }
 
     var body: some View {
@@ -916,8 +1055,10 @@ private struct KidVoiceRecorderButton: View {
             withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { dotPulse = true }
         }
         .onDisappear {
-            recordingTask?.cancel()
-            recordingTask = nil
+            timerTask?.cancel()
+            timerTask = nil
+            recorder?.stop()
+            recorder = nil
         }
     }
 }

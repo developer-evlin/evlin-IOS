@@ -39,5 +39,5 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>evlin</string></array></dict></array><key>NSCameraUsageDescription</key><string>Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.</string></dict>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>evlin</string></array></dict></array><key>NSCameraUsageDescription</key><string>Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.</string><key>NSMicrophoneUsageDescription</key><string>Evlin uses the microphone to record a voice note for a task or a request to a parent.</string></dict>
 </plist>

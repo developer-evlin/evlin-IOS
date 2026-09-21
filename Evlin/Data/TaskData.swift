@@ -38,6 +38,10 @@ struct ChildTask: Identifiable {
     // request explained by voice instead of/along with typing) — mirrors
     // the "Record a voice note" option in TaskDetailView's bypass compose.
     var hasVoiceNote: Bool = false
+    // The real download URL behind hasVoiceNote — nil until it's actually
+    // synced (see AppSync, which fetches it the same way as photoURLs),
+    // even when hasVoiceNote is already true.
+    var voiceURL: String? = nil
     // What the parent sent back on a Redo, from TaskReviewDeckView's compose
     // step — distinct from `note`, which is the kid's own note about their
     // submission.

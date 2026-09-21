@@ -264,10 +264,25 @@ class AppSync {
             // state no matter what the kid uploaded. Only worth a fetch
             // once there's something to fetch: a pending occurrence has no
             // submissions yet.
+            // Same story as photoURLs above, and the same mirrored bug:
+            // hasVoiceNote was never set from real data at all here, so a
+            // real recorded voice note never showed on the review card
+            // either — on top of KidVoiceRecorderButton never having
+            // captured real audio in the first place (see TaskDetailView).
             var photoURLs: [String] = []
+            var hasVoiceNote = false
+            var voiceURL: String? = nil
             if let occId = occurrence?.id, occurrence?.status == "submitted" || occurrence?.status == "approved" {
                 let subs = (try? await APIClient.shared.fetchSubmissions(occurrenceId: occId)) ?? []
                 photoURLs = subs.filter { $0.kind == "photo" }.compactMap { $0.downloadUrl }
+                // A voice submission row can exist before its own upload
+                // finishes (downloadUrl only comes back once the backend
+                // sees status "uploaded") — hasVoiceNote tracks the row,
+                // voiceURL tracks whether it's actually ready to play.
+                if let voiceSub = subs.first(where: { $0.kind == "voice" }) {
+                    hasVoiceNote = true
+                    voiceURL = voiceSub.downloadUrl
+                }
             }
 
             uiTasks.append(ChildTask(
@@ -283,6 +298,8 @@ class AppSync {
                 photoCount: photoURLs.count,
                 photoURLs: photoURLs,
                 repeats: CalendarSync.repeatCodes(task.recurrence),
+                hasVoiceNote: hasVoiceNote,
+                voiceURL: voiceURL,
                 redoNote: redoNote
             ))
         }
