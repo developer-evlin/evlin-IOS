@@ -2,17 +2,14 @@ import SwiftUI
 import AVFoundation
 import UIKit
 
-// Tinder-style task review — opened when a parent taps a task row. A
-// submitted task (task.state == .review — the kid has actually turned
-// something in, so there's a real decision to make) is a draggable card:
-// swipe left to approve, right to ask for a redo, with the same live
-// tilt/stamp feedback Tinder gives while dragging. Every other state
-// (nothing submitted yet, already resolved, a bypass request) shows the
-// same card without the gesture — there's no decision a drag could
-// represent for those, so it's buttons only, same as before.
+// Task review — opened when a parent taps a task row. One task at a time,
+// Approve/Redo as plain buttons below the card; tapping either resolves
+// the task and moves to the next one. Used to be a Tinder-style swipeable
+// card (drag left/right to decide, with a stamp/fly-off animation) — that
+// was removed by direct request: buttons only, a plain crossfade between
+// cards, nothing else.
 // A Redo always pauses on a small compose step first so the parent can send
-// the kid a quick note or voice message about what to fix — swiping right
-// past the threshold opens that same compose step rather than skipping it.
+// the kid a quick note or voice message about what to fix.
 struct TaskReviewDeckView: View {
     @Binding var tasks: [ChildTask]
     var childName: String
@@ -33,11 +30,6 @@ struct TaskReviewDeckView: View {
     @State private var index: Int
     @State private var showRedoCompose = false
     @State private var editingTask: ChildTask?
-    // The current card's live drag position — reset to .zero every time
-    // the card underneath it changes (advance()), or the next card would
-    // render already offset from whatever the previous one ended up at.
-    @State private var dragOffset: CGSize = .zero
-    private let swipeThreshold: CGFloat = 120
 
     init(tasks: Binding<[ChildTask]>, childName: String, childId: String? = nil, startIndex: Int, onDismiss: @escaping () -> Void) {
         self._tasks = tasks
@@ -82,7 +74,9 @@ struct TaskReviewDeckView: View {
 
                 if let task = currentTask {
                     VStack(spacing: 18) {
-                        cardStack(for: task)
+                        TaskReviewCard(task: task, childName: childName)
+                            .id(task.id)
+                            .transition(.opacity)
                         actionButtons(for: task)
                     }
                     // Horizontal margin wider than the card's own 24pt
@@ -121,19 +115,9 @@ struct TaskReviewDeckView: View {
                 RedoComposeSheet(childName: childName, taskTitle: task.title, actionLabel: secondaryLabel(for: task) ?? "Redo", onSend: { note, hasVoice in
                     applyRedo(note: note, hasVoice: hasVoice)
                     showRedoCompose = false
-                    // Finish the fly-off-right the swipe started, then bring
-                    // in the next card fresh (no leftover offset).
-                    withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: 520, height: dragOffset.height) }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                        dragOffset = .zero
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
-                    }
+                    withAnimation(.easeInOut(duration: 0.2)) { advance() }
                 }, onCancel: {
                     showRedoCompose = false
-                    // A swipe-initiated redo leans the card out before this
-                    // sheet appears (see the drag gesture) — cancelling
-                    // means the decision didn't happen, so it springs back.
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { dragOffset = .zero }
                 })
                 .interactiveDismissDisabled()
                 .presentationDetents([.large])
@@ -208,16 +192,6 @@ struct TaskReviewDeckView: View {
     }
 
     private func approve(_ task: ChildTask) {
-        // Only a .review card is ever rendered as the draggable
-        // swipeableCard (see cardStack) — dragOffset's .offset() isn't
-        // applied to a plain TaskReviewCard at all, so the fly-off below
-        // is invisible for every other state anyway. Animating the peek
-        // card's promotion to front still looks right continuing an actual
-        // fly-off, but with no fly-off to continue (a pending/bypassed/etc
-        // task approved via the button), that same animation was the
-        // *only* motion on screen, and stretched what used to be an
-        // instant, snappy advance into a needlessly slow one.
-        let wasSwipeable = task.state == .review
         if let occId = task.occurrenceId {
             BackendWrite.run("Approving the task") { _ = try await APIClient.shared.approveTask(occurrenceId: occId) }
         }
@@ -225,17 +199,7 @@ struct TaskReviewDeckView: View {
             tasks[i].state = task.state == .bypass ? .bypassed : .done
         }
         unlockIfEverythingResolved()
-        guard wasSwipeable else {
-            advance()
-            return
-        }
-        // Same fly-off-left whether this came from a swipe or the Approve
-        // button — the transition means "approved", not "you dragged it".
-        withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: -520, height: dragOffset.height) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-            dragOffset = .zero
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
-        }
+        withAnimation(.easeInOut(duration: 0.2)) { advance() }
     }
 
     // Mirrors ScreenProfile's approveAllPendingReview() — approving the
@@ -293,121 +257,6 @@ struct TaskReviewDeckView: View {
         index += 1
     }
 
-    // MARK: - Tinder-style card stack
-
-    // A faint peek of the next card sitting behind the current one — the
-    // same stacked-deck read Tinder has — plus the current card itself,
-    // draggable only when there's an actual decision a drag could mean
-    // (task.state == .review: the kid submitted something, nothing to
-    // decide otherwise).
-    @ViewBuilder
-    // A ForEach keyed by task.id, not two separate `if` branches for
-    // "peek" and "front" — the old version swapped each slot's *content*
-    // by array index, so advancing just popped the peek's data straight
-    // into the front slot with no interpolation (scale/opacity there were
-    // always the same literal values before and after, nothing to
-    // animate) while the front's old content vanished with it. Keying by
-    // id instead means the peek card *is* the same view as it becomes the
-    // front card, so withAnimation(advance()) can actually interpolate its
-    // scale/opacity from peek styling to front styling — the "next card
-    // rises into place" motion this never had.
-    private func cardStack(for task: ChildTask) -> some View {
-        ZStack {
-            ForEach(visibleCards) { t in
-                let isFront = t.id == task.id
-                Group {
-                    if isFront && t.state == .review {
-                        swipeableCard(for: t)
-                    } else {
-                        TaskReviewCard(task: t, childName: childName)
-                    }
-                }
-                .scaleEffect(isFront ? 1 : 0.94)
-                .opacity(isFront ? 1 : 0.5)
-                .allowsHitTesting(isFront)
-                .zIndex(isFront ? 1 : 0)
-            }
-        }
-    }
-
-    private var visibleCards: [ChildTask] {
-        guard tasks.indices.contains(index) else { return [] }
-        let end = min(index + 2, tasks.count)
-        return Array(tasks[index..<end])
-    }
-
-    private func swipeableCard(for task: ChildTask) -> some View {
-        // Tracks toward the threshold only, not the raw pixel distance —
-        // a stamp fully visible well before the drag would actually
-        // commit reads as "you've done enough," which is the wrong signal.
-        let progress = min(abs(dragOffset.width) / swipeThreshold, 1)
-        return TaskReviewCard(task: task, childName: childName)
-            .rotationEffect(.degrees(Double(dragOffset.width / 16)))
-            .offset(dragOffset)
-            .overlay(alignment: .topTrailing) {
-                swipeStamp("APPROVE", systemImage: "checkmark.circle.fill", tint: Color(hex: "25924A"))
-                    .opacity(dragOffset.width < 0 ? progress : 0)
-                    .rotationEffect(.degrees(12))
-                    .padding(20)
-            }
-            .overlay(alignment: .topLeading) {
-                swipeStamp("REDO", systemImage: "arrow.uturn.backward.circle.fill", tint: Color(hex: "EF6C00"))
-                    .opacity(dragOffset.width > 0 ? progress : 0)
-                    .rotationEffect(.degrees(-12))
-                    .padding(20)
-            }
-            // simultaneousGesture, not gesture — TaskReviewCard's body is
-            // itself a ScrollView (a long submission can need real
-            // vertical scrolling), and a plain .gesture() here would claim
-            // the touch outright and block that scroll, the same conflict
-            // this file's old pager comment described. Running alongside
-            // the ScrollView's own pan instead, filtered to horizontal-
-            // dominant drags only, leaves vertical scrolling untouched.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 8)
-                    .onChanged { value in
-                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        dragOffset = value.translation
-                    }
-                    .onEnded { value in
-                        // Unlike onChanged above, this guard only gates
-                        // whether a commit (approve/redo) is allowed — it
-                        // must never gate whether the gesture resolves at
-                        // all. It used to guard the whole handler and
-                        // return early whenever the *release* translation
-                        // dipped slightly more vertical than horizontal
-                        // (finger drift right as a thumb lifts off is
-                        // common and doesn't mean the drag wasn't
-                        // horizontal), which skipped every branch below
-                        // including the spring-back — dragOffset, and the
-                        // stamp opacity driven by it, just froze wherever
-                        // the last onChanged left them instead of ever
-                        // resetting to zero.
-                        let horizontal = abs(value.translation.width) > abs(value.translation.height)
-                        if horizontal, value.translation.width < -swipeThreshold {
-                            approve(task)
-                        } else if horizontal, value.translation.width > swipeThreshold {
-                            // Leans the card out; the compose sheet (opened
-                            // below) is the real commit — see its onSend/
-                            // onCancel for how the card actually resolves.
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                dragOffset = CGSize(width: swipeThreshold * 0.6, height: 0)
-                            }
-                            showRedoCompose = true
-                        } else {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { dragOffset = .zero }
-                        }
-                    }
-            )
-    }
-
-    private func swipeStamp(_ label: String, systemImage: String, tint: Color) -> some View {
-        Label(label, systemImage: systemImage)
-            .font(Typography.font(18, weight: .heavy))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 14).padding(.vertical, 8)
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint, lineWidth: 3))
-    }
 }
 
 // One card's worth of the task under review — condensed from the full
@@ -638,14 +487,13 @@ private struct VoiceNotePlayer: View {
     }
 }
 
-// A layered stack rather than a flat grid — the front (first) photo shown
-// full-size and in focus, with the next couple of pages peeking out from
-// behind at a slight rotation/offset, Instagram-multi-photo-post style
-// (its carousel indicator + the physical feel of a small stack of instant
-// photos). Reads at a glance as "one submission, several pages" instead of
-// making a parent scan a grid of equally-weighted tiles before knowing
-// what they're even looking at. Tapping opens PhotoGalleryViewer at the
-// first page; swiping/the thumbnail strip there reaches the rest.
+// One flat cover photo (the first submitted one) with a thin Instagram-
+// Stories-style segmented bar across the top when there's more than one —
+// a reviewer sees at a glance how many proof photos came in without
+// needing to count a corner badge or make sense of a layered stack. Used
+// to show up to 3 photos as a rotated, offset stack; replaced by direct
+// request for something plainer. Tapping still opens PhotoGalleryViewer at
+// the first page, same as before.
 private struct SubmissionPhotoStack: View {
     var urls: [String]
     var onTap: () -> Void
@@ -657,56 +505,34 @@ private struct SubmissionPhotoStack: View {
 
     var body: some View {
         Button(action: onTap) {
-            GeometryReader { geo in
-                let photoWidth = geo.size.width * 0.93
-                ZStack {
-                    if urls.count >= 3 {
-                        RemotePhoto(urlString: urls[2], cornerRadius: 12)
-                            .frame(width: photoWidth, height: stackHeight - 24)
-                            .rotationEffect(.degrees(6))
-                            .offset(x: geo.size.width * 0.025, y: 10)
-                            .opacity(0.75)
-                            .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-                    }
-                    if urls.count >= 2 {
-                        RemotePhoto(urlString: urls[1], cornerRadius: 12)
-                            .frame(width: photoWidth, height: stackHeight - 24)
-                            .rotationEffect(.degrees(-4))
-                            .offset(x: -geo.size.width * 0.02, y: 5)
-                            .opacity(0.88)
-                            .shadow(color: .black.opacity(0.1), radius: 5, y: 2)
-                    }
-                    RemotePhoto(urlString: urls[0], cornerRadius: 20)
-                        .frame(width: photoWidth, height: stackHeight - 24)
-                        .shadow(color: .black.opacity(0.16), radius: 8, y: 4)
-                        .overlay(alignment: .topTrailing) {
-                            if urls.count > 1 {
-                                HStack(spacing: 3) {
-                                    Image(systemName: "square.stack.fill").font(.system(size: 10, weight: .bold))
-                                    Text("\(urls.count)").font(Typography.font(11, weight: .bold))
-                                }
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(Color.black.opacity(0.55))
-                                .clipShape(Capsule())
-                                .padding(10)
-                            }
-                        }
-                }
-                .frame(width: geo.size.width, height: geo.size.height)
-                // The rotated back layers' corners extend past their own
-                // frame (that's what a rotated rectangle's bounding box
-                // does), and nothing here was clipping that overflow to
-                // this container — it just painted straight over whatever
-                // came next in the card (the note, the voice player). Only
-                // clipped here, not on each individual photo, so their
-                // shadows still render normally right up to this outer
-                // edge instead of each tile clipping its own.
-                .clipped()
-            }
-            .frame(height: stackHeight)
+            RemotePhoto(urlString: urls[0], cornerRadius: 20)
+                .frame(maxWidth: .infinity)
+                .frame(height: stackHeight)
+                .overlay(alignment: .top) { segmentedBar }
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var segmentedBar: some View {
+        if urls.count > 1 {
+            HStack(spacing: 4) {
+                ForEach(0..<urls.count, id: \.self) { _ in
+                    Capsule().fill(.white).frame(height: 3)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .background(
+                // A plain dark gradient behind the bar, not under the whole
+                // photo — the bar needs to read against any photo
+                // brightness, the rest of the image doesn't.
+                LinearGradient(colors: [.black.opacity(0.35), .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 46)
+                    .allowsHitTesting(false),
+                alignment: .top
+            )
+        }
     }
 }
 
