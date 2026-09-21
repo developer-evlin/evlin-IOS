@@ -3,13 +3,13 @@ import SwiftUI
 // Tinder-style task review — opened when a parent taps a task row. A
 // submitted task (task.state == .review — the kid has actually turned
 // something in, so there's a real decision to make) is a draggable card:
-// swipe right to approve, left to ask for a redo, with the same live
+// swipe left to approve, right to ask for a redo, with the same live
 // tilt/stamp feedback Tinder gives while dragging. Every other state
 // (nothing submitted yet, already resolved, a bypass request) shows the
 // same card without the gesture — there's no decision a drag could
 // represent for those, so it's buttons only, same as before.
 // A Redo always pauses on a small compose step first so the parent can send
-// the kid a quick note or voice message about what to fix — swiping left
+// the kid a quick note or voice message about what to fix — swiping right
 // past the threshold opens that same compose step rather than skipping it.
 struct TaskReviewDeckView: View {
     @Binding var tasks: [ChildTask]
@@ -119,9 +119,9 @@ struct TaskReviewDeckView: View {
                 RedoComposeSheet(childName: childName, taskTitle: task.title, actionLabel: secondaryLabel(for: task) ?? "Redo", onSend: { note, hasVoice in
                     applyRedo(note: note, hasVoice: hasVoice)
                     showRedoCompose = false
-                    // Finish the fly-off-left the swipe started, then bring
+                    // Finish the fly-off-right the swipe started, then bring
                     // in the next card fresh (no leftover offset).
-                    withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: -520, height: dragOffset.height) }
+                    withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: 520, height: dragOffset.height) }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                         dragOffset = .zero
                         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
@@ -213,9 +213,9 @@ struct TaskReviewDeckView: View {
             tasks[i].state = task.state == .bypass ? .bypassed : .done
         }
         unlockIfEverythingResolved()
-        // Same fly-off-right whether this came from a swipe or the Approve
+        // Same fly-off-left whether this came from a swipe or the Approve
         // button — the transition means "approved", not "you dragged it".
-        withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: 520, height: dragOffset.height) }
+        withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: -520, height: dragOffset.height) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             dragOffset = .zero
             withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
@@ -309,16 +309,16 @@ struct TaskReviewDeckView: View {
         return TaskReviewCard(task: task, childName: childName)
             .rotationEffect(.degrees(Double(dragOffset.width / 16)))
             .offset(dragOffset)
-            .overlay(alignment: .topLeading) {
-                swipeStamp("APPROVE", systemImage: "checkmark.circle.fill", tint: Color(hex: "25924A"))
-                    .opacity(dragOffset.width > 0 ? progress : 0)
-                    .rotationEffect(.degrees(-12))
-                    .padding(20)
-            }
             .overlay(alignment: .topTrailing) {
-                swipeStamp("REDO", systemImage: "arrow.uturn.backward.circle.fill", tint: Color(hex: "EF6C00"))
+                swipeStamp("APPROVE", systemImage: "checkmark.circle.fill", tint: Color(hex: "25924A"))
                     .opacity(dragOffset.width < 0 ? progress : 0)
                     .rotationEffect(.degrees(12))
+                    .padding(20)
+            }
+            .overlay(alignment: .topLeading) {
+                swipeStamp("REDO", systemImage: "arrow.uturn.backward.circle.fill", tint: Color(hex: "EF6C00"))
+                    .opacity(dragOffset.width > 0 ? progress : 0)
+                    .rotationEffect(.degrees(-12))
                     .padding(20)
             }
             // simultaneousGesture, not gesture — TaskReviewCard's body is
@@ -336,14 +336,14 @@ struct TaskReviewDeckView: View {
                     }
                     .onEnded { value in
                         guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        if value.translation.width > swipeThreshold {
+                        if value.translation.width < -swipeThreshold {
                             approve(task)
-                        } else if value.translation.width < -swipeThreshold {
+                        } else if value.translation.width > swipeThreshold {
                             // Leans the card out; the compose sheet (opened
                             // below) is the real commit — see its onSend/
                             // onCancel for how the card actually resolves.
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                dragOffset = CGSize(width: -swipeThreshold * 0.6, height: 0)
+                                dragOffset = CGSize(width: swipeThreshold * 0.6, height: 0)
                             }
                             showRedoCompose = true
                         } else {
