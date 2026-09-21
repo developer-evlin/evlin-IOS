@@ -205,6 +205,20 @@ def test_occurrence_read_access(client, db_session):
     assert client.get(other_url, headers=auth("dev-kid")).status_code == 404  # another child's device
 
 
+def test_occurrence_with_due_time_serializes(client, db_session):
+    # Regression: OccurrenceResponse.due_time was a bare Optional[str] with
+    # no from-ORM conversion (unlike TaskResponse's own due_time/due_date,
+    # which already had one) — any occurrence for a task with a real
+    # due_time crashed FastAPI's response serialization into a 500. Dormant
+    # until a task actually carried one, which is exactly what this covers.
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    _tasks(client, c, {"title": "timed", "recurrence": "none", "due_date": "2026-09-21", "due_time": "11:11:00"})
+    r = client.get(f"/children/{c.id}/occurrences?target_date=2026-09-21", headers=auth("pa"))
+    assert r.status_code == 200
+    assert r.json()[0]["due_time"] == "11:11:00"
+
+
 def _occurrence(client, db_session):
     p = make_parent(db_session, "pa")
     c = make_child(db_session, p)

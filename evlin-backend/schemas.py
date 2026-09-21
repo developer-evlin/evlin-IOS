@@ -127,6 +127,17 @@ class OccurrenceBase(BaseModel):
     rejection_note: Optional[str] = None
 
 class OccurrenceResponse(OccurrenceBase):
+    # Same gap TaskResponse already closed for its own due_time/due_date —
+    # this one just never got it: the ORM row holds a real datetime.time,
+    # and a bare Optional[str] here rejects it outright (a Pydantic
+    # ResponseValidationError, which FastAPI turns into a 500) rather than
+    # converting it. Dormant until an occurrence actually carried a real
+    # due_time, which is why this shipped unnoticed.
+    @field_validator("due_time", mode="before")
+    @classmethod
+    def _iso(cls, v):
+        return v.isoformat() if hasattr(v, "isoformat") else v
+
     id: UUID
     task_id: UUID
     child_id: UUID
