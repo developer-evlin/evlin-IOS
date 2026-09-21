@@ -481,15 +481,29 @@ struct TaskDetailView: View {
     }
 
     private func upload(photoId: UUID, image: UIImage) {
-        guard let occurrenceId = task.occurrenceId, let data = PhotoCompression.compress(image) else {
-            // No occurrence to attach evidence to (shouldn't normally
-            // happen — every synced task has one) or compression failed:
-            // keep the photo visible locally rather than losing it, just
-            // without a real upload behind it.
+        guard let occurrenceId = task.occurrenceId else {
+            // No occurrence to attach evidence to — shouldn't normally
+            // happen (every synced task has one) — keep the photo visible
+            // locally rather than losing it, just without a real upload
+            // behind it.
             if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
             return
         }
-        Task {
+        Task { @MainActor in
+            // The JPEG re-encode is real CPU work and used to run right
+            // here, synchronously, before this Task even started — which
+            // blocked the screen for its duration on every single photo,
+            // and visibly worse capturing several in a row, since each one
+            // froze the UI before the next could even show. Detached so it
+            // runs on a background thread instead; everything after this
+            // await stays on the main actor same as before, so the @State
+            // mutations below are still safe.
+            guard let data = await Task.detached(priority: .userInitiated, operation: {
+                PhotoCompression.compress(image)
+            }).value else {
+                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
+                return
+            }
             do {
                 let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "photo", contentType: "image/jpeg")
                 if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].submissionId = result.submissionId }
