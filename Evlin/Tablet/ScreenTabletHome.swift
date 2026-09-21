@@ -162,14 +162,9 @@ struct ScreenTabletHome: View {
                     } else if awaitingBypass {
                         Label("Waiting on a parent", systemImage: "hand.raised.fill")
                             .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.lavenderText)
-                    } else if !task.done {
-                        if let due = task.due {
-                            Label("Due \(due)", systemImage: "clock")
-                                .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
-                        } else {
-                            Label("Anytime today", systemImage: "sparkles")
-                                .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
-                        }
+                    } else if !task.done, let due = task.due {
+                        Label("Due \(due)", systemImage: "clock")
+                            .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
                     }
                 }
                 Spacer()
