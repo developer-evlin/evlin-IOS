@@ -8,6 +8,8 @@ import random
 import string
 import hashlib
 import secrets
+import jwt
+from jwt import PyJWKClient
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from supabase import create_client, Client
@@ -23,24 +25,67 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and
 
 security = HTTPBearer()
 
+# This project's Supabase JWTs are ES256-signed against a public JWKS
+# (confirmed live at {SUPABASE_URL}/auth/v1/.well-known/jwks.json, no
+# secret required to fetch) — PyJWKClient fetches and caches it in-process,
+# only re-fetching if a request's `kid` isn't in the cached set (a real
+# key rotation), not on every call. See _verify_parent_jwt_locally below
+# for why this exists.
+_jwks_client = PyJWKClient(f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json") if SUPABASE_URL else None
+
+
+def _verify_parent_jwt_locally(token: str) -> Optional[str]:
+    """Verifies a Supabase access token's signature locally instead of the
+    live supabase.auth.get_user() round trip get_current_parent used to
+    make on *every single call*. A parent-side sync pass fans out to ~10
+    endpoints back to back (rules, state, tasks, occurrences, one more per
+    task with photos/voice) — multiplying a live Supabase Auth round trip
+    by that many turned any slow moment (a Render cold start, an ordinary
+    network blip) into a real chance of blowing past the client's 15s
+    per-request timeout on at least one of them, which is what made a
+    fully-synced, correctly-paired child intermittently fall back to
+    AppSync's placeholder/stale state. Returns the user id (`sub`) on a
+    verified token, or None for anything that should fall back to the
+    live check instead of failing outright (an unrecognized `kid`, the
+    JWKS fetch itself failing, anything unexpected) — never used to
+    *reject* a token on its own, only to skip the slow path when it can.
+    """
+    if not _jwks_client:
+        return None
+    try:
+        signing_key = _jwks_client.get_signing_key_from_jwt(token)
+        payload = jwt.decode(token, signing_key.key, algorithms=["ES256"], audience="authenticated")
+        return payload.get("sub")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except Exception:
+        return None
+
+
 def get_current_parent(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> models.Parent:
     """Dependency to verify the Supabase JWT token and return the current Parent."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not configured")
-        
-    try:
-        user_res = supabase.auth.get_user(credentials.credentials)
-        user = user_res.user
-        if not user:
+
+    user_id = _verify_parent_jwt_locally(credentials.credentials)
+    if user_id is None:
+        # Local verification couldn't confirm this token (first JWKS
+        # fetch failing, a real key rotation, anything unexpected) — the
+        # slower live check is still correct, just not fast, and is the
+        # same check this dependency always used to make.
+        try:
+            user_res = supabase.auth.get_user(credentials.credentials)
+            user = user_res.user
+            user_id = user.id if user else None
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=str(e))
+        if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-            
-        parent = db.query(models.Parent).filter(models.Parent.id == user.id).first()
-        if not parent:
-            raise HTTPException(status_code=401, detail="Parent account not initialized")
-            
-        return parent
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=str(e))
+
+    parent = db.query(models.Parent).filter(models.Parent.id == user_id).first()
+    if not parent:
+        raise HTTPException(status_code=401, detail="Parent account not initialized")
+    return parent
 
 class VerifyTokenRequest(BaseModel):
     access_token: str
