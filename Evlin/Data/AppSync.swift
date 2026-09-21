@@ -363,6 +363,14 @@ class AppSync {
             child.dailyLimitMin = rules.dailyLimitMinutes
             child.manualLock = state.manualLock
             child.taskGateOverride = state.taskGateOverride
+            // A child created via placeholderChild's fallback (see its own
+            // doc comment) is stuck showing "—" forever otherwise — this is
+            // the one point where a placeholder's sentinel gets corrected
+            // once real data actually comes back.
+            if child.timeLeft == "—" {
+                child.timeLeft = formatMinutes(rules.dailyLimitMinutes)
+                child.timePct = 100
+            }
             // Reflect real pairing state: the "1 device" row is only true
             // once a device has actually paired.
             if apiChild.isPaired && child.devices.isEmpty {
