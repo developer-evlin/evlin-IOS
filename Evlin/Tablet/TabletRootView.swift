@@ -154,6 +154,12 @@ struct TabletRootView: View {
         } message: {
             Text(kidSaveError ?? "")
         }
+        // Same gap as the parent side's syncErrorBanner (ParentRootView) —
+        // this used to be console-print-only, so this device could sit on
+        // stale data (or the "Syncing…" placeholder never resolving) with
+        // no visible sign anything was wrong. The 10s poll below retries
+        // on its own; this just makes a stuck attempt visible.
+        .overlay(alignment: .top) { syncErrorBanner }
         // Load what the parent assigned, now and whenever a sync lands.
         .onAppear { loadTasksFromStore() }
         .onChange(of: SyncState.shared.version) { _, _ in loadTasksFromStore() }
@@ -206,6 +212,28 @@ struct TabletRootView: View {
                     tasks[i].bypassHasVoiceNote = hasVoice
                 }
             })
+        }
+    }
+
+    @ViewBuilder
+    private var syncErrorBanner: some View {
+        if let message = SyncState.shared.syncError {
+            HStack(spacing: 10) {
+                Image(systemName: "wifi.exclamationmark")
+                Text(message).font(.footnote).lineLimit(2)
+                Spacer(minLength: 8)
+                Button { SyncState.shared.syncError = nil } label: {
+                    Image(systemName: "xmark")
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.red, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.easeOut(duration: 0.2), value: SyncState.shared.syncError)
         }
     }
 }

@@ -12,6 +12,15 @@ final class SyncState {
     /// Set when a background save (approve, lock, rule edit, …) fails, so the
     /// UI can tell the user instead of the change silently bouncing back.
     var writeError: String?
+    /// Set when a read/sync pass fails — previously this only ever reached
+    /// a console `print`, so a parent or kid stuck on stale (or, worse,
+    /// placeholder) data had no way to know a real refresh was failing.
+    /// Not `writeError`/its alert on purpose: a background poll retries
+    /// every foreground and every 15s while a screen is open, so a modal
+    /// alert on every failed attempt would be its own kind of broken UX —
+    /// this drives a quiet, dismissible banner instead. Cleared the moment
+    /// any sync succeeds.
+    var syncError: String?
 }
 
 /// The signed-in parent's own profile (name), loaded from the backend.
@@ -144,8 +153,10 @@ class AppSync {
             FamilyStore.children = [child]
             SessionManager.shared.activeChildId = me.id
             SyncState.shared.version += 1
+            SyncState.shared.syncError = nil
         } catch {
             print("AppSync (kid) failed: \(error.localizedDescription)")
+            SyncState.shared.syncError = "Couldn't refresh. \(error.apiUserMessage)"
         }
     }
 
@@ -171,6 +182,7 @@ class AppSync {
                     let (child, tasks) = try await syncChild(apiChild, index: index, existing: existing)
                     syncedChildren.append(child)
                     apiTasksByChild[apiChild.id] = tasks
+                    SyncState.shared.syncError = nil
                 } catch {
                     // One child failing must not drop them from the UI. On a
                     // cold launch (fresh install, or the very first sync of
@@ -186,6 +198,7 @@ class AppSync {
                     // with placeholder stats until the next sync — on
                     // foreground or the next poll — fills in the rest.
                     print("AppSync: child \(apiChild.id) failed: \(error.localizedDescription)")
+                    SyncState.shared.syncError = "Couldn't fully refresh \(apiChild.name). \(error.apiUserMessage)"
                     syncedChildren.append(existing ?? placeholderChild(apiChild))
                 }
             }
@@ -205,6 +218,7 @@ class AppSync {
             print("AppSync: Successfully synced backend data into UI state!")
         } catch {
             print("AppSync Failed: \(error.localizedDescription)")
+            SyncState.shared.syncError = "Couldn't refresh. \(error.apiUserMessage)"
         }
     }
 
