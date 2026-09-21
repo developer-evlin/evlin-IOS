@@ -1075,10 +1075,19 @@ private struct KidVoiceRecorderButton: View {
 
     private var recordedTimeLabel: String { String(format: "%d:%02d", recordSeconds / 60, recordSeconds % 60) }
 
+    // The completion-handler form of this call (requestRecordPermission
+    // { granted in ... }) is what triggered "unsafeForcedSync called from
+    // Swift Concurrent context" — AVFoundation's own bridge from its
+    // async-native implementation back to that legacy callback shape is
+    // what does the unsafe synchronous wait, not anything in this file.
+    // The async entry point goes straight to the real implementation
+    // instead of through that shim. Task inherits this button action's
+    // MainActor context, so beginRecording()'s own synchronous
+    // AVAudioSession calls still land on the main actor, same as before.
     private func startRecording() {
-        AVAudioApplication.requestRecordPermission { granted in
-            guard granted else { return }
-            DispatchQueue.main.async { beginRecording() }
+        Task {
+            guard await AVAudioApplication.requestRecordPermission() else { return }
+            beginRecording()
         }
     }
 
