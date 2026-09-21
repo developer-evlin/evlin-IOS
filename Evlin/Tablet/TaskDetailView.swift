@@ -671,7 +671,7 @@ private struct KidPhotoViewer: View {
 }
 
 // One captured photo in the multi-photo grid, with an upload-state badge
-// (uploading spinner / failed retry) over the real image.
+// (progress ring wrapped around the tile / failed retry) over the real image.
 private struct KidCapturedPhotoTile: View {
     var photo: CapturedPhoto
     var onRetake: () -> Void
@@ -681,15 +681,11 @@ private struct KidCapturedPhotoTile: View {
             SubmittedPhotoThumbnail(photo: photo)
                 .aspectRatio(3.0/4.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-
-            if photo.uploadState == .uploading {
-                ProgressView()
-                    .tint(.white)
-                    .padding(6)
-                    .background(Circle().fill(KidTheme.ink.opacity(0.6)))
-                    .padding(6)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            }
+                .overlay {
+                    if photo.uploadState == .uploading {
+                        PhotoUploadRing()
+                    }
+                }
 
             Button(action: onRetake) {
                 Image(systemName: photo.uploadState == .failed ? "exclamationmark.arrow.circlepath" : "arrow.counterclockwise")
@@ -701,6 +697,26 @@ private struct KidCapturedPhotoTile: View {
             .buttonStyle(.plain)
             .padding(6)
         }
+    }
+}
+
+// A loading ring traced around the photo's own border instead of a small
+// spinner badge sitting on top of it — there's no real byte-level upload
+// progress to report (a single URLSession.data(for:) call, not a progress-
+// tracked one), so this is a continuously-sweeping indeterminate arc rather
+// than a true percentage, but "wrapped around the picture" reads as
+// something actively happening to *this photo* more than a generic spinner
+// floating in a corner does.
+private struct PhotoUploadRing: View {
+    @State private var rotating = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .trim(from: 0, to: 0.26)
+            .stroke(KidTheme.greenDeep, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+            .rotationEffect(.degrees(rotating ? 360 : 0))
+            .animation(.linear(duration: 1.1).repeatForever(autoreverses: false), value: rotating)
+            .onAppear { rotating = true }
     }
 }
 

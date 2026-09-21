@@ -48,8 +48,20 @@ struct TabletRootView: View {
     @State private var celebrationStage: CelebrationStage?
     @State private var didCelebrateThisCompletion = false
 
-    private var doneCount: Int { tasks.filter(\.done).count }
-    private var locked: Bool { doneCount < tasks.count }
+    // Gates the actual unlock — must only count a real parent decision
+    // (approved/bypassed), never .review. task.done alone means "submitted
+    // or resolved" (kept inclusive of .review on purpose, so a turned-in
+    // task still *looks* done on the task list instead of showing a
+    // separate "awaiting approval" state — see ScreenTabletHome), which is
+    // exactly the wrong thing to gate a lock on: it used to unlock the
+    // phone the moment every task was *submitted*, with zero parent
+    // approval actually required.
+    private var approvedCount: Int { tasks.filter(\.approved).count }
+    // What the kid sees as "X of Y done" — their own submission progress,
+    // not gated on approval, so it doesn't look like nothing happened
+    // right after they've turned everything in.
+    private var submittedCount: Int { tasks.filter(\.done).count }
+    private var locked: Bool { approvedCount < tasks.count }
     private var minutesLeft: Int { max(0, limitMin - usedMin) }
     private var onBreak: Bool { if let until = onBreakUntil { return Date() < until } else { return false } }
 
@@ -82,7 +94,7 @@ struct TabletRootView: View {
         ZStack {
             VStack(spacing: 0) {
                 if tab == 0 {
-                    PlayTimeTopBar(minutesLeft: minutesLeft, minutesMax: limitMin, locked: locked, done: doneCount, total: tasks.count, onBreak: onBreak)
+                    PlayTimeTopBar(minutesLeft: minutesLeft, minutesMax: limitMin, locked: locked, done: submittedCount, total: tasks.count, onBreak: onBreak)
                 }
                 // No Settings tab here — its only content was the Parent
                 // Controls request, so a whole bottom-nav slot represented a
@@ -131,7 +143,7 @@ struct TabletRootView: View {
                 .transition(.opacity)
             }
         }
-        .onChange(of: doneCount) { _, newValue in
+        .onChange(of: approvedCount) { _, newValue in
             if newValue == tasks.count, !tasks.isEmpty, !didCelebrateThisCompletion {
                 didCelebrateThisCompletion = true
                 withAnimation(.easeInOut(duration: 0.25)) { celebrationStage = .congrats }
@@ -426,7 +438,13 @@ private struct PlayTimeTopBar: View {
             .clipShape(RoundedRectangle(cornerRadius: 18))
 
             if locked {
-                Text("\(done) of \(total) tasks done — finish them all to unlock!")
+                // `done` here is submitted, not approved — still locked
+                // despite reading "N of N" is expected once a parent's
+                // review is the only thing left, so that state gets its
+                // own message instead of implying there's still work to do.
+                Text(done == total
+                     ? "All turned in! Waiting for your parent to check them."
+                     : "\(done) of \(total) tasks done — finish them all to unlock!")
                     .font(Typography.font(12, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
             }
         }
