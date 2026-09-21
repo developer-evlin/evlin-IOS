@@ -52,7 +52,13 @@ struct ScreenSettings: View {
     @State private var showDeleteAccountConfirm = false
     @State private var showCancelPlanConfirm = false
 
-    // Billing — mocked plan/cycle state, Task.sleep-based fake upgrade.
+    // Billing has no real StoreKit behind it yet (upgrade just flipped a
+    // local flag after a fake delay, "Restore Purchases" did nothing) —
+    // paused per product decision until real purchase + server-side
+    // receipt validation exist. billingEnabled gates every entry point
+    // below off until then; BillingState/billingPage stay in place as
+    // scaffolding for that real build rather than being torn out.
+    private let billingEnabled = false
     // Shared (BillingState.shared, not local @State) so the account
     // header's "Free plan"/"Pro" subtitle reflects whatever's set here.
     @ObservedObject private var billing = BillingState.shared
@@ -205,12 +211,10 @@ struct ScreenSettings: View {
                             Toggle("", isOn: $pushOn).labelsHidden().tint(EColor.secondary)
                         }
 
-                        settingsDivider
-
-                        Button { showBilling = true } label: {
-                            settingsCompactRow(icon: "creditcard", title: "Billing and receipts")
-                        }
-                        .buttonStyle(.plain)
+                        // "Billing and receipts" used to sit here — removed
+                        // along with every other entry point into billing
+                        // (see billingEnabled) since there's nothing real to
+                        // show receipts for yet.
                     }
                 }
             }
@@ -236,13 +240,9 @@ struct ScreenSettings: View {
                             settingsCompactRow(icon: "exclamationmark.bubble", title: "Report a problem")
                         }
                         .buttonStyle(.plain)
-
-                        settingsDivider
-
-                        // Not wired to anything yet, but still tappable in
-                        // principle — gets the same chevron as every other
-                        // row instead of being the odd one out.
-                        settingsCompactRow(icon: "sparkles", title: "Replay the tours")
+                        // "Replay the tours" used to sit here — removed;
+                        // there's no tour/coach-mark system anywhere in the
+                        // app for it to replay, so it never did anything.
                     }
                 }
             }
@@ -281,8 +281,9 @@ struct ScreenSettings: View {
                 .buttonStyle(.plain)
 
                 // Removed entirely once on Pro — a paying customer should
-                // never see an upsell.
-                if !billing.isPlus {
+                // never see an upsell. Also gated on billingEnabled, since
+                // there's no real purchase behind this yet (see its decl).
+                if billingEnabled && !billing.isPlus {
                     settingsDivider
                     upgradeToProRow
                 }
@@ -721,8 +722,9 @@ struct ScreenSettings: View {
                     }
 
                     // Same block as the root Settings list's account card
-                    // — gone entirely once on Pro, same as there.
-                    if !billing.isPlus {
+                    // — gone entirely once on Pro, same as there, and
+                    // gated on billingEnabled for the same reason.
+                    if billingEnabled && !billing.isPlus {
                         upgradeToProRow
                     }
                 }

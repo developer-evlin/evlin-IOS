@@ -22,7 +22,6 @@
 		3FEF485A64930BED9F97B5C7 /* ScreenHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 752627A3153FA4BAC917E81A /* ScreenHome.swift */; };
 		47E5A82E81FB42FAF0817531 /* OnboardingV2ChildSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818AC7F90F32DFC21EF0ABCD /* OnboardingV2ChildSteps.swift */; };
 		4AACFAADF8DEB0286BD9011F /* ScreenTabletSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */; };
-		4B4DA3E1DA59F8F34BCE4DDF /* SettingsMemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4C498EADEBE897F3057604C /* SettingsMemoryView.swift */; };
 		4D70C02A86B5F3D2CFB4C74A /* PlusJakartaSans-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 88F7804CB00AEEE75276DFA2 /* PlusJakartaSans-Regular.ttf */; };
 		4E1248962C6DAD733E08BF47 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFD68341BE83A8C061FB9E00 /* APIModels.swift */; };
 		5029518C72E408C60F160118 /* Baloo2-ExtraBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = ACBE52D14408BCE1201654E8 /* Baloo2-ExtraBold.ttf */; };
@@ -120,7 +119,6 @@
 		C3552C1175661B1ABC302984 /* Evlin.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Evlin.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C45B887714E40ADEA10C9103 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C46E9E8CEB0D72A8F8DF30F7 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
-		C4C498EADEBE897F3057604C /* SettingsMemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsMemoryView.swift; sourceTree = "<group>"; };
 		C562974CCB5B5A4A2A533023 /* ParentRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParentRootView.swift; sourceTree = "<group>"; };
 		CFD68341BE83A8C061FB9E00 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		CFDCFF95587B9B1C93392CB9 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
@@ -162,7 +160,6 @@
 			isa = PBXGroup;
 			children = (
 				1736580F21DF3B408C4C1C4F /* SettingsLockListManagerView.swift */,
-				C4C498EADEBE897F3057604C /* SettingsMemoryView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -467,7 +464,6 @@
 				FA987F694C383251CBF531A2 /* ScreenTimePINVideoView.swift in Sources */,
 				934B4680FD244C8DB77CFD51 /* SecurityLottieView.swift in Sources */,
 				92DC34646CFAF122652CB8C6 /* SettingsLockListManagerView.swift in Sources */,
-				4B4DA3E1DA59F8F34BCE4DDF /* SettingsMemoryView.swift in Sources */,
 				C1C4DA417ABE98E9EBC3B9E6 /* SwipeToDismiss.swift in Sources */,
 				77B012F945BCE8A13D70F9EC /* TabletData.swift in Sources */,
 				BE9E925FD91473528D791854 /* TabletRootView.swift in Sources */,
