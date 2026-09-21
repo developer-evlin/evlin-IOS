@@ -206,6 +206,16 @@ struct TaskReviewDeckView: View {
     }
 
     private func approve(_ task: ChildTask) {
+        // Only a .review card is ever rendered as the draggable
+        // swipeableCard (see cardStack) — dragOffset's .offset() isn't
+        // applied to a plain TaskReviewCard at all, so the fly-off below
+        // is invisible for every other state anyway. Animating the peek
+        // card's promotion to front still looks right continuing an actual
+        // fly-off, but with no fly-off to continue (a pending/bypassed/etc
+        // task approved via the button), that same animation was the
+        // *only* motion on screen, and stretched what used to be an
+        // instant, snappy advance into a needlessly slow one.
+        let wasSwipeable = task.state == .review
         if let occId = task.occurrenceId {
             BackendWrite.run("Approving the task") { _ = try await APIClient.shared.approveTask(occurrenceId: occId) }
         }
@@ -213,6 +223,10 @@ struct TaskReviewDeckView: View {
             tasks[i].state = task.state == .bypass ? .bypassed : .done
         }
         unlockIfEverythingResolved()
+        guard wasSwipeable else {
+            advance()
+            return
+        }
         // Same fly-off-left whether this came from a swipe or the Approve
         // button — the transition means "approved", not "you dragged it".
         withAnimation(.easeIn(duration: 0.18)) { dragOffset = CGSize(width: -520, height: dragOffset.height) }
