@@ -26,7 +26,20 @@ def test_none_uses_due_date_over_created():
 
 def test_daily_from_start_onward_only():
     assert task_applies_on(T("daily"), TUE)
-    assert not task_applies_on(T("daily"), date(2026, 9, 13))
+    # A day of slack on the created_at fallback (not a real due_date) — see
+    # task_applies_on's comment: created_at is a UTC timestamp, so a device
+    # west of UTC can still be on the previous local day when the task was
+    # made, and this is what lets that day's occurrence still generate.
+    assert task_applies_on(T("daily"), date(2026, 9, 13))
+    assert not task_applies_on(T("daily"), date(2026, 9, 12))
+
+
+def test_daily_with_explicit_due_date_has_no_slack():
+    # Unlike the created_at fallback above, an explicit due_date is already
+    # an unambiguous calendar date — a task deliberately scheduled to start
+    # tomorrow must not apply today just because of the fallback's slack.
+    assert task_applies_on(T("daily", due=MON), MON)
+    assert not task_applies_on(T("daily", due=MON), date(2026, 9, 13))
 
 
 def test_weekday_codes():

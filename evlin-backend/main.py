@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content
+from storage import storage_configured
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
 
@@ -152,6 +153,14 @@ def health_check(db: Session = Depends(get_db)):
         except Exception:
             missing.append(f"{table}.{column}")
             db.rollback()  # the failed SELECT leaves the transaction unusable otherwise
-    if missing:
-        return {"status": "degraded", "database": "connected", "missing_columns": missing}
-    return {"status": "healthy", "database": "connected"}
+    # R2 (photo/voice upload) creds are set separately per environment —
+    # a working local .env doesn't mean the deployed service has them, and
+    # that gap shows up to a kid only as a silent "failed" upload badge with
+    # no indication why. Surfacing it here makes that checkable with one
+    # curl instead of guessing.
+    if missing or not storage_configured():
+        return {
+            "status": "degraded", "database": "connected",
+            "missing_columns": missing, "storage_configured": storage_configured(),
+        }
+    return {"status": "healthy", "database": "connected", "storage_configured": True}

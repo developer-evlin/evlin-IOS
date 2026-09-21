@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import models, schemas
 from database import get_db
 from routers.auth import get_current_parent, get_current_device
@@ -19,11 +19,23 @@ def task_applies_on(task: models.Task, day: date) -> bool:
     list of weekday codes ("mon,wed,fri") — the same codes the app stores.
     """
     start = task.due_date or (task.created_at.date() if task.created_at else day)
-    if day < start:
-        return False
     rec = (task.recurrence or "none").strip().lower()
     if rec in ("", "none"):
         return day == start
+    # created_at is a UTC server timestamp, so a device west of UTC can
+    # still be on the previous local calendar day when it's already
+    # "tomorrow" in UTC (e.g. 6pm Pacific = 1am UTC the next day). Without
+    # slack here, a recurring task created that evening never gets an
+    # occurrence on the day it was actually created — the kid's device asks
+    # for "today" (its own local date), this says that's still before
+    # `start`, no occurrence is generated, and every photo they take fails
+    # immediately (no occurrenceId to attach it to). Only the created_at
+    # fallback needs this: due_date is already an unambiguous calendar
+    # date with no UTC conversion involved, so a task explicitly scheduled
+    # to start tomorrow must still not apply today.
+    slack = timedelta(days=1) if task.due_date is None else timedelta(0)
+    if day < start - slack:
+        return False
     if rec == "daily":
         return True
     if rec == "weekly":
