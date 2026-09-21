@@ -2,12 +2,15 @@ import SwiftUI
 import AVFoundation
 import UIKit
 
-// Task review — opened when a parent taps a task row. One task at a time,
-// Approve/Redo as plain buttons below the card; tapping either resolves
-// the task and moves to the next one. Used to be a Tinder-style swipeable
-// card (drag left/right to decide, with a stamp/fly-off animation) — that
-// was removed by direct request: buttons only, a plain crossfade between
-// cards, nothing else.
+// Task review — opened when a parent taps a task row. Swipe horizontally
+// to browse between tasks (a hand-built ScrollView pager — see below),
+// Approve/Redo as plain buttons below the card. Used to be a Tinder-style
+// swipeable card (drag left/right to *decide* approve/redo, with a stamp/
+// fly-off animation) — that was removed by direct request and stays
+// removed. This is a different, older mechanic from before this app had a
+// backend at all (see git history around "Fix sluggish swipe-between-
+// tasks"): swiping just navigates, same as Photos/Mail paging between
+// attachments — deciding is still only ever a deliberate button tap.
 // A Redo always pauses on a small compose step first so the parent can send
 // the kid a quick note or voice message about what to fix.
 struct TaskReviewDeckView: View {
@@ -28,6 +31,12 @@ struct TaskReviewDeckView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var index: Int
+    // Drives the actual paging (see the ScrollView pager in body); kept as
+    // a separate Optional Int rather than reusing `index` directly because
+    // .scrollPosition(id:) needs that shape. Synced both ways with
+    // equality guards so neither a swipe nor a button-triggered advance()
+    // can fight the other into a feedback loop.
+    @State private var scrollPosition: Int?
     @State private var showRedoCompose = false
     @State private var editingTask: ChildTask?
 
@@ -38,6 +47,7 @@ struct TaskReviewDeckView: View {
         self.startIndex = startIndex
         self.onDismiss = onDismiss
         _index = State(initialValue: startIndex)
+        _scrollPosition = State(initialValue: startIndex)
     }
 
     private var currentTask: ChildTask? { tasks.indices.contains(index) ? tasks[index] : nil }
@@ -74,9 +84,46 @@ struct TaskReviewDeckView: View {
 
                 if let task = currentTask {
                     VStack(spacing: 18) {
-                        TaskReviewCard(task: task, childName: childName)
-                            .id(task.id)
-                            .transition(.opacity)
+                        // A hand-built pager (ScrollView + .paging target
+                        // behavior), not TabView(.page) — TabView's page
+                        // style is backed by a UICollectionView whose
+                        // bounce/gesture handling is documented to conflict
+                        // with a nested ScrollView (exactly TaskReviewCard's
+                        // own vertical scroll for a long submission): after
+                        // scrolling down inside a card, the horizontal
+                        // swipe-to-next-task gesture could take a second or
+                        // two to respond again. A plain ScrollView is backed
+                        // by UIScrollView instead, which handles nested
+                        // orthogonal scroll views (this is exactly how
+                        // Photos/Mail's attachment browsers work, and how
+                        // PhotoGalleryViewer below already does its own
+                        // paging) without that conflict.
+                        ScrollView(.horizontal) {
+                            LazyHStack(spacing: 0) {
+                                ForEach(Array(tasks.enumerated()), id: \.offset) { i, t in
+                                    TaskReviewCard(task: t, childName: childName)
+                                        .containerRelativeFrame(.horizontal)
+                                        .id(i)
+                                }
+                            }
+                            .scrollTargetLayout()
+                        }
+                        .scrollTargetBehavior(.paging)
+                        .scrollPosition(id: $scrollPosition)
+                        .scrollIndicators(.hidden)
+                        .onChange(of: scrollPosition) { _, newValue in
+                            guard let newValue, newValue != index else { return }
+                            index = newValue
+                        }
+                        // A spring (not a flat ease) so a button-triggered
+                        // advance still carries the same snap/settle a real
+                        // finger-drag page-swipe has, rather than reading as
+                        // a plain fade/slide.
+                        .onChange(of: index) { _, newValue in
+                            guard scrollPosition != newValue else { return }
+                            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { scrollPosition = newValue }
+                        }
+
                         actionButtons(for: task)
                     }
                     // Horizontal margin wider than the card's own 24pt
@@ -115,7 +162,10 @@ struct TaskReviewDeckView: View {
                 RedoComposeSheet(childName: childName, taskTitle: task.title, actionLabel: secondaryLabel(for: task) ?? "Redo", onSend: { note, hasVoice in
                     applyRedo(note: note, hasVoice: hasVoice)
                     showRedoCompose = false
-                    withAnimation(.easeInOut(duration: 0.2)) { advance() }
+                    // Matches the pager's own spring (see the ScrollView
+                    // above) so a button-triggered advance carries the same
+                    // snap/settle a real finger-drag page-swipe has.
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
                 }, onCancel: {
                     showRedoCompose = false
                 })
@@ -199,7 +249,7 @@ struct TaskReviewDeckView: View {
             tasks[i].state = task.state == .bypass ? .bypassed : .done
         }
         unlockIfEverythingResolved()
-        withAnimation(.easeInOut(duration: 0.2)) { advance() }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { advance() }
     }
 
     // Mirrors ScreenProfile's approveAllPendingReview() — approving the
