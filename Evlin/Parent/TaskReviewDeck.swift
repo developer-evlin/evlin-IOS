@@ -111,6 +111,16 @@ struct TaskReviewDeckView: View {
                         .scrollTargetBehavior(.paging)
                         .scrollPosition(id: $scrollPosition)
                         .scrollIndicators(.hidden)
+                        // Setting scrollPosition's initial @State value in
+                        // init isn't enough on its own — PhotoGalleryViewer
+                        // hit this same gap below: the underlying
+                        // UIScrollView's real content offset needs an
+                        // explicit sync on appear, or swiping can end up
+                        // unreliable (the first page renders fine since
+                        // SwiftUI lays it out from state either way, but
+                        // the scroll view's own offset was never actually
+                        // confirmed to match it).
+                        .onAppear { scrollPosition = index }
                         .onChange(of: scrollPosition) { _, newValue in
                             guard let newValue, newValue != index else { return }
                             index = newValue
