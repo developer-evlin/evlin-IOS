@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		075C5A2B413254BC2F9B2728 /* DataSecurity.json in Resources */ = {isa = PBXBuildFile; fileRef = E372C2D464BC26D17E9DD43E /* DataSecurity.json */; };
 		07856DCD11AE81A41F73CFC4 /* AppCatalogData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06EDC45D88CB9E54104E5E80 /* AppCatalogData.swift */; };
+		09DDC8FE047168005F7699EF /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E78D4950D02DB36BD4DEF7A1 /* LocalStore.swift */; };
 		16524B858CD13115286832FF /* BillingData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 315F7E412521D00D78CFF094 /* BillingData.swift */; };
 		1CAC7371C19EB0230B7CCB3A /* ScreenCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFF0CA102C1CCA42653C334 /* ScreenCalendar.swift */; };
 		1E03B06DD1E7B1E46E6CEBD3 /* AppSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E69D67DC791FD21A5604C5 /* AppSync.swift */; };
@@ -131,6 +132,7 @@
 		E412DA621462B4F83B57FF73 /* PlusJakartaSans-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-Medium.ttf"; sourceTree = "<group>"; };
 		E6CF5B901EEEEE19804D8030 /* Keyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keyboard.swift; sourceTree = "<group>"; };
 		E708678BD054B24BF7AE4495 /* TaskReviewDeck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskReviewDeck.swift; sourceTree = "<group>"; };
+		E78D4950D02DB36BD4DEF7A1 /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
 		EA6BD1B156CBB84E08FAA023 /* ScreenTabletHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletHome.swift; sourceTree = "<group>"; };
 		ECA8F6DEBD7ADA92781241C1 /* EvlinApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EvlinApp.swift; sourceTree = "<group>"; };
 		EEB765EA0B6A70CD8AC83D0E /* TabletRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabletRootView.swift; sourceTree = "<group>"; };
@@ -200,6 +202,7 @@
 				8069A78F21788AAE2D1285B1 /* FamilyData.swift */,
 				D21383A1C819AF4B03A22E5B /* KeychainStore.swift */,
 				F0C3ABFD36105EFE6EE6C0EE /* LibraryData.swift */,
+				E78D4950D02DB36BD4DEF7A1 /* LocalStore.swift */,
 				35BFBEFD1BE687497AFA1F11 /* NotificationsData.swift */,
 				90CDCCC05BBAE584A4035390 /* TabletData.swift */,
 				09012159A0D8B7D4F8CCDF34 /* TaskData.swift */,
@@ -440,6 +443,7 @@
 				6B003BDC3005E0D4F81CCCA9 /* KidAdaptive.swift in Sources */,
 				CB3EAC09260310DFC1B20DA2 /* LessonReaderView.swift in Sources */,
 				C895FB379F58FF4789EF58F4 /* LibraryData.swift in Sources */,
+				09DDC8FE047168005F7699EF /* LocalStore.swift in Sources */,
 				8819F6AB3C97E70A536C7F84 /* NotificationsData.swift in Sources */,
 				47E5A82E81FB42FAF0817531 /* OnboardingV2ChildSteps.swift in Sources */,
 				BEA2C979B0B4CE3CD808D610 /* OnboardingV2Components.swift in Sources */,

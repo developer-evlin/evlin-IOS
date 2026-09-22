@@ -203,10 +203,19 @@ struct ScreenProfile: View {
                     dailyLimitMin: child.dailyLimitMin,
                     usageTodayMin: child.usageTodayMin,
                     onGrant: { minutes in
+                        // `minutes` here is the *additional* amount ("Give
+                        // 30 more minutes") — this used to just overwrite
+                        // child.timeLeft with that literal string, which
+                        // read as the pool being SET to 30 minutes rather
+                        // than increased by 30. Now posts a real, signed
+                        // ledger entry (see time_grants); the imminent sync
+                        // BackendWrite.run triggers corrects the display to
+                        // the real new total within a moment.
                         applyGateOverride()
-                        child.timeLeft = formatMinutes(minutes)
-                        let pct = (Double(minutes) / Double(max(child.dailyLimitMin, 1))) * 100
-                        child.timePct = min(100, Int(pct))
+                        let childId = child.id
+                        BackendWrite.run("Extra time") {
+                            try await APIClient.shared.createTimeGrant(childId: childId, minutes: minutes)
+                        }
                         withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = false }
                     },
                     onCancel: { withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = false } }

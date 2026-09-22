@@ -271,6 +271,16 @@ class AppSync {
         let state = try await APIClient.shared.fetchState(childId: id)
         let apiTasks = try await APIClient.shared.fetchTasks(childId: id)
         let apiOccurrences = try await APIClient.shared.fetchOccurrences(childId: id)
+        // Real available-today total (base limit, or a weekly_schedule
+        // override for today, plus every grant/deduction) — not just the
+        // flat daily limit. Best-effort: a failure here shouldn't fail the
+        // whole sync over a number that's secondary to tasks/rules.
+        let timeGrants = try? await APIClient.shared.fetchTimeGrants(childId: id)
+
+        LocalStore.shared.saveTasks(apiTasks, childId: id)
+        LocalStore.shared.saveOccurrences(apiOccurrences, childId: id, dueDate: CalendarSync.isoDay(Date()))
+        LocalStore.shared.saveChildState(childId: id, childName: apiChild.name, rules: rules, state: state)
+        if let timeGrants { LocalStore.shared.saveTimeGrants(timeGrants, childId: id) }
 
         // Map Tasks/Occurrences -> UI `ChildTask`
         var uiTasks: [ChildTask] = []
@@ -377,6 +387,11 @@ class AppSync {
 
         let palette = FamilyStore.childColorPalette
         let color = palette[apiChild.colorIndex % palette.count]
+        // Real total (base limit, or today's weekly_schedule override, plus
+        // every grant/deduction) when the fetch above succeeded; falls back
+        // to the flat limit only if it didn't, same as this always showed
+        // before time_grants existed — never worse than the old behavior.
+        let realTimeLeft = formatMinutes(timeGrants?.availableMinutes ?? rules.dailyLimitMinutes)
 
         if let child = existing {
             child.name = apiChild.name
@@ -385,14 +400,11 @@ class AppSync {
             child.dailyLimitMin = rules.dailyLimitMinutes
             child.manualLock = state.manualLock
             child.taskGateOverride = state.taskGateOverride
-            // A child created via placeholderChild's fallback (see its own
-            // doc comment) is stuck showing "—" forever otherwise — this is
-            // the one point where a placeholder's sentinel gets corrected
-            // once real data actually comes back.
-            if child.timeLeft == "—" {
-                child.timeLeft = formatMinutes(rules.dailyLimitMinutes)
-                child.timePct = 100
-            }
+            // Real data now, not a guess — safe to overwrite unconditionally
+            // (this also self-heals a placeholderChild's "—" sentinel, which
+            // used to be the one special case handled here).
+            child.timeLeft = realTimeLeft
+            child.timePct = 100
             // Reflect real pairing state: the "1 device" row is only true
             // once a device has actually paired.
             if apiChild.isPaired && child.devices.isEmpty {
@@ -406,7 +418,7 @@ class AppSync {
         let child = Child(
             id: id, name: apiChild.name, age: 10, dailyLimitMin: rules.dailyLimitMinutes,
             color: color, manualLock: state.manualLock, taskGateOverride: state.taskGateOverride,
-            timeLeft: formatMinutes(rules.dailyLimitMinutes), timePct: 100, usageTodayMin: 0,
+            timeLeft: realTimeLeft, timePct: 100, usageTodayMin: 0,
             subtitle: "No tasks yet",
             devices: apiChild.isPaired ? FamilyStore.demoDevice(apiChild.name) : [],
             rules: childRules
@@ -465,6 +477,13 @@ enum CalendarSync {
 
     static func parseISO(_ s: String) -> Date? { iso.date(from: s) ?? isoFrac.date(from: s) }
 
+    private static let isoDayFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f
+    }()
+    /// A Date -> "YYYY-MM-DD" in local calendar time, matching what
+    /// APIClient.fetchOccurrences already sends as target_date.
+    static func isoDay(_ date: Date) -> String { isoDayFormatter.string(from: date) }
+
     /// "HH:MM[:SS]" -> minutes since midnight.
     static func parseTime(_ s: String?) -> Int? {
         guard let s else { return nil }
@@ -499,14 +518,37 @@ enum CalendarSync {
 
     private static func weekdayCode(_ date: Date) -> String { codes[cal.component(.weekday, from: date) - 1] }
 
-    /// Mirrors the backend's task_applies_on.
+    /// Exact mirror of the backend's task_applies_on (occurrences.py) — used
+    /// both to expand recurring items across the visible calendar month and
+    /// (see LocalStore) to self-materialize "today's occurrences" locally
+    /// when the device can't reach the server. Keep these two in sync; a
+    /// mismatch here silently disagrees with what the server would
+    /// generate. Works off task.recurrence directly rather than through
+    /// repeatCodes(_:) — that helper collapses "daily" into a fixed 7-code
+    /// string for *display* purposes, which happened to still work for
+    /// "daily" here (all 7 codes always contain today's) but silently
+    /// dropped "weekly" (never expanded into a real weekday match, so a
+    /// weekly task never applied on any day at all through this function).
     static func applies(_ task: ApiTask, on day: Date) -> Bool {
         let start = parseDay(task.dueDate) ?? parseDay(task.createdAt) ?? day
         let d = cal.startOfDay(for: day)
-        if d < cal.startOfDay(for: start) { return false }
-        let r = repeatCodes(task.recurrence)
-        if r == "none" { return cal.isDate(d, inSameDayAs: start) }
-        return Set(r.split(separator: ",").map(String.init)).contains(weekdayCode(d))
+        let startDay = cal.startOfDay(for: start)
+        let rec = task.recurrence.trimmingCharacters(in: .whitespaces).lowercased()
+        if rec.isEmpty || rec == "none" { return cal.isDate(d, inSameDayAs: startDay) }
+        // A UTC-anchored created_at fallback (no explicit due_date) can
+        // already read as "tomorrow" on a device west of UTC the same
+        // evening a task was created — without this slack, a recurring
+        // task never gets an occurrence on the day it was actually made.
+        // due_date is already an unambiguous calendar date with no UTC
+        // conversion involved, so it gets no slack — mirrors
+        // task_applies_on's own comment exactly.
+        let slackDays = task.dueDate == nil ? 1 : 0
+        let boundary = cal.date(byAdding: .day, value: -slackDays, to: startDay) ?? startDay
+        if d < boundary { return false }
+        if rec == "daily" { return true }
+        if rec == "weekly" { return weekdayCode(d) == weekdayCode(startDay) }
+        let codes = Set(rec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        return codes.contains(weekdayCode(d))
     }
 
     /// First day after `date` the task applies (looks a year ahead).

@@ -15,6 +15,11 @@ struct ApiTask: Codable {
     let dueDate: String?   // "YYYY-MM-DD"
     let dueTime: String?   // "HH:MM:SS"
     let createdAt: String?
+    // Minutes awarded to time_grants once this task's occurrence is
+    // approved (0 = no bonus) and who authored the task's content —
+    // see evlin-backend's TaskBase.
+    let bonusMinutes: Int
+    let createdBy: String
 }
 
 struct ApiEvent: Codable {
@@ -49,6 +54,9 @@ struct ApiChildRule: Codable {
     let downtimeEnd: String?
     let dailyLimitEnabled: Bool?
     let customRules: [ApiCustomRule]?
+    // Calendar-style override: weekday code ("mon".."sun") -> minutes.
+    // nil/absent means "use dailyLimitMinutes every day."
+    let weeklySchedule: [String: Int]?
 }
 
 struct ApiCustomRule: Codable {
@@ -83,4 +91,27 @@ struct ApiSubmission: Codable {
     let kind: String
     let status: String
     let downloadUrl: String?
+}
+
+// One append-only ledger row — signed (a deduction is negative), never a
+// mutable balance. See evlin-backend's TimeGrant/routers/time_grants.py.
+struct ApiTimeGrant: Codable {
+    let id: String
+    let childId: String
+    let minutes: Int
+    let source: String        // "manual" | "task_bonus" | "milestone" | "ai_agent"
+    let reason: String?
+    let createdBy: String     // "parent" | "ai_agent" | "system"
+    let grantedByParentId: String?
+    let sourceRefId: String?
+    let creditedDate: String  // "YYYY-MM-DD"
+    let createdAt: String
+}
+
+struct ApiTimeGrantsSummary: Codable {
+    let date: String
+    let dailyLimitMinutes: Int
+    let grantedMinutes: Int
+    let availableMinutes: Int
+    let grants: [ApiTimeGrant]
 }

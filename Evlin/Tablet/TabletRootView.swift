@@ -161,7 +161,15 @@ struct TabletRootView: View {
         // on its own; this just makes a stuck attempt visible.
         .overlay(alignment: .top) { syncErrorBanner }
         // Load what the parent assigned, now and whenever a sync lands.
-        .onAppear { loadTasksFromStore() }
+        // hydrateIfNeeded first: populates FamilyStore/TaskStore from the
+        // local cache before the network sync below has any chance to
+        // land, so a fully offline launch (or a slow one) shows real,
+        // previously-synced data immediately instead of an empty screen —
+        // it's a no-op once the real sync has already populated this child.
+        .onAppear {
+            if let childId = session.activeChildId { LocalStore.shared.hydrateIfNeeded(childId: childId) }
+            loadTasksFromStore()
+        }
         .onChange(of: SyncState.shared.version) { _, _ in loadTasksFromStore() }
         .task {
             while !Task.isCancelled {

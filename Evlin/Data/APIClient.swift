@@ -383,6 +383,23 @@ class APIClient {
         try decode(try await send("GET", "/occurrences/\(occurrenceId)/submissions"))
     }
 
+    /// A day's screen-time pool — dailyLimitMinutes (or a weekly_schedule
+    /// override for that weekday) plus every grant/deduction credited to
+    /// it. Defaults to today when `date` is omitted.
+    func fetchTimeGrants(childId: String, date: String? = nil) async throws -> ApiTimeGrantsSummary {
+        let query = date.map { "?date=\($0)" } ?? ""
+        return try decode(try await send("GET", "/children/\(childId)/time-grants\(query)"))
+    }
+
+    /// Grants (or, with a negative value, deducts) minutes for today —
+    /// what GrantExtraTimeSheet calls now instead of mutating local state.
+    @discardableResult
+    func createTimeGrant(childId: String, minutes: Int, reason: String? = nil) async throws -> ApiTimeGrant {
+        var body: [String: Any] = ["minutes": minutes]
+        if let reason { body["reason"] = reason }
+        return try decode(try await send("POST", "/children/\(childId)/time-grants", body: body))
+    }
+
     // MARK: - Task Management (Bi-directional Sync)
     
     /// Creates the task on the backend and returns the saved row, so callers
