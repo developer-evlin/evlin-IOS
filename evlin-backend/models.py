@@ -200,6 +200,24 @@ class TimeGrant(Base):
     credited_date = Column(Date, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+class ChatMessage(Base):
+    """One running conversation per child (not per-parent, not per-thread)
+    — matches how the UI already frames it ("your child"). Scoped by
+    child_id like everything else in this backend, no new family_id
+    concept. See gemini_client.py / routers/chat.py — this table has no
+    idea an LLM produced the assistant rows, it's just a transcript."""
+    __tablename__ = "chat_messages"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
+    role = Column(String, nullable=False)  # 'user' | 'assistant'
+    text = Column(String, nullable=False)
+    tool_call = Column(String)             # 'draft_task' | 'open_block_picker' | null
+    tool_args = Column(JSON)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
 class ICSFeed(Base):
     __tablename__ = "ics_feeds"
     __table_args__ = {"schema": "app"}

@@ -299,6 +299,28 @@ class TimeGrantsSummary(BaseModel):
     available_minutes: int
     grants: List[TimeGrantResponse]
 
+class ChatSendRequest(BaseModel):
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def _not_blank(cls, v):
+        if not v or not v.strip():
+            raise ValueError("text must not be blank")
+        return v.strip()
+
+class ChatMessageResponse(BaseModel):
+    id: UUID
+    child_id: UUID
+    role: str
+    text: str
+    tool_call: Optional[str] = None
+    tool_args: Optional[dict] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 class ConsentCreate(BaseModel):
     toggle_key: str
     granted: bool

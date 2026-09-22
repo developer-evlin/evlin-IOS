@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat
 from storage import storage_configured
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
@@ -105,6 +105,18 @@ _MIGRATIONS = [
     "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS weekly_schedule jsonb",
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT 'parent'",
     "ALTER TABLE app.time_grants ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT 'parent'",
+    # Phase C: real Chat AI — one running conversation per child.
+    """CREATE TABLE IF NOT EXISTS app.chat_messages (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        parent_id uuid REFERENCES app.parents(id),
+        role text NOT NULL,
+        text text NOT NULL,
+        tool_call text,
+        tool_args jsonb,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS chat_messages_child_id_idx ON app.chat_messages(child_id, created_at)",
 ]
 
 
@@ -145,6 +157,7 @@ app.include_router(calendar.router)
 app.include_router(compliance.router)
 app.include_router(content.router)
 app.include_router(time_grants.router)
+app.include_router(chat.router)
 
 @app.get("/")
 def read_root():
