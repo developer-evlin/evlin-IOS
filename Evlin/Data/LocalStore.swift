@@ -198,6 +198,31 @@ final class LocalStore {
         }
     }
 
+    // MARK: - Local file caching (real disk persistence for pending uploads)
+
+    private static let cacheDir: URL = {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("PendingUploads", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    /// Writes `data` to a real file in Caches/PendingUploads and returns
+    /// its URL — the actual "local temp disk caching" a pending upload
+    /// (photo or voice) is tracked against via PendingWrite, so the bytes
+    /// survive the app being killed or backgrounded mid-upload instead of
+    /// only ever existing as an in-memory UIImage/Data.
+    static func cacheFile(data: Data, suffix: String) -> URL? {
+        let url = cacheDir.appendingPathComponent("\(UUID().uuidString).\(suffix)")
+        do {
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            print("LocalStore.cacheFile: \(error)")
+            return nil
+        }
+    }
+
     // MARK: - Write-through (called by AppSync after a successful fetch)
 
     func saveTasks(_ tasks: [ApiTask], childId: String) {

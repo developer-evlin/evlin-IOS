@@ -17,6 +17,11 @@ private struct CapturedPhoto: Identifiable, Equatable {
     var downloadURL: String?
     var submissionId: String?
     var uploadState: UploadState = .idle
+    // The real on-disk cache backing this photo's upload — see capture()/
+    // upload(). Lets the upload survive the app being killed/backgrounded
+    // mid-flight (the pending write in LocalStore points at this same
+    // file) instead of only ever existing as an in-memory UIImage.
+    var pendingWriteId: String?
 
     enum UploadState: Equatable { case idle, uploading, uploaded, failed }
 
@@ -148,6 +153,7 @@ struct TaskDetailView: View {
         .task {
             guard let occurrenceId = task.occurrenceId else { return }
             await loadExistingSubmissions(occurrenceId: occurrenceId)
+            resumePendingUploads()
         }
         .onChange(of: voiceNoteURL) { _, newValue in
             if let newValue { uploadVoiceNote(fileURL: newValue) }
@@ -520,8 +526,17 @@ struct TaskDetailView: View {
         }
     }
 
+    /// Standard practice for a mobile upload, not just an in-memory
+    /// attempt: the compressed file is written to disk immediately — real
+    /// local caching, not just a UIImage that's gone the moment this view
+    /// (or the app) closes — and tracked as a real PendingWrite in
+    /// LocalStore. If the app is killed or backgrounded mid-upload, the
+    /// file and the queue entry both survive; resumePendingUploads() (see
+    /// .task below) picks it back up on next launch without the kid ever
+    /// needing to retake anything. The queue entry is only removed once
+    /// the real upload actually finishes.
     private func upload(photoId: UUID, image: UIImage) {
-        guard let occurrenceId = task.occurrenceId else {
+        guard let occurrenceId = task.occurrenceId, let childId = SessionManager.shared.activeChildId else {
             // No occurrence to attach evidence to — shouldn't normally
             // happen (every synced task has one) — keep the photo visible
             // locally rather than losing it, just without a real upload
@@ -544,15 +559,62 @@ struct TaskDetailView: View {
                 if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
                 return
             }
+            guard let fileURL = LocalStore.cacheFile(data: data, suffix: "jpg") else {
+                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
+                return
+            }
+            // A retry re-compresses and re-caches fresh, so the previous
+            // attempt's queue entry (and its now-redundant file) would
+            // otherwise just sit there orphaned forever.
+            if let previousId = photos.first(where: { $0.id == photoId })?.pendingWriteId,
+               let stale = LocalStore.shared.pendingWrites(childId: childId).first(where: { $0.id == previousId }) {
+                if let path = stale.localFilePath { try? FileManager.default.removeItem(atPath: path) }
+                LocalStore.shared.removePendingWrite(stale)
+            }
+            let write = PendingWrite(childId: childId, kind: "uploadPhoto", occurrenceId: occurrenceId,
+                                      localFilePath: fileURL.path, contentType: "image/jpeg")
+            LocalStore.shared.queueWrite(write)
+            if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].pendingWriteId = write.id }
+
             do {
                 let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "photo", contentType: "image/jpeg")
                 if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].submissionId = result.submissionId }
                 try await APIClient.shared.uploadToPresignedURL(result.uploadURL, data: data, contentType: "image/jpeg")
                 try await APIClient.shared.completeSubmission(id: result.submissionId)
                 if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .uploaded }
+                LocalStore.shared.removePendingWrite(write)
+                try? FileManager.default.removeItem(at: fileURL)
             } catch {
+                // Left queued on purpose — this is exactly what
+                // resumePendingUploads() retries later, whether that's a
+                // manual tap on the (now-visible, since this is a real
+                // failure) retry icon, or automatically next launch.
                 if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
             }
+        }
+    }
+
+    /// Picks up any photo upload that was still queued from a previous
+    /// session for this exact task — the app got backgrounded/killed
+    /// before it finished, but the file (and the queue entry pointing at
+    /// it) survived on disk. Runs once per appearance; a write that's
+    /// already represented in `photos` (this same session) is skipped.
+    private func resumePendingUploads() {
+        guard let occurrenceId = task.occurrenceId, let childId = SessionManager.shared.activeChildId else { return }
+        let known = Set(photos.compactMap(\.pendingWriteId))
+        for write in LocalStore.shared.pendingWrites(childId: childId)
+        where write.kind == "uploadPhoto" && write.occurrenceId == occurrenceId && !known.contains(write.id) {
+            guard let path = write.localFilePath, let image = UIImage(contentsOfFile: path) else {
+                // The file's gone (e.g. iOS reclaimed Caches under storage
+                // pressure) — nothing left to retry from; drop the
+                // now-meaningless queue entry rather than leave it stuck.
+                LocalStore.shared.removePendingWrite(write)
+                continue
+            }
+            var photo = CapturedPhoto(image: image, uploadState: .uploading)
+            photo.pendingWriteId = write.id
+            photos.append(photo)
+            upload(photoId: photo.id, image: image)
         }
     }
 
@@ -882,44 +944,37 @@ private struct KidCapturedPhotoTile: View {
             SubmittedPhotoThumbnail(photo: photo)
                 .aspectRatio(3.0/4.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay {
-                    if photo.uploadState == .uploading {
-                        PhotoUploadRing()
-                    }
-                }
 
-            Button(action: onRetake) {
-                Image(systemName: photo.uploadState == .failed ? "exclamationmark.arrow.circlepath" : "arrow.counterclockwise")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(photo.uploadState == .failed ? Color(hex: "EA580C") : KidTheme.ink.opacity(0.8)))
+            // No visible "uploading" state at all any more — not even the
+            // wrap-around ring this used to show. A kid taking a photo
+            // should see it looking simply *done* immediately (upload is
+            // a background concern, especially once local caching means
+            // nothing's actually at risk of being lost — see capture()),
+            // not a circular-arrow icon sitting on top of a still-settling
+            // photo reading as "something's stuck." A retake button only
+            // shows once there's a real reason for one: the photo's fully
+            // up (they might still want a redo) or the upload genuinely
+            // failed (an actionable problem, not a wait).
+            if photo.uploadState == .uploaded || photo.uploadState == .failed {
+                Button(action: onRetake) {
+                    Image(systemName: photo.uploadState == .failed ? "exclamationmark.arrow.circlepath" : "arrow.counterclockwise")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(photo.uploadState == .failed ? Color(hex: "EA580C") : KidTheme.ink.opacity(0.8)))
+                }
+                .buttonStyle(.plain)
+                .padding(6)
             }
-            .buttonStyle(.plain)
-            .padding(6)
         }
     }
 }
 
-// A loading ring traced around the photo's own border instead of a small
-// spinner badge sitting on top of it — there's no real byte-level upload
-// progress to report (a single URLSession.data(for:) call, not a progress-
-// tracked one), so this is a continuously-sweeping indeterminate arc rather
-// than a true percentage, but "wrapped around the picture" reads as
-// something actively happening to *this photo* more than a generic spinner
-// floating in a corner does.
-private struct PhotoUploadRing: View {
-    @State private var rotating = false
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .trim(from: 0, to: 0.26)
-            .stroke(KidTheme.greenDeep, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-            .rotationEffect(.degrees(rotating ? 360 : 0))
-            .animation(.linear(duration: 1.1).repeatForever(autoreverses: false), value: rotating)
-            .onAppear { rotating = true }
-    }
-}
+// PhotoUploadRing (a wrap-around loading arc) used to live here — removed
+// by direct request: even a real, well-designed progress indicator still
+// reads as "something's pending/stuck" to a kid glancing at their own
+// photo. See KidCapturedPhotoTile's own comment for what replaced it
+// (nothing — the photo just looks done immediately).
 
 // "Can't do this today?" compose step — an optional reason, matching the
 // parent-side review card's expectation that a bypass request explains
