@@ -99,6 +99,12 @@ _MIGRATIONS = [
         created_at timestamptz NOT NULL DEFAULT now()
     )""",
     "CREATE INDEX IF NOT EXISTS time_grants_child_date_idx ON app.time_grants(child_id, credited_date)",
+    # A5: AI-driven changes and a calendar-style weekly schedule — see the
+    # plan doc. All additive; NULL/'parent' defaults keep every existing
+    # row's meaning unchanged.
+    "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS weekly_schedule jsonb",
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT 'parent'",
+    "ALTER TABLE app.time_grants ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT 'parent'",
 ]
 
 

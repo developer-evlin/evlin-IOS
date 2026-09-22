@@ -88,7 +88,8 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         gates_apps=task.gates_apps,
         submission_kind=_safe_submission_kind(task.submission_kind),
         active=task.active,
-        bonus_minutes=task.bonus_minutes
+        bonus_minutes=task.bonus_minutes,
+        created_by=task.created_by
     )
     db.add(new_task)
     _commit_or_400(db)

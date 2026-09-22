@@ -106,6 +106,8 @@ class Task(Base):
     # moment this task's occurrence is approved — see TimeGrant below.
     # Zero (the default) means "no bonus," same as every other task today.
     bonus_minutes = Column(Integer, nullable=False, default=0)
+    # 'parent' | 'ai_agent' | 'system' — who/what authored this task.
+    created_by = Column(String, nullable=False, default="parent")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class Occurrence(Base):
@@ -150,6 +152,9 @@ class ChildRule(Base):
     downtime_enabled = Column(Boolean, nullable=False, default=False)
     downtime_start = Column(Time)
     downtime_end = Column(Time)
+    # Calendar-style override: {"mon": 120, ...}. NULL (every child today)
+    # means "use daily_limit_minutes every day" — see routers/time_grants.py.
+    weekly_schedule = Column(JSON)
     # Whether the daily screen-time limit is switched on, and the parent's
     # free-form rules (from chat): [{"id","title","detail","icon","on"}].
     daily_limit_enabled = Column(Boolean, nullable=False, default=True)
@@ -179,9 +184,14 @@ class TimeGrant(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    # Signed: a deduction (an agent or a parent taking time away) is a
+    # negative row, same ledger, same no-lost-update reasoning as a grant.
     minutes = Column(Integer, nullable=False)
-    source = Column(String, nullable=False)  # 'manual' | 'task_bonus' | 'milestone'
+    source = Column(String, nullable=False)  # 'manual' | 'task_bonus' | 'milestone' | 'ai_agent'
     reason = Column(String)
+    # 'parent' | 'ai_agent' | 'system' — distinct from `source` (why), this
+    # is *what kind of actor* made the change.
+    created_by = Column(String, nullable=False, default="parent")
     granted_by_parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
     # Deliberately not a real FK: this row may point at an occurrence today
     # and, later, a not-yet-built milestone — decoupling means that feature

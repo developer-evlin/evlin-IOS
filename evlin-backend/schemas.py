@@ -97,6 +97,11 @@ class TaskBase(BaseModel):
     # Awarded to the child's time_grants ledger once this task's occurrence
     # is approved — 0 (default) means no bonus, same as every task today.
     bonus_minutes: int = 0
+    # 'parent' (default) | 'ai_agent' | 'system' — who authored this task's
+    # content. A parent always still taps Create either way (the model
+    # never writes directly, see the plan's Phase C) — this just tells an
+    # AI-suggested-then-parent-confirmed task apart from a parent-typed one.
+    created_by: str = "parent"
 
 class TaskCreate(TaskBase):
     pass
@@ -224,6 +229,10 @@ class ChildRuleUpdate(BaseModel):
     custom_rules: Optional[List[dict]] = None
     # True when the parent deleted the Downtime rule: forgets its times.
     downtime_clear: Optional[bool] = None
+    # Calendar-style override: {"mon": 120, ...}, weekday codes matching
+    # tasks' own recurrence vocabulary. Omitted/None leaves it untouched;
+    # an explicit {} clears it back to "use daily_limit_minutes every day".
+    weekly_schedule: Optional[dict] = None
 
 class ChildRuleResponse(ChildRuleBase):
     # ORM rows hold time objects; the API exposes "HH:MM:SS" strings.
@@ -234,6 +243,7 @@ class ChildRuleResponse(ChildRuleBase):
 
     daily_limit_enabled: bool = True
     custom_rules: List[dict] = []
+    weekly_schedule: Optional[dict] = None
     child_id: UUID
     updated_at: datetime
 
@@ -255,14 +265,16 @@ class ChildStateResponse(ChildStateBase):
         from_attributes = True
 
 class TimeGrantCreate(BaseModel):
+    # Signed: positive grants time, negative deducts it — same ledger,
+    # same no-lost-update reasoning either direction (see models.py).
     minutes: int
     reason: Optional[str] = None
 
     @field_validator("minutes")
     @classmethod
-    def _positive(cls, v):
-        if v <= 0:
-            raise ValueError("minutes must be positive — a correction is a new row, not a negative grant")
+    def _not_zero(cls, v):
+        if v == 0:
+            raise ValueError("minutes can't be 0 — that's not a real change to log")
         return v
 
 class TimeGrantResponse(BaseModel):
@@ -271,6 +283,7 @@ class TimeGrantResponse(BaseModel):
     minutes: int
     source: str
     reason: Optional[str] = None
+    created_by: str = "parent"
     granted_by_parent_id: Optional[UUID] = None
     source_ref_id: Optional[UUID] = None
     credited_date: date

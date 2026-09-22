@@ -30,11 +30,59 @@ def test_grants_are_additive_not_overwritten(client, db_session):
     assert len(summary["grants"]) == 2
 
 
-def test_nonpositive_minutes_rejected(client, db_session):
+def test_zero_minutes_rejected_but_negative_allowed(client, db_session):
+    # A5.1: the ledger accepts deductions too (an agent or a parent taking
+    # time away) — only a genuine no-op (0) is rejected.
     p = make_parent(db_session, "pa")
     c = make_child(db_session, p)
     assert client.post(f"/children/{c.id}/time-grants", headers=auth("pa"), json={"minutes": 0}).status_code == 422
-    assert client.post(f"/children/{c.id}/time-grants", headers=auth("pa"), json={"minutes": -5}).status_code == 422
+    assert client.post(f"/children/{c.id}/time-grants", headers=auth("pa"), json={"minutes": -5}).status_code == 200
+
+
+def test_deduction_reduces_available_minutes_floored_at_zero(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)  # daily_limit_minutes=60
+    client.post(f"/children/{c.id}/time-grants", headers=auth("pa"), json={"minutes": -100, "reason": "Missed chores"})
+    summary = client.get(f"/children/{c.id}/time-grants", headers=auth("pa")).json()
+    assert summary["granted_minutes"] == -100
+    assert summary["available_minutes"] == 0  # floored, never negative
+
+
+def test_grant_created_by_defaults_to_parent(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    grant = client.post(f"/children/{c.id}/time-grants", headers=auth("pa"), json={"minutes": 10}).json()
+    assert grant["created_by"] == "parent"
+
+
+def test_weekly_schedule_overrides_daily_limit_for_that_weekday(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    monday = date(2026, 9, 21)   # a known Monday
+    saturday = date(2026, 9, 26)  # a known Saturday
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"), json={
+        "daily_limit_minutes": 60, "downtime_enabled": False,
+        "weekly_schedule": {"mon": 120, "sat": 240},
+    })
+    assert r.status_code == 200 and r.json()["weekly_schedule"] == {"mon": 120, "sat": 240}
+
+    assert client.get(f"/children/{c.id}/time-grants?date={monday}", headers=auth("pa")).json()["daily_limit_minutes"] == 120
+    assert client.get(f"/children/{c.id}/time-grants?date={saturday}", headers=auth("pa")).json()["daily_limit_minutes"] == 240
+    # A weekday with no override in the map falls back to the flat limit.
+    sunday = date(2026, 9, 27)
+    assert client.get(f"/children/{c.id}/time-grants?date={sunday}", headers=auth("pa")).json()["daily_limit_minutes"] == 60
+
+
+def test_weekly_schedule_empty_dict_clears_the_override(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    client.put(f"/children/{c.id}/rules", headers=auth("pa"), json={
+        "daily_limit_minutes": 60, "downtime_enabled": False, "weekly_schedule": {"mon": 120},
+    })
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"), json={
+        "daily_limit_minutes": 60, "downtime_enabled": False, "weekly_schedule": {},
+    })
+    assert r.json()["weekly_schedule"] is None
 
 
 def test_grant_access_control(client, db_session):

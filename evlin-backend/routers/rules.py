@@ -42,6 +42,11 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
         rules.daily_limit_enabled = rules_update.daily_limit_enabled
     if rules_update.custom_rules is not None:
         rules.custom_rules = rules_update.custom_rules
+    if rules_update.weekly_schedule is not None:
+        # An explicit {} clears it back to "use daily_limit_minutes every
+        # day" — store None, not an empty dict, so _base_limit_for's own
+        # `if rule.weekly_schedule:` check treats it as absent.
+        rules.weekly_schedule = rules_update.weekly_schedule or None
     rules.updated_at = datetime.now(timezone.utc)
     
     db.commit()
