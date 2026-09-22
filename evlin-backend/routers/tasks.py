@@ -87,7 +87,8 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         recurrence=task.recurrence,
         gates_apps=task.gates_apps,
         submission_kind=_safe_submission_kind(task.submission_kind),
-        active=task.active
+        active=task.active,
+        bonus_minutes=task.bonus_minutes
     )
     db.add(new_task)
     _commit_or_400(db)
@@ -117,6 +118,8 @@ def update_task(task_id: UUID, task_update: schemas.TaskCreate, current_parent: 
     db_task.gates_apps = task_update.gates_apps
     db_task.submission_kind = _safe_submission_kind(task_update.submission_kind)
     db_task.active = task_update.active
+    if "bonus_minutes" in task_update.model_fields_set:
+        db_task.bonus_minutes = task_update.bonus_minutes
 
     _commit_or_400(db)
     db.refresh(db_task)

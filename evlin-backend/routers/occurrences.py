@@ -6,6 +6,7 @@ import models, schemas
 from database import get_db
 from routers.auth import get_current_parent, get_current_device
 from access import assert_child_access, get_occurrence_for_parent
+from routers.time_grants import award_time_grant
 
 router = APIRouter(tags=["occurrences"])
 
@@ -155,6 +156,13 @@ def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Sess
         occurrence.status = "approved"
         occurrence.approved_at = datetime.now(timezone.utc)
         occurrence.approved_by = parent.id
+        task = db.query(models.Task).filter(models.Task.id == occurrence.task_id).first()
+        if task and task.bonus_minutes > 0:
+            award_time_grant(
+                db, occurrence.child_id, task.bonus_minutes, source="task_bonus",
+                reason=f"Task: {task.title}", granted_by_parent_id=parent.id,
+                source_ref_id=occurrence.id,
+            )
     else:
         occurrence.status = "rejected"
     db.commit()

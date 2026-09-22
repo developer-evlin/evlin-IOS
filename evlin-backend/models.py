@@ -102,6 +102,10 @@ class Task(Base):
     gates_apps = Column(Boolean, nullable=False, default=True)
     submission_kind = Column(String, nullable=False, default="none")
     active = Column(Boolean, nullable=False, default=True)
+    # Screen-time minutes awarded to the child's time_grants ledger the
+    # moment this task's occurrence is approved — see TimeGrant below.
+    # Zero (the default) means "no bonus," same as every other task today.
+    bonus_minutes = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class Occurrence(Base):
@@ -160,6 +164,31 @@ class ChildState(Base):
     manual_lock = Column(Boolean, nullable=False, default=False)
     task_gate_override = Column(Boolean, nullable=False, default=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class TimeGrant(Base):
+    """One append-only entry in a child's screen-time pool — never a
+    mutable balance. Two independently-offline devices (a parent granting
+    while the kid has no signal, or vice versa) each just insert their own
+    row on next sync; nothing ever overwrites another row, so there's no
+    lost-update race the way a single mutable balance field would have.
+    `available_today` for a child is daily_limit_minutes (child_rules) +
+    SUM(minutes WHERE credited_date = today) — see routers/time_grants.py.
+    """
+    __tablename__ = "time_grants"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    minutes = Column(Integer, nullable=False)
+    source = Column(String, nullable=False)  # 'manual' | 'task_bonus' | 'milestone'
+    reason = Column(String)
+    granted_by_parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
+    # Deliberately not a real FK: this row may point at an occurrence today
+    # and, later, a not-yet-built milestone — decoupling means that feature
+    # can start writing here with zero migration to this table.
+    source_ref_id = Column(UUID(as_uuid=True))
+    credited_date = Column(Date, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class ICSFeed(Base):
     __tablename__ = "ics_feeds"

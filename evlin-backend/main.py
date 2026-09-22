@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants
 from storage import storage_configured
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
@@ -83,6 +83,22 @@ _MIGRATIONS = [
         expires_at timestamptz NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now()
     )""",
+    # Flexible screen-time pool: an append-only ledger, not a mutable
+    # balance — see models.py's TimeGrant for why. bonus_minutes on tasks
+    # is what a "special task" grants once its occurrence is approved.
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS bonus_minutes integer NOT NULL DEFAULT 0",
+    """CREATE TABLE IF NOT EXISTS app.time_grants (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        minutes integer NOT NULL,
+        source text NOT NULL,
+        reason text,
+        granted_by_parent_id uuid REFERENCES app.parents(id),
+        source_ref_id uuid,
+        credited_date date NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS time_grants_child_date_idx ON app.time_grants(child_id, credited_date)",
 ]
 
 
@@ -122,6 +138,7 @@ app.include_router(rules.router)
 app.include_router(calendar.router)
 app.include_router(compliance.router)
 app.include_router(content.router)
+app.include_router(time_grants.router)
 
 @app.get("/")
 def read_root():

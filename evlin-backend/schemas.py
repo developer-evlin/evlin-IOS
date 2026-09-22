@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from uuid import UUID
 
 class ParentBase(BaseModel):
@@ -94,6 +94,9 @@ class TaskBase(BaseModel):
     gates_apps: bool = True
     submission_kind: str = "none"
     active: bool = True
+    # Awarded to the child's time_grants ledger once this task's occurrence
+    # is approved — 0 (default) means no bonus, same as every task today.
+    bonus_minutes: int = 0
 
 class TaskCreate(TaskBase):
     pass
@@ -250,6 +253,38 @@ class ChildStateResponse(ChildStateBase):
 
     class Config:
         from_attributes = True
+
+class TimeGrantCreate(BaseModel):
+    minutes: int
+    reason: Optional[str] = None
+
+    @field_validator("minutes")
+    @classmethod
+    def _positive(cls, v):
+        if v <= 0:
+            raise ValueError("minutes must be positive — a correction is a new row, not a negative grant")
+        return v
+
+class TimeGrantResponse(BaseModel):
+    id: UUID
+    child_id: UUID
+    minutes: int
+    source: str
+    reason: Optional[str] = None
+    granted_by_parent_id: Optional[UUID] = None
+    source_ref_id: Optional[UUID] = None
+    credited_date: date
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class TimeGrantsSummary(BaseModel):
+    date: date
+    daily_limit_minutes: int
+    granted_minutes: int
+    available_minutes: int
+    grants: List[TimeGrantResponse]
 
 class ConsentCreate(BaseModel):
     toggle_key: str

@@ -6,8 +6,18 @@ caught a live bug here — models.AuditLog mapped a Python attribute to a
 evlin-tables.sql); every /audit call crashed with a 500. That's what
 test_audit_persists_the_real_payload guards against.
 """
+from datetime import date
+
 import models
 from tests.conftest import auth, make_child, make_device, make_parent
+
+# A task with no due_date anchors its recurrence on created_at (real
+# wall-clock time at insert), so querying occurrences needs "today," not a
+# date frozen when this test was written — a hardcoded string here rots
+# the moment real time crosses it (this bit a UTC-rollover case directly:
+# task_applies_on's own 1-day slack for a west-of-UTC created_at wasn't
+# enough once real time had moved a full 2 real days past the old constant).
+TODAY = str(date.today())
 
 
 # ---- consent --------------------------------------------------------------
@@ -60,7 +70,7 @@ def _occurrence(client, db_session):
     make_device(db_session, kid, "dev-kid")
     client.post(f"/children/{kid.id}/tasks", headers=auth("pa"), json={
         "title": "Take a photo", "recurrence": "daily", "submission_kind": "photo"})
-    occ = client.get(f"/children/{kid.id}/occurrences?target_date=2026-09-20", headers=auth("dev-kid")).json()[0]
+    occ = client.get(f"/children/{kid.id}/occurrences?target_date={TODAY}", headers=auth("dev-kid")).json()[0]
     return kid, occ
 
 
@@ -76,7 +86,7 @@ def test_submission_upload_flow_generates_a_url_and_marks_uploaded(client, db_se
     done = client.post(f"/submissions/{sub_id}/complete", headers=auth("dev-kid"))
     assert done.status_code == 200 and done.json()["status"] == "uploaded" and done.json()["uploaded_at"]
 
-    occ_after = client.get(f"/children/{kid.id}/occurrences?target_date=2026-09-20", headers=auth("dev-kid")).json()[0]
+    occ_after = client.get(f"/children/{kid.id}/occurrences?target_date={TODAY}", headers=auth("dev-kid")).json()[0]
     assert occ_after["status"] == "submitted"  # completing a submission moves the occurrence forward
 
 

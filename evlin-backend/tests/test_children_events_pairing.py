@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import models
 from tests.conftest import auth, make_child, make_device, make_parent
@@ -326,5 +326,8 @@ def test_created_at_dropped_from_parent_child_occurrence_event_but_kept_on_tasks
     assert "created_at" not in ev
     task = client.post(f"/children/{kid.id}/tasks", headers=auth("pa"), json={"title": "x"}).json()
     assert task["created_at"]  # kept: task_applies_on() anchors undated recurrence on it
-    occ = client.get(f"/children/{kid.id}/occurrences?target_date=2026-09-20", headers=auth("pa")).json()
+    # An undated task anchors on created_at (real wall-clock time), so
+    # querying occurrences needs "today," not a date frozen when this test
+    # was written — see test_compliance_submissions_content.py's TODAY.
+    occ = client.get(f"/children/{kid.id}/occurrences?target_date={date.today()}", headers=auth("pa")).json()
     assert "created_at" not in occ[0]
