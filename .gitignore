@@ -11,3 +11,12 @@ build/
 
 # APNs private keys — never commit these
 *.p8
+
+# Backend secrets — real Supabase/DB/R2/LLM credentials live here locally
+# and on Render's dashboard, never in the repo. .env.example stays tracked
+# (placeholder values only — verified, not just assumed).
+evlin-backend/.env
+evlin-backend/__pycache__/
+evlin-backend/routers/__pycache__/
+evlin-backend/tests/__pycache__/
+*.pyc
