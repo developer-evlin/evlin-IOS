@@ -591,10 +591,15 @@ private var welcomeSuggestions: [ChatSuggestion] {[
         prompt: "Suggest something your child can do instead of screen time",
         reply: "A 20-minute LEGO build or a walk around the block both work well right after school — want me to add one to today's tasks?"
     ),
+    // No hardcoded `reply:` here (used to claim "Added — Soccer Practice
+    // now repeats..." with nothing ever actually written to the
+    // calendar) — this now goes to the real model like any other
+    // freeform message, which (per its system prompt) says honestly
+    // that it can't add calendar events yet rather than fabricating a
+    // "done" reply.
     ChatSuggestion(
         icon: "sf:calendar", title: "Update the calendar",
-        prompt: "Add soccer practice to your child's calendar every Thursday at 4pm",
-        reply: "Added — Soccer Practice now repeats every Thursday, 4:00–5:30 PM on your child's calendar."
+        prompt: "Add soccer practice to your child's calendar every Thursday at 4pm"
     ),
 ]}
 
@@ -868,12 +873,20 @@ struct ScreenChat: View {
                 .transition(.move(edge: .leading))
             }
         }
+        // Real persisted history — replaces the old empty-on-every-launch
+        // transcript (chatHistoryMock only ever backed the separate
+        // multi-thread sidebar, never this main view).
+        .task { await loadHistory() }
         // Switching to a different bottom tab shouldn't leave the history
         // panel stuck open underneath — TabView keeps this tab's state
         // alive, but the content view still disappears while another tab
         // is frontmost, so this fires exactly on a tab switch (not on the
         // panel's own overlay presentation, which lives above this view).
-        .onDisappear { showHistory = false }
+        .onDisappear {
+            showHistory = false
+            responseTask?.cancel()
+            scrollTask?.cancel()
+        }
     }
 
     // Applied to every message row so a new one slides/fades in from the
@@ -1039,12 +1052,17 @@ struct ScreenChat: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         messages.append(ChatMessage(fromUser: true, text: text))
         draft = ""
-        respondAfterDelay(with: "Got it — I'll take care of that.")
+        sendToBackend(text)
     }
 
     // Tapping a welcomeGrid tile — same flow as send(), just sourced from a
-    // preset prompt instead of the draft field. A tile carrying a card kind
-    // shows that card instead of the plain streamed-text reply.
+    // preset prompt instead of the draft field. A tile that already knows
+    // its own target card (Block an app, Add a task, Review progress) shows
+    // it instantly — no ambiguity for the model to resolve, the button
+    // already says what it means. Everything else (a plain suggestion, or
+    // one of the two prompts with no card — "Set a bedtime rule"/"Update
+    // the calendar," which used to fake a canned reply) goes to the real
+    // backend exactly like a typed message would.
     private func sendSuggestion(_ suggestion: ChatSuggestion) {
         guard !isSending else { return }
         messages.append(ChatMessage(fromUser: true, text: suggestion.prompt))
@@ -1059,8 +1077,69 @@ struct ScreenChat: View {
                 }
                 messages.append(ChatMessage(fromUser: false, text: intro, card: card))
             }
+        } else if let reply = suggestion.reply {
+            respondAfterDelay(with: reply)
         } else {
-            respondAfterDelay(with: suggestion.reply ?? "Got it — I'll take care of that.")
+            sendToBackend(suggestion.prompt)
+        }
+    }
+
+    // The real backend call — stores the message, grounds the model in
+    // this child's actual today's-tasks/rules, and returns either a plain
+    // reply or a proposal to open one of the two existing cards (never a
+    // direct write; see routers/chat.py). Runs through the same
+    // beginResponse-owned Task as every other reply path, so a second
+    // message sent mid-flight cancels this one outright instead of racing.
+    private func sendToBackend(_ text: String) {
+        responseTask?.cancel()
+        isSending = true
+        responseTask = Task { @MainActor in
+            guard let childId = session.activeChildId else { isSending = false; return }
+            do {
+                let reply = try await APIClient.shared.sendChatMessage(childId: childId, text: text)
+                guard !Task.isCancelled else { return }
+                isSending = false
+                if reply.toolCall != nil {
+                    messages.append(ChatMessage(fromUser: false, text: reply.text, card: cardFor(reply)))
+                } else {
+                    messages.append(ChatMessage(fromUser: false, text: ""))
+                    guard let id = messages.last?.id else { return }
+                    streamIn(reply.text, into: id)
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                isSending = false
+                messages.append(ChatMessage(fromUser: false, text: "Couldn't reach Evlin's AI. \(error.apiUserMessage)"))
+            }
+        }
+    }
+
+    // Maps a real tool-call response onto one of the two existing cards —
+    // shared between a live reply (sendToBackend) and a reloaded history
+    // row (loadHistory) so both build the exact same card the same way.
+    private func cardFor(_ message: ApiChatMessage) -> ChatCardKind? {
+        switch message.toolCall {
+        case "open_block_picker": return .blockApp
+        case "draft_task":
+            let title = message.toolArgs?["title"] ?? ""
+            let due = message.toolArgs?["due_hint"] ?? ""
+            let repeatsHint = message.toolArgs?["repeats_hint"] ?? ""
+            var prompt = "to \(title)"
+            if !repeatsHint.isEmpty { prompt += " every \(repeatsHint)" }
+            else if !due.isEmpty { prompt += " at \(due)" }
+            return .addTask(prompt: prompt)
+        default: return nil
+        }
+    }
+
+    // Real persisted history, replacing an always-empty transcript on
+    // every relaunch. Only loads once per appearance (an already-loaded
+    // or already-active conversation isn't clobbered by a stale fetch).
+    private func loadHistory() async {
+        guard messages.isEmpty, let childId = session.activeChildId else { return }
+        guard let history = try? await APIClient.shared.fetchChatHistory(childId: childId), !history.isEmpty else { return }
+        messages = history.map { m in
+            ChatMessage(fromUser: m.role == "user", text: m.text, card: m.toolCall != nil ? cardFor(m) : nil)
         }
     }
 
@@ -1100,12 +1179,36 @@ struct ScreenChat: View {
         blockedChild.pushRules()
     }
 
+    // Used to only append a canned confirmation string — never actually
+    // called APIClient.shared.createTask, so tapping Create on this card
+    // never created a real task at all, independent of any AI work here.
+    // `due` (from AddTaskCard's free-text field, e.g. "6pm" or "Saturday
+    // morning") isn't structured enough to convert into a real due
+    // date/time reliably — sending a wrong guess would be worse than
+    // sending none, so the created task just has no due date/time, same
+    // as when a parent skips "More Options" anywhere else in this app.
+    // `repeats` (from inferredRepeats.codes) is already a real recurrence
+    // code ("mon,wed,fri"/"daily"/"none") and is used as-is.
     private func handleAddTask(_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) {
-        guard !title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        let dueTrimmed = due.trimmingCharacters(in: .whitespaces)
-        let dueText = dueTrimmed.isEmpty ? "" : ", due \(dueTrimmed)"
-        let repeatsText = repeats == "none" ? "" : " (\(repeatDisplayLabel(repeats).lowercased()))"
-        respondAfterDelay(with: "Added \"\(title)\" for your child\(dueText)\(repeatsText).")
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        guard !trimmedTitle.isEmpty, let childId = session.activeChildId else { return }
+        Task {
+            do {
+                let saved = try await APIClient.shared.createTask(
+                    childId: childId, title: trimmedTitle, instructions: whatToDo,
+                    recurrence: repeats, category: "Chore", submissionKind: "none"
+                )
+                await AppSync.shared.syncBackendData()
+                let repeatsText = repeats == "none" ? "" : " (\(repeatDisplayLabel(repeats).lowercased()))"
+                await MainActor.run {
+                    messages.append(ChatMessage(fromUser: false, text: "Added \"\(saved.title)\" for your child\(repeatsText)."))
+                }
+            } catch {
+                await MainActor.run {
+                    messages.append(ChatMessage(fromUser: false, text: "That task wasn't saved. \(error.apiUserMessage)"))
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -1212,6 +1315,18 @@ private struct HelpPanel: View {
 
 // MARK: - Chat history
 
+// KNOWN GAP, not fixed in this pass: the real backend (app.chat_messages,
+// routers/chat.py) is one continuous conversation per child, matching how
+// the main transcript above already frames it — it has no concept of
+// separate named/searchable/renameable threads the way this sidebar's
+// model does. loadHistory() (above) loads the real single conversation
+// into the main transcript; this sidebar's multi-thread browsing UI still
+// runs on chatHistoryMock below. Reconciling "one real conversation" with
+// "a ChatGPT-style thread list" is its own real design/backend question
+// (e.g. day-bucketing the one conversation into pseudo-threads, or
+// building real multi-thread support server-side) — deliberately not
+// guessed at here rather than half-wiring something that reads real but
+// silently can't rename/delete/search anything for real.
 private struct ChatHistoryEntry: Identifiable {
     let id = UUID()
     var title: String

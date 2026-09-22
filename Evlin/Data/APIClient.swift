@@ -400,6 +400,15 @@ class APIClient {
         return try decode(try await send("POST", "/children/\(childId)/time-grants", body: body))
     }
 
+    func fetchChatHistory(childId: String) async throws -> [ApiChatMessage] {
+        try decode(try await send("GET", "/children/\(childId)/chat"))
+    }
+
+    @discardableResult
+    func sendChatMessage(childId: String, text: String) async throws -> ApiChatMessage {
+        try decode(try await send("POST", "/children/\(childId)/chat", body: ["text": text]))
+    }
+
     // MARK: - Task Management (Bi-directional Sync)
     
     /// Creates the task on the backend and returns the saved row, so callers

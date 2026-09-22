@@ -115,3 +115,13 @@ struct ApiTimeGrantsSummary: Codable {
     let availableMinutes: Int
     let grants: [ApiTimeGrant]
 }
+
+struct ApiChatMessage: Codable {
+    let id: String
+    let childId: String
+    let role: String        // "user" | "assistant"
+    let text: String
+    let toolCall: String?   // "draft_task" | "open_block_picker" | nil
+    let toolArgs: [String: String]?
+    let createdAt: String
+}
