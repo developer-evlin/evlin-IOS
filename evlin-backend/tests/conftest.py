@@ -127,3 +127,15 @@ def auth(token):
 def _aware_pairing_code(target, _ctx):
     if target.expires_at is not None and target.expires_at.tzinfo is None:
         target.expires_at = target.expires_at.replace(tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_memory_extraction(monkeypatch):
+    """Memory extraction runs as a background task with its own session, so
+    it bypasses the get_db override and would talk to a different database —
+    and, with a key present in the environment, would make real Gemini calls
+    from the test suite. Off by default; the memory tests turn it back on
+    around a stub.
+    """
+    import routers.memory as memory_router
+    monkeypatch.setattr(memory_router, "gemini_configured", lambda: False)

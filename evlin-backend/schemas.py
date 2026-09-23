@@ -629,6 +629,17 @@ class ChatSendRequest(BaseModel):
         return v.strip()
 
 
+class ChildMemoryResponse(BaseModel):
+    id: UUID
+    child_id: UUID
+    fact: str
+    category: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class ChatConversationResponse(BaseModel):
     id: UUID
     child_id: UUID

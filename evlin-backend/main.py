@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses, reflections, milestones, app_blocks
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses, reflections, milestones, app_blocks, memory
 from storage import storage_configured
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
@@ -290,6 +290,20 @@ _MIGRATIONS = [
     # from the UI. One statement rather than an insert plus a title-matched
     # update, so it's atomic and can't half-apply; a rerun finds no NULL
     # rows and does nothing.
+    # What the assistant is allowed to remember between conversations. See
+    # models.py's ChildMemory for why these are readable rows rather than
+    # embeddings.
+    """CREATE TABLE IF NOT EXISTS app.child_memory (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        fact text NOT NULL,
+        category text,
+        source_message_id uuid REFERENCES app.chat_messages(id) ON DELETE SET NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        archived_at timestamptz
+    )""",
+    """CREATE INDEX IF NOT EXISTS child_memory_child_idx
+        ON app.child_memory(child_id, archived_at)""",
     """WITH new_convs AS (
         INSERT INTO app.chat_conversations (id, child_id, title, created_at, updated_at)
         SELECT gen_random_uuid(), child_id, 'Earlier messages',
@@ -348,6 +362,7 @@ app.include_router(courses.router)
 app.include_router(reflections.router)
 app.include_router(milestones.router)
 app.include_router(app_blocks.router)
+app.include_router(memory.router)
 
 @app.get("/")
 def read_root():
@@ -370,7 +385,7 @@ _EXPECTED_COLUMNS = [
     ("app.course_assignments", "child_id"), ("app.course_item_progress", "status"),
     ("app.reflections", "course_assignment_id"), ("app.milestones", "kind"),
     ("app.tasks", "course_assignment_id"), ("app.tasks", "milestone_id"),
-    ("app.app_blocks", "block_type"),
+    ("app.app_blocks", "block_type"), ("app.child_memory", "fact"),
 ]
 
 

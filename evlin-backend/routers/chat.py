@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
 from datetime import date, datetime, timedelta, timezone
@@ -190,7 +190,8 @@ async def _build_course_for_tool(db: Session, child: models.Child, tool_name: st
     return args
 
 
-def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: list[models.Occurrence], rule: models.ChildRule | None) -> str:
+def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: list[models.Occurrence],
+                   rule: models.ChildRule | None, memories: list | None = None) -> str:
     today_occ_by_task = {o.task_id: o for o in occurrences}
     lines = [f"You are Evlin, a parental-control assistant helping a parent manage {child.name}'s tasks and screen time."]
     # Without this the model resolves "tomorrow at 6pm" against its training
@@ -222,6 +223,15 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
         lines.append(f"\nDaily screen time limit: {rule.daily_limit_minutes} minutes.")
         if rule.downtime_enabled:
             lines.append(f"Downtime: {rule.downtime_start}–{rule.downtime_end}.")
+
+    # Everything above is current state, queried live. This is the only part
+    # that's remembered rather than looked up, so it's labelled as such —
+    # the model shouldn't treat a months-old note as today's truth.
+    if memories:
+        lines.append(f"\nThings you've learned about {child.name} in past conversations:")
+        for m in memories:
+            lines.append(f"- {m.fact}")
+        lines.append("Treat these as background, not as current settings — rules and tasks above are authoritative.")
     return "\n".join(lines)
 
 
@@ -315,6 +325,7 @@ def get_chat_history(child_id: UUID, current_parent: models.Parent = Depends(get
 async def send_chat_message(
     child_id: UUID,
     body: schemas.ChatSendRequest,
+    background: BackgroundTasks,
     current_parent: models.Parent = Depends(get_current_parent),
     db: Session = Depends(get_db),
 ):
@@ -367,8 +378,12 @@ async def send_chat_message(
     ).order_by(models.ChatMessage.created_at).all()
     messages = [{"role": "user" if r.role == "user" else "model", "text": r.text} for r in history_rows if r.text]
 
+    from routers.memory import facts_for
+    memories = facts_for(db, child_id)
+
     try:
-        text, call = await generate(_system_prompt(child, tasks, occurrences, rule), messages, tools=_TOOLS)
+        text, call = await generate(_system_prompt(child, tasks, occurrences, rule, memories),
+                                     messages, tools=_TOOLS)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Chat request failed: {e}")
 
@@ -389,4 +404,14 @@ async def send_chat_message(
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(assistant_row)
+
+    # After the reply is on its way, so remembering costs the parent nothing
+    # in latency. Runs on its own session — this one is closed by then.
+    from routers.memory import extract_memories
+    background.add_task(
+        extract_memories, child_id,
+        [{"role": "parent", "text": body.text},
+         {"role": "assistant", "text": assistant_row.text}],
+        assistant_row.id,
+    )
     return assistant_row

@@ -454,6 +454,19 @@ class APIClient {
         return try decode(try await send("POST", "/children/\(childId)/chat", body: body))
     }
 
+    // MARK: - Memory
+
+    /// What the assistant carries between conversations for this child.
+    func fetchMemory(childId: String) async throws -> [ApiChildMemory] {
+        try decode(try await send("GET", "/children/\(childId)/memory"))
+    }
+
+    /// Archives rather than deletes server-side, so a fact a parent removed
+    /// can't be silently re-learned from the same conversation.
+    func forgetMemory(memoryId: String) async throws {
+        _ = try await send("DELETE", "/memory/\(memoryId)")
+    }
+
     // MARK: - Courses
 
     /// The shared library: vetted courses any of this family's children can

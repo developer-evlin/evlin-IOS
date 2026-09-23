@@ -210,6 +210,35 @@ class TimeGrant(Base):
     credited_date = Column(Date, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+class ChildMemory(Base):
+    """One durable fact about a child, extracted from conversation.
+
+    Plain rows rather than embeddings, and that's a product decision before
+    it's a technical one: a parent has to be able to read and delete what
+    this system believes about their child, and you cannot show someone a
+    vector. At a few dozen facts per child, retrieval is "put them all in the
+    prompt" — semantic search would solve a problem that doesn't exist here.
+
+    What belongs here is only what has no column of its own. Bedtime lives in
+    child_rules.downtime_start; a remembered copy would be a second source of
+    truth that silently goes stale. This is for preferences, family context,
+    and what worked last time.
+
+    Archived rather than deleted, so a fact a parent removed can't be
+    re-extracted and quietly reappear.
+    """
+    __tablename__ = "child_memory"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    fact = Column(String, nullable=False)
+    category = Column(String)  # routine | preference | context | what_worked
+    source_message_id = Column(UUID(as_uuid=True), ForeignKey("app.chat_messages.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    archived_at = Column(DateTime(timezone=True))
+
+
 class ChatConversation(Base):
     """One thread of chat about one child.
 

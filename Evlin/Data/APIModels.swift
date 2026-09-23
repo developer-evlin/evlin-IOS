@@ -185,6 +185,17 @@ struct ApiChatConversation: Codable, Identifiable {
     }
 }
 
+/// One thing the assistant has learned about a child and carries between
+/// conversations. Readable and deletable on purpose — a parent should be
+/// able to see exactly what it believes.
+struct ApiChildMemory: Codable, Identifiable {
+    let id: String
+    let childId: String
+    let fact: String
+    let category: String?
+    let createdAt: String
+}
+
 // MARK: - Courses
 //
 // Shared vetted content (ApiCourse/ApiCourseItem, no child) vs. one child's

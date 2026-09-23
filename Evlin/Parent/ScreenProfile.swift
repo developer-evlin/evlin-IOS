@@ -147,6 +147,7 @@ struct ScreenProfile: View {
                 }
 
                 milestonesLink
+                memoryLink
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -571,6 +572,39 @@ struct ScreenProfile: View {
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(Brand.greenDeep))
                 }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Brand.inkSoft)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.black.opacity(0.07), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Auditable by design: whatever the assistant has inferred about this
+    /// child is one tap away, and every bit of it can be removed.
+    private var memoryLink: some View {
+        NavigationLink {
+            ScreenMemory(childId: childId, childName: child.name)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "brain")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Brand.greenDeep)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(Brand.greenTint))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("What Evlin remembers").font(Typography.font(15, weight: .bold))
+                    Text("Review or remove what it has learned")
+                        .font(Typography.font(13))
+                        .foregroundStyle(Brand.inkSoft)
+                }
+                Spacer()
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Brand.inkSoft)

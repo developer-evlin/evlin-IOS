@@ -60,6 +60,7 @@
 		AE9953D62A105427AFE39AF9 /* TaskDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90FD88DD9F5911F37061E2AB /* TaskDetailView.swift */; };
 		B463DAA6E34760D645C55D7B /* MilestoneCreateSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F6CE2154FD6E38B9AB2AA6 /* MilestoneCreateSheet.swift */; };
 		B47DD5616903003104D8CB4D /* EventDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37B4FB7037B8CE784A29289 /* EventDraft.swift */; };
+		B75465942C2ACC2F4A96C653 /* ScreenMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 203A61EA3CB6005DFCE6CFAD /* ScreenMemory.swift */; };
 		B9AB0ADFCDB3DD160A09E316 /* OnboardingV2ParentSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = A34A6FC0AB91729D00E85C79 /* OnboardingV2ParentSteps.swift */; };
 		BD538B4E14DDD3CB0BF7C6D3 /* ScreenTabletHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA6BD1B156CBB84E08FAA023 /* ScreenTabletHome.swift */; };
 		BE203569B419A363FA541488 /* ParentRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C562974CCB5B5A4A2A533023 /* ParentRootView.swift */; };
@@ -95,6 +96,7 @@
 		1231BBF6CB90F4A9ABFC7634 /* OnboardingV2Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Components.swift; sourceTree = "<group>"; };
 		15DFC08E5C865CAB8A51C20F /* OnboardingV2Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Theme.swift; sourceTree = "<group>"; };
 		1736580F21DF3B408C4C1C4F /* SettingsLockListManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLockListManagerView.swift; sourceTree = "<group>"; };
+		203A61EA3CB6005DFCE6CFAD /* ScreenMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMemory.swift; sourceTree = "<group>"; };
 		21D3DCE7BE6480B09C478F49 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		23F6CE2154FD6E38B9AB2AA6 /* MilestoneCreateSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MilestoneCreateSheet.swift; sourceTree = "<group>"; };
 		2695F864BB0C2A358F00D312 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -350,6 +352,7 @@
 				B126EFB0851C847E22CA77C7 /* ScreenChat.swift */,
 				752627A3153FA4BAC917E81A /* ScreenHome.swift */,
 				E2550BFA96ADB16E4610FB30 /* ScreenLibrary.swift */,
+				203A61EA3CB6005DFCE6CFAD /* ScreenMemory.swift */,
 				8E244BEA48A8808398D2FFF6 /* ScreenMilestones.swift */,
 				96621E11FF6F30CF0A987182 /* ScreenProfile.swift */,
 				B1EAE71E90939074687633EC /* ScreenSettings.swift */,
@@ -499,6 +502,7 @@
 				5B274B0071D8E0E721100258 /* ScreenChat.swift in Sources */,
 				3FEF485A64930BED9F97B5C7 /* ScreenHome.swift in Sources */,
 				DF3F65290A9265772F1A46B0 /* ScreenLibrary.swift in Sources */,
+				B75465942C2ACC2F4A96C653 /* ScreenMemory.swift in Sources */,
 				30F095D9BF6F8D7B41D88B98 /* ScreenMilestones.swift in Sources */,
 				5A0B892A3BA07780A2C41BBD /* ScreenProfile.swift in Sources */,
 				604D927F992238271CCDAF57 /* ScreenSettings.swift in Sources */,
