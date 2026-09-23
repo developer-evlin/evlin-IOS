@@ -56,11 +56,6 @@ _TOOLS = [
             "type": "OBJECT",
             "properties": {
                 "question": {"type": "STRING", "description": "One short question. Ask for a single thing, not several."},
-                "suggestions": {
-                    "type": "ARRAY",
-                    "description": "2-4 likely answers the parent can tap instead of typing. Omit if the answer is open-ended.",
-                    "items": {"type": "STRING"},
-                },
             },
             "required": ["question"],
         },

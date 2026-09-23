@@ -21,9 +21,6 @@ private enum ChatCardKind {
     // confirm/edit rather than a blank form the parent re-types by hand.
     case addTask(draft: TaskDraft)
     case addEvent(draft: EventDraft)
-    // A question the model asked instead of guessing, with taps for the
-    // likely answers.
-    case followUp(question: String, suggestions: [String])
     // The agent has already searched, checked and drafted a real course by
     // the time this appears — these carry its id so the card shows the
     // actual videos it picked and why, not a description of them.
@@ -1133,9 +1130,8 @@ struct ScreenChat: View {
                 // exist once the agent has actually built a course, which a
                 // canned prompt can't have done.
                 case .reviewCourse, .specialTask: intro = ""
-                // None of these come from a tile — they only exist once the
-                // model has actually produced something.
-                case .addEvent, .followUp: intro = ""
+                // Not reachable from a tile — only from a real tool call.
+                case .addEvent: intro = ""
                 }
                 messages.append(ChatMessage(fromUser: false, text: intro, card: card))
             }
@@ -1202,14 +1198,11 @@ struct ScreenChat: View {
             return .addTask(draft: TaskDraft(toolArgs: message.toolArgs))
         case "draft_event":
             return .addEvent(draft: EventDraft(toolArgs: message.toolArgs))
-        case "ask_follow_up":
-            // Suggestions are newline-joined server-side so they survive the
-            // stringify pass as something splittable.
-            let raw = message.toolArgs?["suggestions"] ?? ""
-            let options = raw.split(separator: "\n").map(String.init)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-            return .followUp(question: message.toolArgs?["question"] ?? "", suggestions: options)
+        // ask_follow_up deliberately has no card: the question is the
+        // message text, and the parent answers by typing. Offering tappable
+        // answers turned an open question into multiple choice and put the
+        // model back to guessing at what the task might be.
+        case "ask_follow_up": return nil
         case "propose_reflection":
             // The model suggests *that* a reflection should happen, not its
             // content — the parent picks the video and questions, same as
@@ -1409,13 +1402,6 @@ struct ScreenChat: View {
             AddTaskCard(draft: draft, onCreate: handleAddTask)
         case .addEvent(let draft):
             AddEventCard(draft: draft, onCreate: handleAddEvent)
-        case .followUp(_, let suggestions):
-            // The question itself is the message text above this card, so
-            // only the tappable answers render here.
-            FollowUpChips(suggestions: suggestions) { answer in
-                messages.append(ChatMessage(fromUser: true, text: answer))
-                sendToBackend(answer)
-            }
         case .reviewCourse(let courseId, let title):
             CourseProposalCard(courseId: courseId, title: title, bonusMinutes: nil) { note in
                 messages.append(ChatMessage(fromUser: false, text: note))
