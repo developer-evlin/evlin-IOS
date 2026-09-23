@@ -50,6 +50,7 @@
 		934B4680FD244C8DB77CFD51 /* SecurityLottieView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE355C0A6FCB8D50FB0E1618 /* SecurityLottieView.swift */; };
 		93DD2562F31193DC22691A81 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6A0F89562B8F59E2F601E60 /* Components.swift */; };
 		9C9190CC48E4BD8845C27F9E /* TaskReviewDeck.swift in Sources */ = {isa = PBXBuildFile; fileRef = E708678BD054B24BF7AE4495 /* TaskReviewDeck.swift */; };
+		A033348FE231C1A44B28E12D /* CourseProposalCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BED1663A542D10C8E85CD0 /* CourseProposalCard.swift */; };
 		A039D8932AB9C6C2ADC26C39 /* PlusJakartaSans-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = F05C585F4AEC30CBFE0A4629 /* PlusJakartaSans-SemiBold.ttf */; };
 		A5BF329EBD6B3FE4925A8D73 /* PlusJakartaSans-ExtraBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 83CBCECF2F1B4E7EB19CDB1C /* PlusJakartaSans-ExtraBold.ttf */; };
 		A9916B6E6002C313B1D5B0AF /* screentimePIN.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = BAB9989856322C9057C854F9 /* screentimePIN.mp4 */; };
@@ -82,6 +83,7 @@
 /* Begin PBXFileReference section */
 		01B8F0802B5C16AE690C7954 /* Alerts.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Alerts.json; sourceTree = "<group>"; };
 		06EDC45D88CB9E54104E5E80 /* AppCatalogData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCatalogData.swift; sourceTree = "<group>"; };
+		07BED1663A542D10C8E85CD0 /* CourseProposalCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CourseProposalCard.swift; sourceTree = "<group>"; };
 		09012159A0D8B7D4F8CCDF34 /* TaskData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskData.swift; sourceTree = "<group>"; };
 		0EA395A2576B1DCBBCC9CA19 /* KidAdaptive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KidAdaptive.swift; sourceTree = "<group>"; };
 		1231BBF6CB90F4A9ABFC7634 /* OnboardingV2Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Components.swift; sourceTree = "<group>"; };
@@ -324,6 +326,7 @@
 			isa = PBXGroup;
 			children = (
 				52A3A4F008D897EF73D1585D /* AddFormComponents.swift */,
+				07BED1663A542D10C8E85CD0 /* CourseProposalCard.swift */,
 				4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */,
 				70F936FC0D519AF37A8CC44C /* ParentAdaptive.swift */,
 				C562974CCB5B5A4A2A533023 /* ParentRootView.swift */,
@@ -448,6 +451,7 @@
 				921E72916B874CDB46D07674 /* CameraCapture.swift in Sources */,
 				93DD2562F31193DC22691A81 /* Components.swift in Sources */,
 				8D482D12CDD0FF591EB2A54F /* CourseFlowView.swift in Sources */,
+				A033348FE231C1A44B28E12D /* CourseProposalCard.swift in Sources */,
 				F8CFDA3F8D2A3780B2E8727B /* EnforcementState.swift in Sources */,
 				8981DFDD4250E877E419BE29 /* EvlinApp.swift in Sources */,
 				2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */,

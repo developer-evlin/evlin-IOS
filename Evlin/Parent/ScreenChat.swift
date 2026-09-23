@@ -20,6 +20,11 @@ private enum ChatCardKind {
     // clean his room every Saturday morning") hands back a drafted task to
     // confirm/edit rather than a blank form the parent re-types by hand.
     case addTask(prompt: String)
+    // The agent has already searched, checked and drafted a real course by
+    // the time this appears — these carry its id so the card shows the
+    // actual videos it picked and why, not a description of them.
+    case reviewCourse(courseId: String, title: String)
+    case specialTask(courseId: String, title: String, bonusMinutes: Int)
     // Read-only — what's done/pending/overdue for a child today, pulled
     // from the same TaskStore data their profile shows, not a mocked
     // separate figure.
@@ -1074,6 +1079,10 @@ struct ScreenChat: View {
                 case .addTask: intro = "I've drafted this from what you asked — check it over and create it:"
                 case .blockDuration: intro = "" // never a tile's own card — only reached as a follow-up
                 case .reviewCompliance(_, let childName): intro = "Here's where \(childName) stands today:"
+                // Neither is reachable from a suggestion tile: both only
+                // exist once the agent has actually built a course, which a
+                // canned prompt can't have done.
+                case .reviewCourse, .specialTask: intro = ""
                 }
                 messages.append(ChatMessage(fromUser: false, text: intro, card: card))
             }
@@ -1128,6 +1137,21 @@ struct ScreenChat: View {
             if !repeatsHint.isEmpty { prompt += " every \(repeatsHint)" }
             else if !due.isEmpty { prompt += " at \(due)" }
             return .addTask(prompt: prompt)
+        case "propose_reflection":
+            // The model suggests *that* a reflection should happen, not its
+            // content — the parent picks the video and questions, same as
+            // draft_task hands over a title rather than a finished task.
+            let title = message.toolArgs?["title"] ?? ""
+            return .addTask(prompt: "a reflection about \(title)")
+        case "generate_course":
+            guard let courseId = message.toolArgs?["course_id"], !courseId.isEmpty else { return nil }
+            return .reviewCourse(courseId: courseId,
+                                 title: message.toolArgs?["course_title"] ?? "this course")
+        case "draft_special_task":
+            guard let courseId = message.toolArgs?["course_id"], !courseId.isEmpty else { return nil }
+            return .specialTask(courseId: courseId,
+                                title: message.toolArgs?["title"] ?? "Watch and learn",
+                                bonusMinutes: Int(message.toolArgs?["bonus_minutes"] ?? "") ?? 0)
         default: return nil
         }
     }
@@ -1220,6 +1244,14 @@ struct ScreenChat: View {
             BlockDurationCard(apps: apps) { minutes in handleBlockDuration(apps: apps, minutes: minutes) }
         case .addTask(let prompt):
             AddTaskCard(initialPrompt: prompt, onCreate: handleAddTask)
+        case .reviewCourse(let courseId, let title):
+            CourseProposalCard(courseId: courseId, title: title, bonusMinutes: nil) { note in
+                messages.append(ChatMessage(fromUser: false, text: note))
+            }
+        case .specialTask(let courseId, let title, let bonusMinutes):
+            CourseProposalCard(courseId: courseId, title: title, bonusMinutes: bonusMinutes) { note in
+                messages.append(ChatMessage(fromUser: false, text: note))
+            }
         case .reviewCompliance(let childId, let childName):
             ReviewComplianceCard(childId: childId, childName: childName)
         }
