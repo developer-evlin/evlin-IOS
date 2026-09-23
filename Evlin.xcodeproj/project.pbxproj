@@ -85,6 +85,7 @@
 		F872287144FC0F3521FA5488 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 9FFEBC3CBCB4A02DA1386ADF /* Lottie */; };
 		F8CFDA3F8D2A3780B2E8727B /* EnforcementState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 882754A48065498CA0C9C6B1 /* EnforcementState.swift */; };
 		FA987F694C383251CBF531A2 /* ScreenTimePINVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7235C9F06F3B36BEC827AACB /* ScreenTimePINVideoView.swift */; };
+		FD14F4D23C0A2D1A747B7562 /* FollowUpChips.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D8049BBDCAF136C046B9DB /* FollowUpChips.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -155,6 +156,7 @@
 		E372C2D464BC26D17E9DD43E /* DataSecurity.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = DataSecurity.json; sourceTree = "<group>"; };
 		E412DA621462B4F83B57FF73 /* PlusJakartaSans-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-Medium.ttf"; sourceTree = "<group>"; };
 		E6CF5B901EEEEE19804D8030 /* Keyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keyboard.swift; sourceTree = "<group>"; };
+		E6D8049BBDCAF136C046B9DB /* FollowUpChips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowUpChips.swift; sourceTree = "<group>"; };
 		E708678BD054B24BF7AE4495 /* TaskReviewDeck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskReviewDeck.swift; sourceTree = "<group>"; };
 		E78D4950D02DB36BD4DEF7A1 /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
 		EA6BD1B156CBB84E08FAA023 /* ScreenTabletHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletHome.swift; sourceTree = "<group>"; };
@@ -344,6 +346,7 @@
 				52A3A4F008D897EF73D1585D /* AddFormComponents.swift */,
 				07BED1663A542D10C8E85CD0 /* CourseProposalCard.swift */,
 				B37B4FB7037B8CE784A29289 /* EventDraft.swift */,
+				E6D8049BBDCAF136C046B9DB /* FollowUpChips.swift */,
 				4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */,
 				23F6CE2154FD6E38B9AB2AA6 /* MilestoneCreateSheet.swift */,
 				70F936FC0D519AF37A8CC44C /* ParentAdaptive.swift */,
@@ -478,6 +481,7 @@
 				B47DD5616903003104D8CB4D /* EventDraft.swift in Sources */,
 				8981DFDD4250E877E419BE29 /* EvlinApp.swift in Sources */,
 				2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */,
+				FD14F4D23C0A2D1A747B7562 /* FollowUpChips.swift in Sources */,
 				27D4FDEE06BBCC6977B84F4A /* ImageCache.swift in Sources */,
 				DC41F1DF55F3583A080BD7F1 /* Keyboard.swift in Sources */,
 				2D1D2F8854FF1338EAD6B405 /* KeychainStore.swift in Sources */,

@@ -21,6 +21,9 @@ private enum ChatCardKind {
     // confirm/edit rather than a blank form the parent re-types by hand.
     case addTask(draft: TaskDraft)
     case addEvent(draft: EventDraft)
+    // A question the model asked instead of guessing, with taps for the
+    // likely answers.
+    case followUp(question: String, suggestions: [String])
     // The agent has already searched, checked and drafted a real course by
     // the time this appears — these carry its id so the card shows the
     // actual videos it picked and why, not a description of them.
@@ -327,8 +330,7 @@ private struct AddTaskCard: View {
     @State private var dueTime: Date
     @State private var hasDueDate: Bool
     @State private var hasDueTime: Bool
-    @State private var recurrence: String
-    @State private var showingRepeatPicker = false
+    @State private var repeatDays: Set<String>
     @State private var submitted = false
 
     init(draft: TaskDraft, onCreate: @escaping (_ draft: TaskDraft) -> Void) {
@@ -342,7 +344,22 @@ private struct AddTaskCard: View {
         let minutes = draft.dueMinutes ?? (18 * 60)
         _dueTime = State(initialValue: Calendar.current.date(
             bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()) ?? Date())
-        _recurrence = State(initialValue: draft.recurrence)
+        _repeatDays = State(initialValue: Self.days(from: draft.recurrence))
+    }
+
+    /// The card speaks the recurrence vocabulary the API uses; RepeatPicker
+    /// speaks weekday sets. "daily" is all seven.
+    private static func days(from recurrence: String) -> Set<String> {
+        let r = recurrence.trimmingCharacters(in: .whitespaces).lowercased()
+        if r == "daily" { return Set(weekDayCodes) }
+        if r == "none" || r.isEmpty { return [] }
+        return Set(r.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
+            .intersection(weekDayCodes)
+    }
+
+    private var recurrence: String {
+        if repeatDays.isEmpty { return "none" }
+        return weekDayCodes.filter { repeatDays.contains($0) }.joined(separator: ",")
     }
 
     private var trimmedTitle: String { title.trimmingCharacters(in: .whitespaces) }
@@ -364,25 +381,19 @@ private struct AddTaskCard: View {
 
             // Optional fields read as optional: a row you add, not an empty
             // box implying something is missing.
-            optionalRow(
-                isOn: $hasDueDate, icon: "calendar", label: "Date",
-                addLabel: "Add a date"
-            ) {
+            optionalRow(isOn: $hasDueDate, icon: "calendar", label: "Date") {
                 DatePicker("", selection: $dueDate, displayedComponents: .date)
                     .labelsHidden()
                     .datePickerStyle(.compact)
             }
 
-            optionalRow(
-                isOn: $hasDueTime, icon: "clock", label: "Time",
-                addLabel: "Add a time"
-            ) {
+            optionalRow(isOn: $hasDueTime, icon: "clock", label: "Deadline") {
                 DatePicker("", selection: $dueTime, displayedComponents: .hourAndMinute)
                     .labelsHidden()
                     .datePickerStyle(.compact)
             }
 
-            repeatRow
+            RepeatPicker(selectedDays: $repeatDays)
 
             if !whatToDo.isEmpty || submitted {
                 Divider()
@@ -440,7 +451,7 @@ private struct AddTaskCard: View {
     /// shows the real control with a way back out.
     @ViewBuilder
     private func optionalRow<Content: View>(
-        isOn: Binding<Bool>, icon: String, label: String, addLabel: String,
+        isOn: Binding<Bool>, icon: String, label: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
         if isOn.wrappedValue {
@@ -467,41 +478,13 @@ private struct AddTaskCard: View {
             Button {
                 withAnimation(.easeOut(duration: 0.15)) { isOn.wrappedValue = true }
             } label: {
-                Label(addLabel, systemImage: icon)
+                Label(label, systemImage: icon)
                     .font(Typography.font(14))
                     .foregroundStyle(EColor.primary)
             }
             .buttonStyle(.plain)
             .frame(minHeight: 44, alignment: .leading)
         }
-    }
-
-    /// The model's recurrence, shown as something correctable rather than a
-    /// static readout — it's a decision it made, and decisions should be
-    /// editable in place.
-    private var repeatRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "repeat")
-                .font(.system(size: 14))
-                .foregroundStyle(EColor.onSurfaceVariant)
-                .frame(width: 20)
-            Text("Repeats").font(Typography.font(14)).foregroundStyle(EColor.onSurface)
-            Spacer()
-            Menu {
-                Button("One-time task") { recurrence = "none" }
-                Button("Every day") { recurrence = "sun,mon,tue,wed,thu,fri,sat" }
-                Button("School nights") { recurrence = "mon,tue,wed,thu,fri" }
-                Button("Weekends") { recurrence = "sat,sun" }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(recurrence == "none" ? "One-time" : repeatDisplayLabel(recurrence))
-                        .font(Typography.font(14, weight: .medium))
-                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
-                }
-                .foregroundStyle(EColor.primary)
-            }
-        }
-        .frame(minHeight: 44)
     }
 
     private var currentDraft: TaskDraft {
@@ -641,11 +624,12 @@ private struct ChatSuggestion: Identifiable {
 private var welcomeSuggestions: [ChatSuggestion] {[
     ChatSuggestion(icon: "sf:checkmark.seal.fill", title: "Review your child's progress", prompt: "How is your child doing with his tasks today?", card: .reviewCompliance(childId: SessionManager.shared.activeChildId ?? "", childName: "your child")),
     ChatSuggestion(icon: "gavel", title: "Set a bedtime rule", prompt: "Lock all apps at 9pm on school nights"),
-    ChatSuggestion(
-        icon: "sf:checklist", title: "Add a task",
-        prompt: "Add a task for your child to clean his room every Saturday morning",
-        card: .addTask(draft: TaskDraft(title: "Clean his room", recurrence: "sat"))
-    ),
+    // Deliberately open. This used to send a fully-specified sentence
+    // ("clean his room every Saturday morning") and pre-fill the card with
+    // it, so tapping the tile looked like the assistant inventing a task out
+    // of nowhere. Now it asks what the task is.
+    ChatSuggestion(icon: "sf:checklist", title: "Add a task",
+                   prompt: "I'd like to add a task"),
     ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for your child", card: .blockApp),
     ChatSuggestion(
         icon: "sf:lightbulb.fill", title: "Suggest an activity",
@@ -658,10 +642,8 @@ private var welcomeSuggestions: [ChatSuggestion] {[
     // freeform message, which (per its system prompt) says honestly
     // that it can't add calendar events yet rather than fabricating a
     // "done" reply.
-    ChatSuggestion(
-        icon: "sf:calendar", title: "Update the calendar",
-        prompt: "Add soccer practice to your child's calendar every Thursday at 4pm"
-    ),
+    ChatSuggestion(icon: "sf:calendar", title: "Update the calendar",
+                   prompt: "I'd like to add something to the calendar"),
 ]}
 
 struct ScreenChat: View {
@@ -1151,8 +1133,9 @@ struct ScreenChat: View {
                 // exist once the agent has actually built a course, which a
                 // canned prompt can't have done.
                 case .reviewCourse, .specialTask: intro = ""
-                // Only reachable from a real draft_event tool call.
-                case .addEvent: intro = ""
+                // None of these come from a tile — they only exist once the
+                // model has actually produced something.
+                case .addEvent, .followUp: intro = ""
                 }
                 messages.append(ChatMessage(fromUser: false, text: intro, card: card))
             }
@@ -1219,6 +1202,14 @@ struct ScreenChat: View {
             return .addTask(draft: TaskDraft(toolArgs: message.toolArgs))
         case "draft_event":
             return .addEvent(draft: EventDraft(toolArgs: message.toolArgs))
+        case "ask_follow_up":
+            // Suggestions are newline-joined server-side so they survive the
+            // stringify pass as something splittable.
+            let raw = message.toolArgs?["suggestions"] ?? ""
+            let options = raw.split(separator: "\n").map(String.init)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            return .followUp(question: message.toolArgs?["question"] ?? "", suggestions: options)
         case "propose_reflection":
             // The model suggests *that* a reflection should happen, not its
             // content — the parent picks the video and questions, same as
@@ -1418,6 +1409,13 @@ struct ScreenChat: View {
             AddTaskCard(draft: draft, onCreate: handleAddTask)
         case .addEvent(let draft):
             AddEventCard(draft: draft, onCreate: handleAddEvent)
+        case .followUp(_, let suggestions):
+            // The question itself is the message text above this card, so
+            // only the tappable answers render here.
+            FollowUpChips(suggestions: suggestions) { answer in
+                messages.append(ChatMessage(fromUser: true, text: answer))
+                sendToBackend(answer)
+            }
         case .reviewCourse(let courseId, let title):
             CourseProposalCard(courseId: courseId, title: title, bonusMinutes: nil) { note in
                 messages.append(ChatMessage(fromUser: false, text: note))

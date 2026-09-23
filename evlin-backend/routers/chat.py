@@ -46,6 +46,26 @@ _TOOLS = [
         },
     },
     {
+        "name": "ask_follow_up",
+        "description": (
+            "Ask the parent for one thing you need before you can draft something. Use this when a request "
+            "doesn't say what the task or event actually is, or when a detail you'd otherwise have to invent "
+            "is missing. A drafted card with a made-up title is worse than a question."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "question": {"type": "STRING", "description": "One short question. Ask for a single thing, not several."},
+                "suggestions": {
+                    "type": "ARRAY",
+                    "description": "2-4 likely answers the parent can tap instead of typing. Omit if the answer is open-ended.",
+                    "items": {"type": "STRING"},
+                },
+            },
+            "required": ["question"],
+        },
+    },
+    {
         "name": "draft_event",
         "description": (
             "Pre-fill the app's Add Event card for a calendar entry — practice, an appointment, a trip. Use "
@@ -140,6 +160,10 @@ _TOOL_REPLIES = {
 }
 _DEFAULT_TOOL_REPLY = "Sure — let's set that up."
 
+# ask_follow_up carries its own text: the question the model wrote is the
+# message, so a canned line in front of it would just be noise.
+_TOOLS_THAT_SPEAK_FOR_THEMSELVES = {"ask_follow_up"}
+
 # Tools whose handler does real work server-side before replying (searching
 # YouTube, running a vetting pass) rather than just signalling the client to
 # open a card. Kept apart because they're slow and can fail for reasons the
@@ -156,7 +180,17 @@ def _stringify_tool_args(args: dict | None) -> dict:
     taking the whole transcript with it, not just that one card. Coercing
     here keeps that contract true no matter what a tool's schema declares.
     """
-    return {k: ("" if v is None else str(v)) for k, v in (args or {}).items()}
+    out = {}
+    for k, v in (args or {}).items():
+        if v is None:
+            out[k] = ""
+        elif isinstance(v, (list, tuple)):
+            # Joined rather than str()'d, so the client gets something it can
+            # split instead of a Python repr with brackets and quotes in it.
+            out[k] = "\n".join(str(x) for x in v)
+        else:
+            out[k] = str(v)
+    return out
 
 
 async def _build_course_for_tool(db: Session, child: models.Child, tool_name: str,
@@ -391,9 +425,13 @@ async def send_chat_message(
         args = dict(call.args)
         if call.name in _COURSE_BUILDING_TOOLS:
             args = await _build_course_for_tool(db, child, call.name, args, current_parent)
+        if call.name in _TOOLS_THAT_SPEAK_FOR_THEMSELVES:
+            reply_text = (args.get("question") or "").strip() or _DEFAULT_TOOL_REPLY
+        else:
+            reply_text = _TOOL_REPLIES.get(call.name, _DEFAULT_TOOL_REPLY)
         assistant_row = models.ChatMessage(
             child_id=child_id, conversation_id=conversation.id, role="assistant",
-            text=_TOOL_REPLIES.get(call.name, _DEFAULT_TOOL_REPLY),
+            text=reply_text,
             tool_call=call.name, tool_args=_stringify_tool_args(args),
         )
     else:

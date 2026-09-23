@@ -428,3 +428,47 @@ def test_draft_task_schema_asks_for_dates_not_free_text():
     props = draft["parameters"]["properties"]
     assert "due_date" in props and "due_time" in props and "recurrence" in props
     assert "due_hint" not in props and "repeats_hint" not in props
+
+
+def test_follow_up_question_becomes_the_message_text(client, db_session, monkeypatch):
+    # The model's question is the message; a canned "Sure — let's set that
+    # up." in front of it would just be noise.
+    async def _ask(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="ask_follow_up", args={
+            "question": "What task would you like to add?",
+            "suggestions": ["Clean her room", "Read for 20 minutes"],
+        })
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _ask)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+
+    body = client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                       json={"text": "I'd like to add a task"}).json()
+    assert body["tool_call"] == "ask_follow_up"
+    assert body["text"] == "What task would you like to add?"
+
+
+def test_follow_up_suggestions_stay_splittable(client, db_session, monkeypatch):
+    # Tool args are stringified for the client; a list str()'d would arrive
+    # as a Python repr the app can't split back apart.
+    async def _ask(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="ask_follow_up", args={
+            "question": "Which?", "suggestions": ["Clean her room", "Read for 20 minutes"],
+        })
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _ask)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+
+    args = client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "x"}).json()["tool_args"]
+    assert args["suggestions"].split("\n") == ["Clean her room", "Read for 20 minutes"]
+    assert "[" not in args["suggestions"]
+
+
+def test_asking_is_available_as_a_tool_not_a_prompt_instruction(client, db_session, monkeypatch):
+    # The mechanism is a typed tool the model can call, not prose telling it
+    # to "ask if unsure" — which is what this replaced.
+    assert any(t["name"] == "ask_follow_up" for t in chat_router._TOOLS)
