@@ -16,14 +16,15 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 import models
 import schemas
-from access import assert_child_access, assert_parent_owns_child
+from access import assert_child_access, assert_parent_owns_child, check_child_access
 from database import get_db
 from gemini_client import gemini_configured, generate
-from routers.auth import get_current_parent
+from routers.auth import get_current_parent, security
 from routers.courses import _assignment_response, assign_course, course_assignment_fully_completed
 from routers.time_grants import award_time_grant
 
@@ -101,6 +102,59 @@ def create_milestone(child_id: UUID, body: schemas.MilestoneCreate,
     return _response(db, milestone)
 
 
+@router.post("/children/{child_id}/milestones/propose", response_model=schemas.MilestoneResponse)
+def propose_milestone_as_child(child_id: UUID, body: schemas.MilestoneProposal,
+                               db: Session = Depends(get_db),
+                               credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """The child adding something they'd like to work toward.
+
+    Lands as 'proposed', never 'active', and carries no prize whatever the
+    request says: the prize is screen time, and a child being able to write
+    their own screen-time grant would undo the entire point of the app. The
+    parent decides if it becomes real and what it's worth.
+    """
+    check_child_access(db, credentials, child_id)
+
+    milestone = models.Milestone(
+        child_id=child_id,
+        title=body.title,
+        description=body.description,
+        kind="custom",        # a child's own wish, not a task count or a course
+        status="proposed",
+        created_by="child",
+        prize_minutes=0,      # not negotiable here — see the docstring
+    )
+    db.add(milestone)
+    db.commit()
+    db.refresh(milestone)
+    return _response(db, milestone)
+
+
+@router.put("/milestones/{milestone_id}/approve", response_model=schemas.MilestoneResponse)
+def approve_proposed_milestone(milestone_id: UUID, body: schemas.MilestoneApproval,
+                               current_parent: models.Parent = Depends(get_current_parent),
+                               db: Session = Depends(get_db)):
+    """A parent turning a child's proposal into a real milestone, setting
+    what it takes and what it's worth."""
+    milestone = _get_for_parent(db, current_parent, milestone_id)
+    if milestone.status != "proposed":
+        raise HTTPException(status_code=400, detail="That milestone isn't waiting for approval")
+
+    if body.kind is not None:
+        milestone.kind = body.kind
+    if body.target_count is not None:
+        milestone.target_count = body.target_count
+    if body.prize_text is not None:
+        milestone.prize_text = body.prize_text
+    if body.prize_minutes is not None:
+        milestone.prize_minutes = body.prize_minutes
+    milestone.status = "active"
+
+    db.commit()
+    db.refresh(milestone)
+    return _response(db, milestone)
+
+
 @router.get("/children/{child_id}/milestones", response_model=list[schemas.MilestoneResponse])
 def list_milestones(child_id: UUID, db: Session = Depends(get_db),
                     _access: None = Depends(assert_child_access)):
@@ -119,6 +173,10 @@ def claim_milestone(milestone_id: UUID,
     milestone = _get_for_parent(db, current_parent, milestone_id)
     if milestone.status == "achieved":
         raise HTTPException(status_code=400, detail="Already claimed")
+    if milestone.status == "proposed":
+        # A child's suggestion isn't a milestone yet — approving it is what
+        # sets the prize, so there's nothing to pay out before that.
+        raise HTTPException(status_code=400, detail="Approve this one first")
     if not _is_achievable(db, milestone):
         raise HTTPException(status_code=400, detail="Not finished yet")
 

@@ -145,6 +145,8 @@ struct ScreenProfile: View {
                 } else {
                     tasksSection
                 }
+
+                milestonesLink
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -540,6 +542,55 @@ struct ScreenProfile: View {
         }
     }
     
+
+    /// Milestones live per-child, so they hang off the child's own profile
+    /// rather than becoming a sixth top-level tab. The badge is the point of
+    /// putting it here: a suggestion the kid sent needs a parent to act on
+    /// it, and it would otherwise sit unseen.
+    private var milestonesLink: some View {
+        NavigationLink {
+            ScreenMilestones(childId: childId, childName: child.name)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "target")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Brand.greenDeep)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(Brand.greenTint))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Milestones").font(Typography.font(15, weight: .bold))
+                    Text("Bigger goals and prizes")
+                        .font(Typography.font(13))
+                        .foregroundStyle(Brand.inkSoft)
+                }
+                Spacer()
+                if pendingMilestoneProposals > 0 {
+                    Text("\(pendingMilestoneProposals)")
+                        .font(Typography.font(12, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Brand.greenDeep))
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Brand.inkSoft)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.black.opacity(0.07), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Read from the cache rather than fetched — this is a badge on a row,
+    /// not worth a network call every time the profile appears.
+    private var pendingMilestoneProposals: Int {
+        LocalStore.shared.cachedMilestones(childId: childId)
+            .filter { $0.status == "proposed" }.count
+    }
 
     private var tasksSection: some View {
         VStack(alignment: .leading, spacing: 0) {

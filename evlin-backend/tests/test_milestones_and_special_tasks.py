@@ -279,3 +279,66 @@ def test_generate_reports_missing_config(client, db_session, monkeypatch):
     p, c = _setup(db_session)
     assert client.post(f"/children/{c.id}/milestones/generate",
                        headers=auth("pa"), json={}).status_code == 503
+
+
+# ---- a child proposing their own ----------------------------------------
+
+def test_child_can_propose_and_it_carries_no_prize(client, db_session):
+    p, c = _setup(db_session)
+    proposed = client.post(f"/children/{c.id}/milestones/propose", headers=auth("dev-kid"),
+                           json={"title": "Save up for a skateboard"}).json()
+    assert proposed["status"] == "proposed"
+    assert proposed["created_by"] == "child"
+    assert proposed["prize_minutes"] == 0
+
+
+def test_a_child_cannot_write_themselves_a_screen_time_prize(client, db_session):
+    # The whole point of the app is that a child can't grant themselves
+    # time. The proposal schema has no prize field, so sending one is simply
+    # not honoured.
+    p, c = _setup(db_session)
+    proposed = client.post(f"/children/{c.id}/milestones/propose", headers=auth("dev-kid"),
+                           json={"title": "Free time", "prize_minutes": 999,
+                                 "status": "active", "kind": "custom"}).json()
+    assert proposed["prize_minutes"] == 0
+    assert proposed["status"] == "proposed"
+    # And it can't be cashed in before a parent has looked at it.
+    assert client.post(f"/milestones/{proposed['id']}/claim", headers=auth("pa")).status_code == 400
+
+
+def test_parent_approval_is_what_sets_the_terms(client, db_session):
+    p, c = _setup(db_session)
+    proposed = client.post(f"/children/{c.id}/milestones/propose", headers=auth("dev-kid"),
+                           json={"title": "Skateboard"}).json()
+
+    approved = client.put(f"/milestones/{proposed['id']}/approve", headers=auth("pa"), json={
+        "kind": "count", "target_count": 20, "prize_minutes": 30,
+        "prize_text": "Trip to the skate park"}).json()
+    assert approved["status"] == "active" and approved["target_count"] == 20
+    assert approved["prize_minutes"] == 30
+    assert approved["created_by"] == "child"   # still their idea
+
+
+def test_approving_something_already_active_is_rejected(client, db_session):
+    p, c = _setup(db_session)
+    m = client.post(f"/children/{c.id}/milestones", headers=auth("pa"), json={
+        "title": "Parent's own", "kind": "count", "target_count": 3}).json()
+    assert client.put(f"/milestones/{m['id']}/approve", headers=auth("pa"),
+                      json={"prize_minutes": 10}).status_code == 400
+
+
+def test_a_child_cannot_approve_their_own_proposal(client, db_session):
+    p, c = _setup(db_session)
+    proposed = client.post(f"/children/{c.id}/milestones/propose", headers=auth("dev-kid"),
+                           json={"title": "Skateboard"}).json()
+    assert client.put(f"/milestones/{proposed['id']}/approve", headers=auth("dev-kid"),
+                      json={"prize_minutes": 500}).status_code == 401
+
+
+def test_another_childs_device_cannot_propose(client, db_session):
+    p, c = _setup(db_session)
+    other_parent = make_parent(db_session, "pb")
+    other = make_child(db_session, other_parent, name="Other")
+    make_device(db_session, other, "dev-other")
+    assert client.post(f"/children/{c.id}/milestones/propose", headers=auth("dev-other"),
+                       json={"title": "Nope"}).status_code == 404

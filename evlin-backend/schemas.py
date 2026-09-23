@@ -530,6 +530,36 @@ class MilestoneGenerateRequest(BaseModel):
     hint: Optional[str] = None
 
 
+class MilestoneProposal(BaseModel):
+    """What a child can add themselves. Deliberately has no prize field at
+    all — not "ignored if sent", absent, so there's nothing to try."""
+    title: str
+    description: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, v):
+        if not v or not v.strip():
+            raise ValueError("title must not be blank")
+        return v.strip()
+
+
+class MilestoneApproval(BaseModel):
+    """The parent turning a child's proposal into a real milestone — this is
+    where what it takes and what it's worth get decided."""
+    kind: Optional[str] = None
+    target_count: Optional[int] = None
+    prize_text: Optional[str] = None
+    prize_minutes: Optional[int] = None
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, v):
+        if v is not None and v not in ("count", "streak", "custom"):
+            raise ValueError("kind must be count, streak or custom")
+        return v
+
+
 class ReflectionCreate(BaseModel):
     """Either path to the video+quiz content: a specific video the parent
     picked (the common case — a one-video course is made for it), or an

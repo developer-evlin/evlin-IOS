@@ -129,9 +129,12 @@ struct TabletRootView: View {
                     ScreenTabletCalendar()
                         .tabItem { Label("Calendar", systemImage: "calendar") }
                         .tag(1)
+                    ScreenTabletMilestones()
+                        .tabItem { Label("Goals", systemImage: "target") }
+                        .tag(2)
                     ScreenTabletLibrary()
                         .tabItem { Label("Library", systemImage: "book.closed.fill") }
-                        .tag(2)
+                        .tag(3)
                 }
                 .tint(KidTheme.greenDeep)
                 // The native tab bar paints its own opaque system background

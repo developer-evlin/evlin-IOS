@@ -548,6 +548,29 @@ class APIClient {
         _ = try await send("DELETE", "/milestones/\(milestoneId)")
     }
 
+    /// The kid adding something they'd like to work toward. Lands as
+    /// "proposed" with no prize — a kid can't write their own screen time,
+    /// so a parent decides whether it's real and what it's worth.
+    @discardableResult
+    func proposeMilestone(childId: String, title: String, description: String? = nil) async throws -> ApiMilestone {
+        var body: [String: Any] = ["title": title]
+        if let description { body["description"] = description }
+        return try decode(try await send("POST", "/children/\(childId)/milestones/propose", body: body))
+    }
+
+    /// The parent turning a kid's proposal into a real milestone — this is
+    /// where what it takes and what it's worth get decided.
+    @discardableResult
+    func approveMilestone(milestoneId: String, kind: String? = nil, targetCount: Int? = nil,
+                          prizeText: String? = nil, prizeMinutes: Int? = nil) async throws -> ApiMilestone {
+        var body: [String: Any] = [:]
+        if let kind { body["kind"] = kind }
+        if let targetCount { body["target_count"] = targetCount }
+        if let prizeText { body["prize_text"] = prizeText }
+        if let prizeMinutes { body["prize_minutes"] = prizeMinutes }
+        return try decode(try await send("PUT", "/milestones/\(milestoneId)/approve", body: body))
+    }
+
     /// A draft for the parent to edit and then save — creates nothing.
     func generateMilestone(childId: String, hint: String? = nil) async throws -> ApiMilestoneDraft {
         var body: [String: Any] = [:]
