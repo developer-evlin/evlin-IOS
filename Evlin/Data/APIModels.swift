@@ -129,6 +129,10 @@ struct ApiTimeGrantsSummary: Codable {
 struct ApiChatMessage: Codable {
     let id: String
     let childId: String
+    /// Which thread this belongs to. Optional because messages written
+    /// before threading existed are backfilled server-side, and an older
+    /// backend wouldn't send it at all.
+    let conversationId: String?
     let role: String        // "user" | "assistant"
     let text: String
     // "draft_task" | "open_block_picker" | "propose_reflection" |
@@ -139,6 +143,46 @@ struct ApiChatMessage: Codable {
     // here would fail the whole message, and with it the transcript).
     let toolArgs: [String: String]?
     let createdAt: String
+}
+
+/// One chat thread. The sidebar orders by `updatedAt`, so an active thread
+/// rises to the top.
+struct ApiChatConversation: Codable, Identifiable {
+    let id: String
+    let childId: String
+    let title: String
+    let createdAt: String
+    let updatedAt: String
+
+    /// "Today" / "Yesterday" / "Previous 7 Days" / "Older" — computed from
+    /// the real timestamp rather than stored, so a thread moves between
+    /// buckets as time passes instead of being stamped with one forever.
+    var section: String {
+        guard let date = CalendarSync.parseISO(updatedAt) else { return "Older" }
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return "Today" }
+        if cal.isDateInYesterday(date) { return "Yesterday" }
+        let days = cal.dateComponents([.day], from: date, to: Date()).day ?? 0
+        return days <= 7 ? "Previous 7 Days" : "Older"
+    }
+
+    /// The timestamp as the row shows it: a time for today, a weekday
+    /// within the last week, a date beyond that.
+    var timeLabel: String {
+        guard let date = CalendarSync.parseISO(updatedAt) else { return "" }
+        let cal = Calendar.current
+        let f = DateFormatter()
+        if cal.isDateInToday(date) {
+            f.dateFormat = "h:mm a"
+        } else if cal.isDateInYesterday(date) {
+            return "Yesterday"
+        } else if (cal.dateComponents([.day], from: date, to: Date()).day ?? 0) <= 7 {
+            f.dateFormat = "EEEE"
+        } else {
+            f.dateFormat = "d MMM"
+        }
+        return f.string(from: date)
+    }
 }
 
 // MARK: - Courses

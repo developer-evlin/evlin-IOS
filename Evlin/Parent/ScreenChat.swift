@@ -628,7 +628,11 @@ struct ScreenChat: View {
     // Tracks which history thread is currently loaded into `messages` so the
     // sidebar can highlight it — the "active state" pill from Gemini/ChatGPT's
     // history list. Cleared on "New chat".
-    @State private var selectedEntryID: UUID?
+    // The thread currently in the transcript. nil means "New chat" — no
+    // row exists server-side until the first message is sent, so a stray
+    // tap on New chat doesn't leave an empty thread in the list.
+    @State private var activeConversationID: String?
+    @State private var conversations: [ApiChatConversation] = []
     @FocusState private var inputFocused: Bool
     // Instagram-style collapse: scrolling down hides the nav bar + tab bar so
     // the transcript gets the full screen, matching a standalone chat app's
@@ -853,23 +857,29 @@ struct ScreenChat: View {
         .overlay {
             if showHistory {
                 ChatHistorySidebar(
-                    selectedID: selectedEntryID,
-                    onSelect: { entry in
+                    selectedID: activeConversationID,
+                    conversations: conversations,
+                    onSelect: { conversation in
                         // Cancel first — an in-flight response belongs to
                         // whatever thread was showing when it started, and
                         // has no business appending into a different one.
                         responseTask?.cancel()
                         isSending = false
-                        selectedEntryID = entry.id
-                        messages = entry.transcript.map { ChatMessage(fromUser: $0.fromUser, text: $0.text) }
                         withAnimation(.easeOut(duration: 0.22)) { showHistory = false }
+                        Task { await openConversation(conversation.id) }
                     },
                     onNewChat: {
                         responseTask?.cancel()
                         isSending = false
-                        selectedEntryID = nil
+                        activeConversationID = nil
                         messages = []
                         withAnimation(.easeOut(duration: 0.22)) { showHistory = false }
+                    },
+                    onRename: { conversation, title in
+                        Task { await renameConversation(conversation, to: title) }
+                    },
+                    onDelete: { conversation in
+                        Task { await deleteConversation(conversation) }
                     },
                     onClose: { withAnimation(.easeOut(duration: 0.22)) { showHistory = false } }
                 )
@@ -878,10 +888,12 @@ struct ScreenChat: View {
                 .transition(.move(edge: .leading))
             }
         }
-        // Real persisted history — replaces the old empty-on-every-launch
-        // transcript (chatHistoryMock only ever backed the separate
-        // multi-thread sidebar, never this main view).
-        .task { await loadHistory() }
+        // Real persisted history, and the real thread list behind the
+        // sidebar — both were mock or empty before.
+        .task {
+            await loadHistory()
+            await reloadConversations()
+        }
         // Switching to a different bottom tab shouldn't leave the history
         // panel stuck open underneath — TabView keeps this tab's state
         // alive, but the content view still disappears while another tab
@@ -1105,9 +1117,21 @@ struct ScreenChat: View {
         responseTask = Task { @MainActor in
             guard let childId = session.activeChildId else { isSending = false; return }
             do {
-                let reply = try await APIClient.shared.sendChatMessage(childId: childId, text: text)
+                // No active thread means this is a New chat: ask for a fresh
+                // one explicitly rather than letting the server append to
+                // whatever was most recent.
+                let reply = try await APIClient.shared.sendChatMessage(
+                    childId: childId, text: text,
+                    conversationId: activeConversationID,
+                    startNewConversation: activeConversationID == nil
+                )
                 guard !Task.isCancelled else { return }
                 isSending = false
+                // The server creates the thread on the first message, so
+                // this is where a New chat gets its id — without it the next
+                // message would start yet another one.
+                if activeConversationID == nil { activeConversationID = reply.conversationId }
+                await reloadConversations()
                 if reply.toolCall != nil {
                     messages.append(ChatMessage(fromUser: false, text: reply.text, card: cardFor(reply)))
                 } else {
@@ -1165,6 +1189,40 @@ struct ScreenChat: View {
         messages = history.map { m in
             ChatMessage(fromUser: m.role == "user", text: m.text, card: m.toolCall != nil ? cardFor(m) : nil)
         }
+        // Whichever thread that was, so replying continues it rather than
+        // silently starting another.
+        activeConversationID = history.first?.conversationId
+    }
+
+    private func reloadConversations() async {
+        guard let childId = session.activeChildId else { return }
+        conversations = (try? await APIClient.shared.fetchConversations(childId: childId)) ?? conversations
+    }
+
+    private func openConversation(_ id: String) async {
+        guard let loaded = try? await APIClient.shared.fetchConversationMessages(conversationId: id) else { return }
+        activeConversationID = id
+        messages = loaded.map { m in
+            ChatMessage(fromUser: m.role == "user", text: m.text, card: m.toolCall != nil ? cardFor(m) : nil)
+        }
+    }
+
+    private func renameConversation(_ conversation: ApiChatConversation, to title: String) async {
+        guard (try? await APIClient.shared.renameConversation(conversationId: conversation.id, title: title)) != nil
+        else { return }
+        await reloadConversations()
+    }
+
+    private func deleteConversation(_ conversation: ApiChatConversation) async {
+        guard (try? await APIClient.shared.deleteConversation(conversationId: conversation.id)) != nil
+        else { return }
+        // Deleting the thread you're reading leaves the transcript showing
+        // something that no longer exists, so drop to a fresh one.
+        if activeConversationID == conversation.id {
+            activeConversationID = nil
+            messages = []
+        }
+        await reloadConversations()
     }
 
     // Apps/categories picked → ask the follow-up question instead of
@@ -1347,61 +1405,6 @@ private struct HelpPanel: View {
 
 // MARK: - Chat history
 
-// KNOWN GAP, not fixed in this pass: the real backend (app.chat_messages,
-// routers/chat.py) is one continuous conversation per child, matching how
-// the main transcript above already frames it — it has no concept of
-// separate named/searchable/renameable threads the way this sidebar's
-// model does. loadHistory() (above) loads the real single conversation
-// into the main transcript; this sidebar's multi-thread browsing UI still
-// runs on chatHistoryMock below. Reconciling "one real conversation" with
-// "a ChatGPT-style thread list" is its own real design/backend question
-// (e.g. day-bucketing the one conversation into pseudo-threads, or
-// building real multi-thread support server-side) — deliberately not
-// guessed at here rather than half-wiring something that reads real but
-// silently can't rename/delete/search anything for real.
-private struct ChatHistoryEntry: Identifiable {
-    let id = UUID()
-    var title: String
-    var time: String
-    var section: String // "Today" · "Yesterday" · "Previous 7 Days"
-    var transcript: [(fromUser: Bool, text: String)]
-}
-
-private let chatHistoryMock: [ChatHistoryEntry] = [
-    ChatHistoryEntry(
-        title: "Extra time for homework",
-        time: "9:41 AM", section: "Today",
-        transcript: [
-            (true, "Give your child 30 more minutes if his homework's done"),
-            (false, "Done — updated your child's controls. I'll unlock the extra 30 minutes automatically once he marks homework complete."),
-        ]
-    ),
-    ChatHistoryEntry(
-        title: "Bedtime rule on school nights",
-        time: "Yesterday", section: "Yesterday",
-        transcript: [
-            (true, "Lock all apps at 9pm on school nights"),
-            (false, "Set — all apps lock at 9:00 PM Sun–Thu. Want me to add a 15-minute wind-down warning before it kicks in?"),
-        ]
-    ),
-    ChatHistoryEntry(
-        title: "TikTok pushback after lock",
-        time: "Monday", section: "Previous 7 Days",
-        transcript: [
-            (true, "your child is really upset that TikTok got locked, what do I say?"),
-            (false, "Here's a de-escalation strategy for tonight: acknowledge the frustration first, then offer a fixed choice — a 10-minute walk or a snack break — before revisiting screen time. Kids regulate faster when they feel heard before they're redirected."),
-        ]
-    ),
-    ChatHistoryEntry(
-        title: "Weekly usage check-in",
-        time: "Monday", section: "Previous 7 Days",
-        transcript: [
-            (true, "How's your child's screen time trending this week?"),
-            (false, "your child's screen time was down 12% from last week — mostly less time in reading apps, so nothing to flag."),
-        ]
-    ),
-]
-
 // A collapsible left sidebar over the chat canvas — the ChatGPT/Claude
 // desktop pattern (fixed-width history rail + centered conversation) adapted
 // to a phone: an overlay drawer instead of a permanent split view, since
@@ -1410,14 +1413,16 @@ private let chatHistoryMock: [ChatHistoryEntry] = [
 // plus a tinted pill on whichever entry is currently loaded into the
 // transcript (the "active state" from the desktop reference).
 private struct ChatHistorySidebar: View {
-    var selectedID: UUID?
-    var onSelect: (ChatHistoryEntry) -> Void
+    var selectedID: String?
+    var conversations: [ApiChatConversation]
+    var onSelect: (ApiChatConversation) -> Void
     var onNewChat: () -> Void
+    var onRename: (ApiChatConversation, String) -> Void
+    var onDelete: (ApiChatConversation) -> Void
     var onClose: () -> Void
 
-    @State private var entries = chatHistoryMock
     @State private var query = ""
-    @State private var renamingEntry: ChatHistoryEntry?
+    @State private var renamingEntry: ApiChatConversation?
     @State private var renameText = ""
     // Lets a finger drag the whole panel toward its exit edge (matching the
     // .move(edge: .leading) transition it entered with) instead of the x/
@@ -1425,9 +1430,9 @@ private struct ChatHistorySidebar: View {
     // released short of the threshold springs back rather than committing.
     @State private var dragOffset: CGFloat = 0
 
-    private var filtered: [ChatHistoryEntry] {
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return entries }
-        return entries.filter { $0.title.localizedCaseInsensitiveContains(query) }
+    private var filtered: [ApiChatConversation] {
+        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return conversations }
+        return conversations.filter { $0.title.localizedCaseInsensitiveContains(query) }
     }
 
     private var sections: [String] {
@@ -1498,8 +1503,9 @@ private struct ChatHistorySidebar: View {
             TextField("Chat name", text: $renameText)
             Button("Cancel", role: .cancel) { renamingEntry = nil }
             Button("Save") {
-                if let id = renamingEntry?.id, let i = entries.firstIndex(where: { $0.id == id }) {
-                    entries[i].title = renameText
+                if let entry = renamingEntry {
+                    let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+                    if !trimmed.isEmpty { onRename(entry, trimmed) }
                 }
                 renamingEntry = nil
             }
@@ -1566,7 +1572,7 @@ private struct ChatHistorySidebar: View {
         .buttonStyle(.plain)
     }
 
-    private func row(_ entry: ChatHistoryEntry) -> some View {
+    private func row(_ entry: ApiChatConversation) -> some View {
         let isActive = entry.id == selectedID
         return Button {
             onSelect(entry)
@@ -1577,7 +1583,7 @@ private struct ChatHistorySidebar: View {
                         .font(Typography.font(16, weight: isActive ? .bold : .medium))
                         .foregroundStyle(EColor.onSurface)
                         .lineLimit(1)
-                    Text(entry.time)
+                    Text(entry.timeLabel)
                         .font(Typography.font(13, weight: .regular))
                         .foregroundStyle(EColor.onSurfaceVariant)
                 }
@@ -1591,8 +1597,7 @@ private struct ChatHistorySidebar: View {
                         Label("Rename", systemImage: "pencil")
                     }
                     Button(role: .destructive) {
-                        entries.removeAll { $0.id == entry.id }
-                        if selectedID == entry.id { onNewChat() }
+                        onDelete(entry)
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }

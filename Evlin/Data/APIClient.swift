@@ -420,13 +420,38 @@ class APIClient {
         return try decode(try await send("POST", "/children/\(childId)/time-grants", body: body))
     }
 
+    /// The most recent thread — what Chat opens on.
     func fetchChatHistory(childId: String) async throws -> [ApiChatMessage] {
         try decode(try await send("GET", "/children/\(childId)/chat"))
     }
 
+    func fetchConversations(childId: String) async throws -> [ApiChatConversation] {
+        try decode(try await send("GET", "/children/\(childId)/conversations"))
+    }
+
+    func fetchConversationMessages(conversationId: String) async throws -> [ApiChatMessage] {
+        try decode(try await send("GET", "/conversations/\(conversationId)/messages"))
+    }
+
     @discardableResult
-    func sendChatMessage(childId: String, text: String) async throws -> ApiChatMessage {
-        try decode(try await send("POST", "/children/\(childId)/chat", body: ["text": text]))
+    func renameConversation(conversationId: String, title: String) async throws -> ApiChatConversation {
+        try decode(try await send("PUT", "/conversations/\(conversationId)", body: ["title": title]))
+    }
+
+    func deleteConversation(conversationId: String) async throws {
+        _ = try await send("DELETE", "/conversations/\(conversationId)")
+    }
+
+    /// `conversationId` continues that thread. Passing neither it nor
+    /// `startNewConversation` appends to the running one, which is what an
+    /// older client does by default.
+    @discardableResult
+    func sendChatMessage(childId: String, text: String, conversationId: String? = nil,
+                         startNewConversation: Bool = false) async throws -> ApiChatMessage {
+        var body: [String: Any] = ["text": text]
+        if let conversationId { body["conversation_id"] = conversationId }
+        if startNewConversation { body["new_conversation"] = true }
+        return try decode(try await send("POST", "/children/\(childId)/chat", body: body))
     }
 
     // MARK: - Courses
