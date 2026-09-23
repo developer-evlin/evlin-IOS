@@ -4,9 +4,26 @@
 <dict>
 	<key>aps-environment</key>
 	<string>development</string>
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+	<key>com.apple.developer.avfoundation.multitasking-camera-access</key>
+	<true/>
 	<key>com.apple.developer.family-controls</key>
 	<true/>
 	<key>com.apple.developer.family-controls.app-and-website-usage</key>
 	<true/>
+	<!-- Shared container for the local cache (see LocalStore). A
+	     DeviceActivityMonitor extension runs in its own process and can't
+	     read the app's private store, so the database has to live here —
+	     and from the start, since moving it once real devices hold real
+	     data means migrating a live store. Needs the App Group capability
+	     enabled in the developer portal before the next device build;
+	     Simulator builds work without it. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.evlin.app</string>
+	</array>
 </dict>
 </plist>

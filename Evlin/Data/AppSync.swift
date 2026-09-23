@@ -276,11 +276,21 @@ class AppSync {
         // flat daily limit. Best-effort: a failure here shouldn't fail the
         // whole sync over a number that's secondary to tasks/rules.
         let timeGrants = try? await APIClient.shared.fetchTimeGrants(childId: id)
+        // Also best-effort, and for a sharper reason: reflections and app
+        // blocks feed the lock, so they have to be cached to stay correct
+        // offline — but a fetch failure here must not fail the whole sync,
+        // since the previously cached values are still the right answer.
+        let reflections = try? await APIClient.shared.fetchReflections(childId: id)
+        let appBlocks = try? await APIClient.shared.fetchAppBlocks(childId: id, activeOnly: false)
+        let milestones = try? await APIClient.shared.fetchMilestones(childId: id)
 
         LocalStore.shared.saveTasks(apiTasks, childId: id)
         LocalStore.shared.saveOccurrences(apiOccurrences, childId: id, dueDate: CalendarSync.isoDay(Date()))
         LocalStore.shared.saveChildState(childId: id, childName: apiChild.name, rules: rules, state: state)
         if let timeGrants { LocalStore.shared.saveTimeGrants(timeGrants, childId: id) }
+        if let reflections { LocalStore.shared.saveReflections(reflections, childId: id) }
+        if let appBlocks { LocalStore.shared.saveAppBlocks(appBlocks, childId: id) }
+        if let milestones { LocalStore.shared.saveMilestones(milestones, childId: id) }
 
         // Map Tasks/Occurrences -> UI `ChildTask`
         var uiTasks: [ChildTask] = []

@@ -409,20 +409,198 @@ class APIClient {
         try decode(try await send("POST", "/children/\(childId)/chat", body: ["text": text]))
     }
 
+    // MARK: - Courses
+
+    /// The shared library: vetted courses any of this family's children can
+    /// be assigned to, independently of each other.
+    func fetchCourses(status: String = "published") async throws -> [ApiCourse] {
+        try decode(try await send("GET", "/courses?status=\(status)"))
+    }
+
+    func fetchCourse(courseId: String) async throws -> ApiCourse {
+        try decode(try await send("GET", "/courses/\(courseId)"))
+    }
+
+    /// Searches YouTube and runs the vetting pass. Returns a *draft* —
+    /// nothing reaches a child until it's approved.
+    func generateCourse(topic: String, videoCount: Int = 4, childId: String? = nil) async throws -> ApiCourse {
+        var body: [String: Any] = ["topic": topic, "video_count": videoCount]
+        if let childId { body["child_id"] = childId }
+        return try decode(try await send("POST", "/courses/generate", body: body))
+    }
+
+    /// One specific video the parent picked themselves — published straight
+    /// away, since there's no agent judgement to review.
+    func createSingleVideoCourse(videoId: String, videoTitle: String?, channelTitle: String?,
+                                 quiz: [[String: Any]] = [], title: String? = nil) async throws -> ApiCourse {
+        var body: [String: Any] = ["video_id": videoId, "quiz": quiz]
+        if let videoTitle { body["video_title"] = videoTitle }
+        if let channelTitle { body["channel_title"] = channelTitle }
+        if let title { body["title"] = title }
+        return try decode(try await send("POST", "/courses/single-video", body: body))
+    }
+
+    /// Publishes a drafted course and, when a child is given, assigns it in
+    /// the same call.
+    @discardableResult
+    func approveCourse(courseId: String, assignToChildId: String? = nil) async throws -> ApiCourse {
+        var body: [String: Any] = [:]
+        if let assignToChildId { body["assign_to_child_id"] = assignToChildId }
+        return try decode(try await send("PUT", "/courses/\(courseId)/approve", body: body))
+    }
+
+    func searchVideos(query: String) async throws -> [ApiVideoSearchResult] {
+        let escaped = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        return try decode(try await send("GET", "/youtube/search?q=\(escaped)"))
+    }
+
+    func fetchCourseAssignments(childId: String) async throws -> [ApiCourseAssignment] {
+        try decode(try await send("GET", "/children/\(childId)/course-assignments"))
+    }
+
+    /// Gives an already-published course to a child — how a sibling gets the
+    /// same vetted course with no repeat search.
+    @discardableResult
+    func assignCourse(childId: String, courseId: String) async throws -> ApiCourseAssignment {
+        try decode(try await send("POST", "/children/\(childId)/course-assignments",
+                                   body: ["course_id": courseId]))
+    }
+
+    /// The kid finishing one video (and its quiz, if it has one). Unlocks
+    /// exactly the next item.
+    @discardableResult
+    func completeCourseItem(progressId: String, quizAnswers: [Int]? = nil) async throws -> ApiCourseItemProgress {
+        var body: [String: Any] = [:]
+        if let quizAnswers { body["quiz_answers"] = quizAnswers }
+        return try decode(try await send("POST", "/course-item-progress/\(progressId)/complete", body: body))
+    }
+
+    // MARK: - Reflections
+
+    /// `status: "open"` is the one the gate cares about — pending *or*
+    /// awaiting review.
+    func fetchReflections(childId: String, status: String? = nil) async throws -> [ApiReflection] {
+        let query = status.map { "?status=\($0)" } ?? ""
+        return try decode(try await send("GET", "/children/\(childId)/reflections\(query)"))
+    }
+
+    /// Give exactly one of videoId (a one-video course is made for it) or
+    /// courseId (assign an existing one).
+    @discardableResult
+    func createReflection(childId: String, videoId: String? = nil, videoTitle: String? = nil,
+                          channelTitle: String? = nil, quiz: [[String: Any]] = [],
+                          courseId: String? = nil, writtenPrompt: String? = nil) async throws -> ApiReflection {
+        var body: [String: Any] = [:]
+        if let videoId {
+            body["video_id"] = videoId
+            body["quiz"] = quiz
+            if let videoTitle { body["video_title"] = videoTitle }
+            if let channelTitle { body["channel_title"] = channelTitle }
+        }
+        if let courseId { body["course_id"] = courseId }
+        if let writtenPrompt { body["written_prompt"] = writtenPrompt }
+        return try decode(try await send("POST", "/children/\(childId)/reflections", body: body))
+    }
+
+    @discardableResult
+    func submitReflection(reflectionId: String, writtenResponse: String?) async throws -> ApiReflection {
+        var body: [String: Any] = [:]
+        if let writtenResponse { body["written_response"] = writtenResponse }
+        return try decode(try await send("POST", "/reflections/\(reflectionId)/submit", body: body))
+    }
+
+    /// `status` is "approved" or "needs_redo".
+    @discardableResult
+    func reviewReflection(reflectionId: String, status: String, note: String? = nil) async throws -> ApiReflection {
+        var body: [String: Any] = ["status": status]
+        if let note, !note.isEmpty { body["review_note"] = note }
+        return try decode(try await send("PUT", "/reflections/\(reflectionId)/review", body: body))
+    }
+
+    // MARK: - Milestones
+
+    func fetchMilestones(childId: String) async throws -> [ApiMilestone] {
+        try decode(try await send("GET", "/children/\(childId)/milestones"))
+    }
+
+    @discardableResult
+    func createMilestone(childId: String, title: String, kind: String, targetCount: Int? = nil,
+                         description: String? = nil, prizeText: String? = nil,
+                         prizeMinutes: Int = 0, courseId: String? = nil,
+                         createdBy: String = "parent") async throws -> ApiMilestone {
+        var body: [String: Any] = ["title": title, "kind": kind, "prize_minutes": prizeMinutes,
+                                   "created_by": createdBy]
+        if let targetCount { body["target_count"] = targetCount }
+        if let description { body["description"] = description }
+        if let prizeText { body["prize_text"] = prizeText }
+        if let courseId { body["course_id"] = courseId }
+        return try decode(try await send("POST", "/children/\(childId)/milestones", body: body))
+    }
+
+    /// Pays the prize into the time-grant ledger. Only valid once the
+    /// milestone's `achievable` is true.
+    @discardableResult
+    func claimMilestone(milestoneId: String) async throws -> ApiMilestone {
+        try decode(try await send("POST", "/milestones/\(milestoneId)/claim"))
+    }
+
+    func deleteMilestone(milestoneId: String) async throws {
+        _ = try await send("DELETE", "/milestones/\(milestoneId)")
+    }
+
+    /// A draft for the parent to edit and then save — creates nothing.
+    func generateMilestone(childId: String, hint: String? = nil) async throws -> ApiMilestoneDraft {
+        var body: [String: Any] = [:]
+        if let hint { body["hint"] = hint }
+        return try decode(try await send("POST", "/children/\(childId)/milestones/generate", body: body))
+    }
+
+    // MARK: - App blocks
+
+    func fetchAppBlocks(childId: String, activeOnly: Bool = true) async throws -> [ApiAppBlock] {
+        try decode(try await send("GET", "/children/\(childId)/app-blocks?active=\(activeOnly)"))
+    }
+
+    /// `blockType` is "duration" (needs durationMinutes) or "until_task"
+    /// (needs untilTaskId — it lifts itself when that task is approved).
+    @discardableResult
+    func createAppBlock(childId: String, appName: String, appBundleId: String? = nil,
+                        blockType: String, durationMinutes: Int? = nil,
+                        untilTaskId: String? = nil) async throws -> ApiAppBlock {
+        var body: [String: Any] = ["app_name": appName, "block_type": blockType]
+        if let appBundleId { body["app_bundle_id"] = appBundleId }
+        if let durationMinutes { body["duration_minutes"] = durationMinutes }
+        if let untilTaskId { body["until_task_id"] = untilTaskId }
+        return try decode(try await send("POST", "/children/\(childId)/app-blocks", body: body))
+    }
+
+    func deleteAppBlock(blockId: String) async throws {
+        _ = try await send("DELETE", "/app-blocks/\(blockId)")
+    }
+
     // MARK: - Task Management (Bi-directional Sync)
-    
+
     /// Creates the task on the backend and returns the saved row, so callers
     /// can use the real database id instead of a locally generated one.
-    func createTask(childId: String, title: String, instructions: String?, recurrence: String, category: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> ApiTask {
+    /// `courseId` makes this a special task: the course is assigned to the
+    /// child and the task is completed by finishing it. A course still
+    /// awaiting review is published by this same call — creating the task
+    /// *is* the approval, so there's never a task pointing at an unpublished
+    /// course. Pair it with `bonusMinutes` for "watch this, earn screen time".
+    func createTask(childId: String, title: String, instructions: String?, recurrence: String, category: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil, bonusMinutes: Int = 0, courseId: String? = nil, milestoneId: String? = nil, createdBy: String = "parent") async throws -> ApiTask {
         var body: [String: Any] = [
             "title": title,
             "instructions": instructions ?? "",
             "recurrence": recurrence,
             "category": category,
-            "submission_kind": submissionKind
+            "submission_kind": submissionKind,
+            "bonus_minutes": bonusMinutes,
+            "created_by": createdBy
         ]
         if let dueTime { body["due_time"] = dueTime }
         if let dueDate { body["due_date"] = dueDate }
+        if let courseId { body["course_id"] = courseId }
+        if let milestoneId { body["milestone_id"] = milestoneId }
         return try decode(try await send("POST", "/children/\(childId)/tasks", body: body))
     }
     

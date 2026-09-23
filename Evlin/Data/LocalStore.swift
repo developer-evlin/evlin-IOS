@@ -144,6 +144,82 @@ final class CachedChildState {
     }
 }
 
+/// An open reflection is the highest-priority gate: while one exists the
+/// device is locked regardless of task status. Cached so that stays true
+/// with no connectivity — and so it survives the app being killed, which is
+/// otherwise an obvious way out of a lock.
+@Model
+final class CachedReflection {
+    @Attribute(.unique) var id: String
+    var childId: String
+    var courseAssignmentId: String
+    var writtenPrompt: String?
+    var status: String    // "pending" | "submitted" | "approved" | "needs_redo"
+
+    init(id: String, childId: String, courseAssignmentId: String, writtenPrompt: String?, status: String) {
+        self.id = id; self.childId = childId; self.courseAssignmentId = courseAssignmentId
+        self.writtenPrompt = writtenPrompt; self.status = status
+    }
+
+    convenience init(_ api: ApiReflection) {
+        self.init(id: api.id, childId: api.childId, courseAssignmentId: api.courseAssignmentId,
+                   writtenPrompt: api.writtenPrompt, status: api.status)
+    }
+
+    /// Pending *or* awaiting review — handing something in doesn't hand the
+    /// device back.
+    var isOpen: Bool { status == "pending" || status == "submitted" }
+}
+
+@Model
+final class CachedAppBlock {
+    @Attribute(.unique) var id: String
+    var childId: String
+    var appName: String
+    var appBundleId: String?
+    var blockType: String       // "duration" | "until_task"
+    var untilTaskId: String?
+    var resolved: Bool
+
+    init(id: String, childId: String, appName: String, appBundleId: String?, blockType: String,
+         untilTaskId: String?, resolved: Bool) {
+        self.id = id; self.childId = childId; self.appName = appName; self.appBundleId = appBundleId
+        self.blockType = blockType; self.untilTaskId = untilTaskId; self.resolved = resolved
+    }
+
+    convenience init(_ api: ApiAppBlock) {
+        self.init(id: api.id, childId: api.childId, appName: api.appName, appBundleId: api.appBundleId,
+                   blockType: api.blockType, untilTaskId: api.untilTaskId, resolved: api.resolved)
+    }
+}
+
+@Model
+final class CachedMilestone {
+    @Attribute(.unique) var id: String
+    var childId: String
+    var title: String
+    var kind: String
+    var targetCount: Int?
+    var progressCount: Int
+    var prizeText: String?
+    var prizeMinutes: Int
+    var status: String
+    var achievable: Bool
+
+    init(id: String, childId: String, title: String, kind: String, targetCount: Int?, progressCount: Int,
+         prizeText: String?, prizeMinutes: Int, status: String, achievable: Bool) {
+        self.id = id; self.childId = childId; self.title = title; self.kind = kind
+        self.targetCount = targetCount; self.progressCount = progressCount; self.prizeText = prizeText
+        self.prizeMinutes = prizeMinutes; self.status = status; self.achievable = achievable
+    }
+
+    convenience init(_ api: ApiMilestone) {
+        self.init(id: api.id, childId: api.childId, title: api.title, kind: api.kind,
+                   targetCount: api.targetCount, progressCount: api.progressCount, prizeText: api.prizeText,
+                   prizeMinutes: api.prizeMinutes, status: api.status, achievable: api.achievable)
+    }
+}
+
 /// One kid-device write that couldn't reach the server yet — submit a
 /// task, request a bypass, or a photo/voice upload. Recorded instead of
 /// just failing so a relaunch doesn't lose it. `localFileURL` keeps a
@@ -182,10 +258,50 @@ final class LocalStore {
     let container: ModelContainer
     var context: ModelContext { container.mainContext }
 
+    /// Where the store actually ended up. Not cosmetic: enforcement reads
+    /// this same database from a *separate process*, so an in-memory
+    /// fallback means the app looks fine while anything reading the shared
+    /// store sees nothing — and would make lock decisions from nothing.
+    /// Recorded rather than swallowed so that's diagnosable.
+    enum Backing: String {
+        case appGroup           // shared container — readable by an extension
+        case localOnly          // app's own container; enforcement can't see it
+        case inMemory           // nothing persisted at all
+    }
+
+    private(set) static var backing: Backing = .localOnly
+
+    /// The shared container. An enforcement extension runs in its own
+    /// process and cannot read the app's private store, so the database has
+    /// to live here — and it has to live here from the start, because moving
+    /// it later means migrating a store that already has real data on real
+    /// devices.
+    static let appGroupID = "group.com.evlin.app"
+
     private init() {
-        let schema = Schema([CachedTask.self, CachedOccurrence.self, CachedTimeGrant.self, CachedChildState.self, PendingWrite.self])
+        let schema = Schema([
+            CachedTask.self, CachedOccurrence.self, CachedTimeGrant.self, CachedChildState.self,
+            CachedReflection.self, CachedAppBlock.self, CachedMilestone.self, PendingWrite.self,
+        ])
+
+        // Prefer the shared container; fall back only if the App Group isn't
+        // provisioned yet (returns nil until the capability is enabled).
+        let groupURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupID)?
+            .appendingPathComponent("Evlin.store")
+
+        if let groupURL {
+            if let shared = try? ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, url: groupURL)]) {
+                container = shared
+                Self.backing = .appGroup
+                return
+            }
+            print("LocalStore: App Group container exists but couldn't be opened — using the app-local store")
+        }
+
         do {
             container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema)])
+            Self.backing = .localOnly
         } catch {
             // A corrupt/incompatible on-disk store (e.g. after a schema
             // change during development) would otherwise crash every
@@ -195,6 +311,7 @@ final class LocalStore {
             container = (try? ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)])) ?? {
                 fatalError("LocalStore: could not create even an in-memory container: \(error)")
             }()
+            Self.backing = .inMemory
         }
     }
 
@@ -281,7 +398,48 @@ final class LocalStore {
         try? context.save()
     }
 
+    func saveReflections(_ reflections: [ApiReflection], childId: String) {
+        let existing = (try? context.fetch(FetchDescriptor<CachedReflection>(
+            predicate: #Predicate { $0.childId == childId }))) ?? []
+        for row in existing { context.delete(row) }
+        for api in reflections { context.insert(CachedReflection(api)) }
+        try? context.save()
+    }
+
+    func saveAppBlocks(_ blocks: [ApiAppBlock], childId: String) {
+        let existing = (try? context.fetch(FetchDescriptor<CachedAppBlock>(
+            predicate: #Predicate { $0.childId == childId }))) ?? []
+        for row in existing { context.delete(row) }
+        for api in blocks { context.insert(CachedAppBlock(api)) }
+        try? context.save()
+    }
+
+    func saveMilestones(_ milestones: [ApiMilestone], childId: String) {
+        let existing = (try? context.fetch(FetchDescriptor<CachedMilestone>(
+            predicate: #Predicate { $0.childId == childId }))) ?? []
+        for row in existing { context.delete(row) }
+        for api in milestones { context.insert(CachedMilestone(api)) }
+        try? context.save()
+    }
+
     // MARK: - Cache-first reads (called on launch, before the network sync lands)
+
+    func cachedReflections(childId: String) -> [CachedReflection] {
+        (try? context.fetch(FetchDescriptor<CachedReflection>(predicate: #Predicate { $0.childId == childId }))) ?? []
+    }
+
+    func cachedAppBlocks(childId: String) -> [CachedAppBlock] {
+        (try? context.fetch(FetchDescriptor<CachedAppBlock>(predicate: #Predicate { $0.childId == childId }))) ?? []
+    }
+
+    func cachedMilestones(childId: String) -> [CachedMilestone] {
+        (try? context.fetch(FetchDescriptor<CachedMilestone>(predicate: #Predicate { $0.childId == childId }))) ?? []
+    }
+
+    func cachedTimeGrants(childId: String, creditedDate: String) -> [CachedTimeGrant] {
+        (try? context.fetch(FetchDescriptor<CachedTimeGrant>(
+            predicate: #Predicate { $0.childId == childId && $0.creditedDate == creditedDate }))) ?? []
+    }
 
     func cachedTasks(childId: String) -> [ApiTask] {
         let rows = (try? context.fetch(FetchDescriptor<CachedTask>(predicate: #Predicate { $0.childId == childId }))) ?? []

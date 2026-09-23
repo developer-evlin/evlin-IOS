@@ -59,7 +59,17 @@ struct TabletRootView: View {
     // not gated on approval, so it doesn't look like nothing happened
     // right after they've turned everything in.
     private var submittedCount: Int { tasks.filter(\.done).count }
-    private var locked: Bool { approvedCount < tasks.count }
+    // Delegates to the one derived-state function rather than answering here.
+    // Real enforcement reads that same function from a separate process, and
+    // a View-local answer couldn't be shared with it — two implementations of
+    // "is it locked" that can disagree is the worst outcome for a lock.
+    //
+    // It also covers more than this line used to: an open reflection locks
+    // regardless of task status, and a manual lock counts too.
+    private var locked: Bool {
+        guard let childId = session.activeChildId else { return approvedCount < tasks.count }
+        return LocalStore.shared.enforcementState(childId: childId).isLocked
+    }
     private var minutesLeft: Int { max(0, limitMin - usedMin) }
     private var onBreak: Bool { if let until = onBreakUntil { return Date() < until } else { return false } }
 

@@ -71,7 +71,9 @@
 		E39F20EDA4CFBFEFD8F1FD55 /* TaskData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09012159A0D8B7D4F8CCDF34 /* TaskData.swift */; };
 		F20D199E2F2B8A6821912319 /* ScreenTabletCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1649C506DCAF2B417D8C70E /* ScreenTabletCalendar.swift */; };
 		F3905F5F7712B14EBEF5AD9F /* OnboardingV2Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15DFC08E5C865CAB8A51C20F /* OnboardingV2Theme.swift */; };
+		F4D373F2437F2C20235F1577 /* YouTubeEmbedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3068C0082A87BDF5C6700E02 /* YouTubeEmbedView.swift */; };
 		F872287144FC0F3521FA5488 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 9FFEBC3CBCB4A02DA1386ADF /* Lottie */; };
+		F8CFDA3F8D2A3780B2E8727B /* EnforcementState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 882754A48065498CA0C9C6B1 /* EnforcementState.swift */; };
 		FA987F694C383251CBF531A2 /* ScreenTimePINVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7235C9F06F3B36BEC827AACB /* ScreenTimePINVideoView.swift */; };
 /* End PBXBuildFile section */
 
@@ -85,6 +87,7 @@
 		1736580F21DF3B408C4C1C4F /* SettingsLockListManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLockListManagerView.swift; sourceTree = "<group>"; };
 		21D3DCE7BE6480B09C478F49 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		2695F864BB0C2A358F00D312 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		3068C0082A87BDF5C6700E02 /* YouTubeEmbedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeEmbedView.swift; sourceTree = "<group>"; };
 		315F7E412521D00D78CFF094 /* BillingData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillingData.swift; sourceTree = "<group>"; };
 		35BFBEFD1BE687497AFA1F11 /* NotificationsData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsData.swift; sourceTree = "<group>"; };
 		3C1EA5CA2EF749300A9511A0 /* Baloo2-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Baloo2-Bold.ttf"; sourceTree = "<group>"; };
@@ -101,6 +104,7 @@
 		818AC7F90F32DFC21EF0ABCD /* OnboardingV2ChildSteps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2ChildSteps.swift; sourceTree = "<group>"; };
 		818BC70482046C9B2A75F3A3 /* ParentApprovalWaitingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParentApprovalWaitingView.swift; sourceTree = "<group>"; };
 		83CBCECF2F1B4E7EB19CDB1C /* PlusJakartaSans-ExtraBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-ExtraBold.ttf"; sourceTree = "<group>"; };
+		882754A48065498CA0C9C6B1 /* EnforcementState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnforcementState.swift; sourceTree = "<group>"; };
 		88F7804CB00AEEE75276DFA2 /* PlusJakartaSans-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-Regular.ttf"; sourceTree = "<group>"; };
 		90CDCCC05BBAE584A4035390 /* TabletData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabletData.swift; sourceTree = "<group>"; };
 		90FD88DD9F5911F37061E2AB /* TaskDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskDetailView.swift; sourceTree = "<group>"; };
@@ -199,6 +203,7 @@
 				B7E69D67DC791FD21A5604C5 /* AppSync.swift */,
 				315F7E412521D00D78CFF094 /* BillingData.swift */,
 				7794A43F9156EA4254043CA3 /* CalendarData.swift */,
+				882754A48065498CA0C9C6B1 /* EnforcementState.swift */,
 				8069A78F21788AAE2D1285B1 /* FamilyData.swift */,
 				D21383A1C819AF4B03A22E5B /* KeychainStore.swift */,
 				F0C3ABFD36105EFE6EE6C0EE /* LibraryData.swift */,
@@ -252,6 +257,7 @@
 				AE355C0A6FCB8D50FB0E1618 /* SecurityLottieView.swift */,
 				F69BC0C1C9ECDD428E5DECEB /* SwipeToDismiss.swift */,
 				CFDCFF95587B9B1C93392CB9 /* Theme.swift */,
+				3068C0082A87BDF5C6700E02 /* YouTubeEmbedView.swift */,
 			);
 			path = DesignSystem;
 			sourceTree = "<group>";
@@ -435,6 +441,7 @@
 				55D8223509D4076490266270 /* CalendarData.swift in Sources */,
 				921E72916B874CDB46D07674 /* CameraCapture.swift in Sources */,
 				93DD2562F31193DC22691A81 /* Components.swift in Sources */,
+				F8CFDA3F8D2A3780B2E8727B /* EnforcementState.swift in Sources */,
 				8981DFDD4250E877E419BE29 /* EvlinApp.swift in Sources */,
 				2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */,
 				27D4FDEE06BBCC6977B84F4A /* ImageCache.swift in Sources */,
@@ -475,6 +482,7 @@
 				AE9953D62A105427AFE39AF9 /* TaskDetailView.swift in Sources */,
 				9C9190CC48E4BD8845C27F9E /* TaskReviewDeck.swift in Sources */,
 				63EC9119F6DAA91C32857517 /* Theme.swift in Sources */,
+				F4D373F2437F2C20235F1577 /* YouTubeEmbedView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
