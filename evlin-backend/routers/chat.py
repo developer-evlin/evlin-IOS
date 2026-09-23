@@ -46,6 +46,33 @@ _TOOLS = [
         },
     },
     {
+        "name": "draft_event",
+        "description": (
+            "Pre-fill the app's Add Event card for a calendar entry — practice, an appointment, a trip. Use "
+            "this for something that happens at a time, not something the child has to do and get approved "
+            "(that's draft_task). Does not create the event itself."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "title": {"type": "STRING", "description": "Short event title, e.g. 'Football practice'"},
+                "start_date": {"type": "STRING", "description": "Resolved calendar date as YYYY-MM-DD"},
+                "start_time": {"type": "STRING", "description": "24-hour HH:MM"},
+                "end_time": {"type": "STRING", "description": "24-hour HH:MM. Assume an hour if the parent didn't say."},
+                "recurrence": {
+                    "type": "STRING",
+                    "description": (
+                        "'none', 'daily', or comma-joined weekday codes from mon,tue,wed,thu,fri,sat,sun. "
+                        "Nothing else."
+                    ),
+                },
+                "is_family": {"type": "BOOLEAN", "description": "True for a whole-family event, false when it's this child's own."},
+                "note": {"type": "STRING", "description": "Anything else worth recording, or empty."},
+            },
+            "required": ["title", "start_date", "start_time"],
+        },
+    },
+    {
         "name": "open_block_picker",
         "description": "Open the app's Block an App picker for the parent to choose which app and duration — does not block anything itself.",
         "parameters": {"type": "OBJECT", "properties": {}},
@@ -105,6 +132,7 @@ _TOOLS = [
 # with another tool's line.
 _TOOL_REPLIES = {
     "draft_task": "Sure — let's set that up.",
+    "draft_event": "Here's the event — check the details before you add it.",
     "open_block_picker": "Sure — which app should I block?",
     "propose_reflection": "Good idea — here's a reflection to set up.",
     "generate_course": "I found some videos — have a look before I send them over.",

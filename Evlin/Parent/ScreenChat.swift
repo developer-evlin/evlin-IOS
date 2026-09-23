@@ -20,6 +20,7 @@ private enum ChatCardKind {
     // clean his room every Saturday morning") hands back a drafted task to
     // confirm/edit rather than a blank form the parent re-types by hand.
     case addTask(draft: TaskDraft)
+    case addEvent(draft: EventDraft)
     // The agent has already searched, checked and drafted a real course by
     // the time this appears — these carry its id so the card shows the
     // actual videos it picked and why, not a description of them.
@@ -64,7 +65,10 @@ private struct ComposerHeightKey: PreferenceKey {
 // without it SwiftUI's Text can request its ideal single-line width even
 // inside a maxWidth frame, which is the classic cause of chat rows
 // overflowing horizontally.
-private let bubbleMaxWidth: CGFloat = 300
+// Shared by the chat bubbles and every card that sits inline with
+// them (AddTaskCard here, AddEventCard in its own file), so they all
+// line up at the same width.
+let bubbleMaxWidth: CGFloat = 300
 
 // Renders a message body: ```-fenced code blocks split into their own
 // monospaced, horizontally-scrollable strip so a long code line scrolls
@@ -1147,6 +1151,8 @@ struct ScreenChat: View {
                 // exist once the agent has actually built a course, which a
                 // canned prompt can't have done.
                 case .reviewCourse, .specialTask: intro = ""
+                // Only reachable from a real draft_event tool call.
+                case .addEvent: intro = ""
                 }
                 messages.append(ChatMessage(fromUser: false, text: intro, card: card))
             }
@@ -1211,6 +1217,8 @@ struct ScreenChat: View {
             // re-parsed with string matching — which failed on every real
             // tool call, so the card always arrived empty.
             return .addTask(draft: TaskDraft(toolArgs: message.toolArgs))
+        case "draft_event":
+            return .addEvent(draft: EventDraft(toolArgs: message.toolArgs))
         case "propose_reflection":
             // The model suggests *that* a reflection should happen, not its
             // content — the parent picks the video and questions, same as
@@ -1372,6 +1380,33 @@ struct ScreenChat: View {
         return "Added \"\(title)\"\(when)."
     }
 
+    private func handleAddEvent(_ draft: EventDraft) {
+        guard !draft.isEmpty else { return }
+        Task {
+            do {
+                _ = try await APIClient.shared.createEvent(
+                    // nil childId is the family lane — see CalendarData.everyone.
+                    childId: draft.isFamily ? nil : session.activeChildId,
+                    title: draft.title, start: draft.startsAt, end: draft.endsAt,
+                    category: nil, note: draft.note.isEmpty ? nil : draft.note,
+                    location: nil, recurrence: draft.recurrence, isParentOnly: false
+                )
+                await AppSync.shared.syncBackendData()
+                let f = DateFormatter(); f.dateFormat = "EEEE d MMM 'at' h:mm a"
+                await MainActor.run {
+                    messages.append(ChatMessage(
+                        fromUser: false,
+                        text: "Added \"\(draft.title)\" on \(f.string(from: draft.startsAt))."))
+                }
+            } catch {
+                await MainActor.run {
+                    messages.append(ChatMessage(fromUser: false,
+                                                text: "That event wasn't saved. \(error.apiUserMessage)"))
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func cardView(for kind: ChatCardKind) -> some View {
         switch kind {
@@ -1381,6 +1416,8 @@ struct ScreenChat: View {
             BlockDurationCard(apps: apps) { minutes in handleBlockDuration(apps: apps, minutes: minutes) }
         case .addTask(let draft):
             AddTaskCard(draft: draft, onCreate: handleAddTask)
+        case .addEvent(let draft):
+            AddEventCard(draft: draft, onCreate: handleAddEvent)
         case .reviewCourse(let courseId, let title):
             CourseProposalCard(courseId: courseId, title: title, bonusMinutes: nil) { note in
                 messages.append(ChatMessage(fromUser: false, text: note))
