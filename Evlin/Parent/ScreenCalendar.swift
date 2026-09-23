@@ -196,6 +196,9 @@ struct ScreenCalendar: View {
     // ScreenHome) — there's nothing to review, so the profile is the
     // closest honest landing spot.
     @State private var reviewTasks: [ChildTask] = []
+    // Passing a childId to the deck is what enables its auto-unlock; only
+    // sound when the deck is showing today's tasks (see openTaskDetail).
+    @State private var reviewCanAutoUnlock = false
     @State private var reviewChildName = ""
     // Needed to sync an approval back into eventsByDay on dismiss (see
     // syncReviewedTasks) — ChildTask ids aren't globally unique, only
@@ -241,17 +244,35 @@ struct ScreenCalendar: View {
     // the profile is the closest honest landing spot. Shared by both a
     // direct task tap and a due-marker group of exactly one.
     private func openTaskDetail(_ de: CalDayEvent) {
-        let tasks = TaskStore.tasks(for: de.event.personId)
-        if let linkedId = de.event.linkedTaskId,
-           let idx = tasks.firstIndex(where: { $0.id == linkedId }) {
-            reviewTasks = tasks
-            reviewChildName = CalendarData.person(de.event.personId).name
-            reviewPersonId = de.event.personId
-            reviewStartIndex = idx
-            showTaskReview = true
-        } else {
+        guard let linkedId = de.event.linkedTaskId else {
             openChildId = de.event.personId
+            return
         }
+        // Only the tapped day's tasks, for the tapped person — swiping used
+        // to page through that child's entire task list, so a task from
+        // another day showed up while reviewing this one.
+        var visible = Set(CalendarData.linkedTaskIDs(
+            in: expandedEvents(for: de.day), personId: de.event.personId))
+        // The tapped task is on this day by definition; belt-and-braces so a
+        // gap in the day's events can never drop the thing being opened.
+        visible.insert(linkedId)
+
+        let dayTasks = TaskStore.tasks(for: de.event.personId).filter { visible.contains($0.id) }
+        guard let idx = dayTasks.firstIndex(where: { $0.id == linkedId }) else {
+            openChildId = de.event.personId
+            return
+        }
+
+        reviewTasks = dayTasks
+        reviewChildName = CalendarData.person(de.event.personId).name
+        reviewPersonId = de.event.personId
+        // Index into the filtered list, not the full one.
+        reviewStartIndex = idx
+        // Auto-unlock keys off "everything this deck can see is resolved",
+        // which is only a sound basis for unlocking when the deck is showing
+        // today. Reviewing last Tuesday must not unlock the phone now.
+        reviewCanAutoUnlock = CalendarData.isToday(day: de.day)
+        showTaskReview = true
     }
 
     // TaskReviewDeckView mutates its own ChildTask/TaskStore-backed array —
@@ -448,7 +469,7 @@ struct ScreenCalendar: View {
         // The direct jump: no ScreenProfile instance involved at all, so
         // dismissing this lands right back on the calendar.
         .fullScreenCover(isPresented: $showTaskReview) {
-            TaskReviewDeckView(tasks: $reviewTasks, childName: reviewChildName, childId: reviewPersonId, startIndex: reviewStartIndex, onDismiss: {
+            TaskReviewDeckView(tasks: $reviewTasks, childName: reviewChildName, childId: reviewCanAutoUnlock ? reviewPersonId : nil, startIndex: reviewStartIndex, onDismiss: {
                 syncReviewedTasks(reviewTasks, personId: reviewPersonId)
                 showTaskReview = false
             })
@@ -1480,6 +1501,7 @@ private struct TaskDueGroupSheet: View {
     // ChildTask ids aren't globally unique, only unique per child.
     @State private var reviewPersonId = ""
     @State private var reviewStartIndex = 0
+    @State private var reviewCanAutoUnlock = false
     @State private var showTaskReview = false
     @State private var openChildId: String?
 
@@ -1537,7 +1559,7 @@ private struct TaskDueGroupSheet: View {
             }
         }
         .fullScreenCover(isPresented: $showTaskReview) {
-            TaskReviewDeckView(tasks: $reviewTasks, childName: reviewChildName, childId: reviewPersonId, startIndex: reviewStartIndex, onDismiss: {
+            TaskReviewDeckView(tasks: $reviewTasks, childName: reviewChildName, childId: reviewCanAutoUnlock ? reviewPersonId : nil, startIndex: reviewStartIndex, onDismiss: {
                 syncReviewedTasks()
                 showTaskReview = false
             })
@@ -1566,17 +1588,27 @@ private struct TaskDueGroupSheet: View {
     // to the kid's profile. Presented from this sheet's own view (not the
     // calendar root), so dismissing it lands back here, not on the grid.
     private func openDetail(_ de: CalDayEvent) {
-        let allTasks = TaskStore.tasks(for: de.event.personId)
-        if let linkedId = de.event.linkedTaskId,
-           let idx = allTasks.firstIndex(where: { $0.id == linkedId }) {
-            reviewTasks = allTasks
-            reviewChildName = person.name
-            reviewPersonId = de.event.personId
-            reviewStartIndex = idx
-            showTaskReview = true
-        } else {
+        guard let linkedId = de.event.linkedTaskId else {
             openChildId = de.event.personId
+            return
         }
+        // `tasks` is already this one day's group for this one person, so
+        // it's exactly the set the deck should page through — no wider list.
+        var visible = Set(CalendarData.linkedTaskIDs(in: tasks, personId: de.event.personId))
+        visible.insert(linkedId)
+
+        let dayTasks = TaskStore.tasks(for: de.event.personId).filter { visible.contains($0.id) }
+        guard let idx = dayTasks.firstIndex(where: { $0.id == linkedId }) else {
+            openChildId = de.event.personId
+            return
+        }
+
+        reviewTasks = dayTasks
+        reviewChildName = person.name
+        reviewPersonId = de.event.personId
+        reviewStartIndex = idx
+        reviewCanAutoUnlock = CalendarData.isToday(day: de.day)
+        showTaskReview = true
     }
 
 

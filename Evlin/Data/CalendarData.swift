@@ -90,6 +90,22 @@ enum CalendarData {
     /// dataDay is just some other month's same-numbered day.
     static var isDisplayingCurrentMonth: Bool { dataYear == todayYear && dataMonth == todayMonth }
 
+    /// Whether `day` in the displayed month is genuinely today.
+    static func isToday(day: Int) -> Bool { isDisplayingCurrentMonth && day == dataDay }
+
+    /// The linked ChildTask ids visible on one day for one person, in the
+    /// order they're shown.
+    ///
+    /// Opening the review deck from a calendar day should page through that
+    /// day and nothing else. Derived from the events the day already
+    /// rendered rather than re-deciding which tasks fall on a date, so it
+    /// can't disagree with what's on screen.
+    static func linkedTaskIDs(in dayEvents: [CalDayEvent], personId: String) -> [String] {
+        dayEvents
+            .filter { $0.event.personId == personId }
+            .compactMap { $0.event.linkedTaskId }
+    }
+
     static func date(day: Int, minutes: Int = 0) -> Date {
         var c = DateComponents(); c.year = dataYear; c.month = dataMonth; c.day = day
         c.hour = minutes / 60; c.minute = minutes % 60
