@@ -36,6 +36,54 @@ _TOOLS = [
         "description": "Open the app's Block an App picker for the parent to choose which app and duration — does not block anything itself.",
         "parameters": {"type": "OBJECT", "properties": {}},
     },
+    {
+        "name": "propose_reflection",
+        "description": (
+            "Suggest the child be given a reflection — a video to watch plus questions to answer, which locks "
+            "the device until it's done. Opens the reflection card for the parent to fill in and confirm; "
+            "does not assign anything."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "title": {"type": "STRING", "description": "What the reflection is about"},
+                "reason": {"type": "STRING", "description": "Why this is being suggested now"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "generate_course",
+        "description": (
+            "Search YouTube and assemble a vetted, ordered course on a topic, for the parent to review and "
+            "approve. Nothing reaches the child until they approve it."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "topic": {"type": "STRING", "description": "What the course should teach"},
+                "video_count": {"type": "INTEGER", "description": "How many videos, 1-10. Default 4."},
+            },
+            "required": ["topic"],
+        },
+    },
+    {
+        "name": "draft_special_task",
+        "description": (
+            "Draft a task the child completes by watching a vetted course and answering its quizzes, earning "
+            "bonus screen time. Builds the course and opens the card for the parent to confirm; creates nothing."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "title": {"type": "STRING", "description": "Short task title"},
+                "topic": {"type": "STRING", "description": "What the course should teach"},
+                "bonus_minutes": {"type": "INTEGER", "description": "Screen-time minutes earned, 0 if none"},
+                "video_count": {"type": "INTEGER", "description": "How many videos, 1-10. Default 3."},
+            },
+            "required": ["title", "topic"],
+        },
+    },
 ]
 
 # What the assistant says while the card it just opened does the rest. Keyed
@@ -44,8 +92,17 @@ _TOOLS = [
 _TOOL_REPLIES = {
     "draft_task": "Sure — let's set that up.",
     "open_block_picker": "Sure — which app should I block?",
+    "propose_reflection": "Good idea — here's a reflection to set up.",
+    "generate_course": "I found some videos — have a look before I send them over.",
+    "draft_special_task": "Here's a task built around a course — check the videos before you create it.",
 }
 _DEFAULT_TOOL_REPLY = "Sure — let's set that up."
+
+# Tools whose handler does real work server-side before replying (searching
+# YouTube, running a vetting pass) rather than just signalling the client to
+# open a card. Kept apart because they're slow and can fail for reasons the
+# parent needs told about.
+_COURSE_BUILDING_TOOLS = ("generate_course", "draft_special_task")
 
 
 def _stringify_tool_args(args: dict | None) -> dict:
@@ -58,6 +115,37 @@ def _stringify_tool_args(args: dict | None) -> dict:
     here keeps that contract true no matter what a tool's schema declares.
     """
     return {k: ("" if v is None else str(v)) for k, v in (args or {}).items()}
+
+
+async def _build_course_for_tool(db: Session, child: models.Child, tool_name: str,
+                                 args: dict, parent: models.Parent) -> dict:
+    """Run the real search-and-vet pipeline for a course-building tool call.
+
+    The course is saved as a draft (pending_review) and its id handed back on
+    the chat message, so the card the parent sees is backed by real, checked
+    videos rather than titles the model made up. Approving the card — or
+    creating the task from it — is what publishes it.
+    """
+    from routers.courses import generate_and_vet_course
+
+    default_count = 3 if tool_name == "draft_special_task" else 4
+    try:
+        video_count = int(args.get("video_count") or default_count)
+    except (TypeError, ValueError):
+        video_count = default_count
+    video_count = max(1, min(video_count, 10))
+
+    topic = (args.get("topic") or args.get("title") or "").strip()
+    course = await generate_and_vet_course(
+        db, topic, video_count=video_count, child=child,
+        created_by_parent_id=parent.id,
+    )
+    db.commit()
+    db.refresh(course)
+
+    args["course_id"] = str(course.id)
+    args["course_title"] = course.title
+    return args
 
 
 def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: list[models.Occurrence], rule: models.ChildRule | None) -> str:
@@ -129,10 +217,13 @@ async def send_chat_message(
         raise HTTPException(status_code=502, detail=f"Chat request failed: {e}")
 
     if isinstance(call, FunctionCall):
+        args = dict(call.args)
+        if call.name in _COURSE_BUILDING_TOOLS:
+            args = await _build_course_for_tool(db, child, call.name, args, current_parent)
         assistant_row = models.ChatMessage(
             child_id=child_id, role="assistant",
             text=_TOOL_REPLIES.get(call.name, _DEFAULT_TOOL_REPLY),
-            tool_call=call.name, tool_args=_stringify_tool_args(call.args),
+            tool_call=call.name, tool_args=_stringify_tool_args(args),
         )
     else:
         assistant_row = models.ChatMessage(child_id=child_id, role="assistant", text=text or "...")

@@ -135,6 +135,86 @@ def test_system_prompt_lists_the_tools_actually_passed(client, db_session, monke
     assert "two tools" not in captured["prompt"]
 
 
+def _mock_course_pipeline(monkeypatch):
+    import routers.courses as courses_router
+
+    async def _search(query, max_results=10):
+        return [{"video_id": "vid1", "title": "Fractions", "channel_title": "MathCo",
+                 "description": "", "duration": "PT5M", "made_for_kids": True,
+                 "content_rating": {}, "embeddable": True, "thumbnail_url": "t"}]
+
+    async def _vet(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="propose_course", args={
+            "title": "Fractions basics",
+            "items": [{"video_id": "vid1", "reason": "age-appropriate", "quiz": []}]})
+
+    monkeypatch.setattr(courses_router, "youtube_configured", lambda: True)
+    monkeypatch.setattr(courses_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(courses_router, "search_with_details", _search)
+    monkeypatch.setattr(courses_router, "generate", _vet)
+
+
+def test_course_tool_builds_a_real_draft_course_and_returns_its_id(client, db_session, monkeypatch):
+    async def _call_course_tool(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="generate_course", args={"topic": "fractions", "video_count": 1})
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _call_course_tool)
+    _mock_course_pipeline(monkeypatch)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+
+    body = client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                       json={"text": "make a course about fractions"}).json()
+    assert body["tool_call"] == "generate_course"
+    course_id = body["tool_args"]["course_id"]
+
+    # Backed by a real, checked course — not titles the model made up.
+    course = client.get(f"/courses/{course_id}", headers=auth("pa")).json()
+    assert course["items"][0]["video_id"] == "vid1"
+    # Still a draft: a chat message can't put videos in front of a child.
+    assert course["status"] == "pending_review"
+    assert client.get(f"/children/{c.id}/course-assignments", headers=auth("pa")).json() == []
+
+
+def test_special_task_tool_carries_its_course_and_bonus_to_the_card(client, db_session, monkeypatch):
+    async def _call_special_task(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="draft_special_task", args={
+            "title": "Learn fractions", "topic": "fractions", "bonus_minutes": 30})
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _call_special_task)
+    _mock_course_pipeline(monkeypatch)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+
+    body = client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                       json={"text": "task worth 30 min to learn fractions"}).json()
+    assert body["tool_call"] == "draft_special_task"
+    assert body["tool_args"]["bonus_minutes"] == "30"
+    assert body["tool_args"]["course_id"]
+    # Proposing is not creating.
+    assert db_session.query(models.Task).filter(models.Task.child_id == c.id).count() == 0
+
+
+def test_proposing_a_reflection_assigns_nothing(client, db_session, monkeypatch):
+    async def _propose(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="propose_reflection",
+                                  args={"title": "Being kind online", "reason": "argument at school"})
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _propose)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+
+    body = client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                       json={"text": "he was mean online today"}).json()
+    assert body["tool_call"] == "propose_reflection"
+    assert client.get(f"/children/{c.id}/reflections", headers=auth("pa")).json() == []
+    # And the device isn't locked off the back of a chat message.
+    assert client.get(f"/children/{c.id}/state", headers=auth("pa")).json()["has_open_reflection"] is False
+
+
 def test_grounding_reflects_real_tasks_not_invented_ones(client, db_session, monkeypatch):
     captured = {}
 
