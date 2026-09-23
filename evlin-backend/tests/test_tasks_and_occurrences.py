@@ -258,6 +258,46 @@ def test_redo_note_reaches_the_kid_and_resubmitting_clears_it(client, db_session
     assert again["status"] == "submitted" and again["rejection_note"] is None
 
 
+def test_course_is_an_accepted_submission_kind(client, db_session):
+    # A "special task" is completed by finishing an assigned course rather
+    # than by photo/voice evidence. Both the server's own vocabulary and the
+    # DB CHECK constraint (see the migration) have to accept it — without
+    # the former it was silently coerced to "none", losing the course with
+    # no error anywhere.
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    r = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                     json={"title": "Watch the water cycle course", "submission_kind": "course"}).json()
+    assert r["submission_kind"] == "course"
+
+
+def test_both_review_routes_award_the_task_bonus(client, db_session):
+    # Approving through PUT /status used to skip _review entirely, so the
+    # bonus (and every later approval side effect) fired or didn't purely
+    # based on which endpoint the client happened to call.
+    c, occ = _occurrence(client, db_session)
+    task_id = client.get(f"/children/{c.id}/tasks", headers=auth("pa")).json()[0]["id"]
+    client.put(f"/tasks/{task_id}", headers=auth("pa"),
+               json={"title": "d", "recurrence": "daily", "bonus_minutes": 15})
+
+    r = client.put(f"/occurrences/{occ['id']}/status", headers=auth("pa"), json={"status": "approved"})
+    assert r.status_code == 200 and r.json()["status"] == "approved"
+
+    grants = client.get(f"/children/{c.id}/time-grants", headers=auth("pa")).json()
+    assert grants["granted_minutes"] == 15
+    assert [g["source"] for g in grants["grants"]] == ["task_bonus"]
+
+
+def test_rejecting_a_bypass_returns_the_task_to_pending_on_both_routes(client, db_session):
+    # evlin-tables.sql documents this as the intended resolution ("the child
+    # still owes the original task"), but only the PUT route implemented it
+    # before the two review paths were unified.
+    c, occ = _occurrence(client, db_session)
+    client.post(f"/occurrences/{occ['id']}/bypass", headers=auth("dev-kid"), json={"bypass_note": "sick"})
+    r = client.post(f"/tasks/occurrences/{occ['id']}/reject", headers=auth("pa")).json()
+    assert r["status"] == "pending" and r["bypass_requested"] is False
+
+
 def test_kid_bypass_request_is_visible_and_approval_keeps_the_flag(client, db_session):
     c, occ = _occurrence(client, db_session)
     r = client.post(f"/occurrences/{occ['id']}/bypass", headers=auth("dev-kid"), json={"bypass_note": "sick today"})

@@ -38,11 +38,35 @@ _TOOLS = [
     },
 ]
 
+# What the assistant says while the card it just opened does the rest. Keyed
+# by tool name rather than an if/else so adding a tool can't silently answer
+# with another tool's line.
+_TOOL_REPLIES = {
+    "draft_task": "Sure — let's set that up.",
+    "open_block_picker": "Sure — which app should I block?",
+}
+_DEFAULT_TOOL_REPLY = "Sure — let's set that up."
+
+
+def _stringify_tool_args(args: dict | None) -> dict:
+    """Every tool arg is persisted as a string.
+
+    The iOS client decodes tool_args as [String: String] (APIModels.swift),
+    so a single numeric value — which Gemini returns as a JSON number for
+    any numeric parameter — fails the decode of the *entire* ChatMessage,
+    taking the whole transcript with it, not just that one card. Coercing
+    here keeps that contract true no matter what a tool's schema declares.
+    """
+    return {k: ("" if v is None else str(v)) for k, v in (args or {}).items()}
+
 
 def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: list[models.Occurrence], rule: models.ChildRule | None) -> str:
     today_occ_by_task = {o.task_id: o for o in occurrences}
     lines = [f"You are Evlin, a parental-control assistant helping a parent manage {child.name}'s tasks and screen time."]
-    lines.append("You can have a normal conversation, or call one of the two tools you're given — draft_task or open_block_picker.")
+    # Listed from _TOOLS rather than restated in prose, so the prompt can't
+    # drift into describing a tool set the model wasn't actually given.
+    tool_names = " or ".join(t["name"] for t in _TOOLS)
+    lines.append(f"You can have a normal conversation, or call one of the tools you're given — {tool_names}.")
     lines.append("Never claim you created a task, blocked an app, changed a rule, or granted time — you can't do any of that directly. "
                   "If asked for something you have no tool for (a bedtime/downtime rule, adding a calendar event, granting extra screen "
                   "time), say plainly that you can't do that yet and suggest where in the app to do it, rather than pretending it's done.")
@@ -105,10 +129,10 @@ async def send_chat_message(
         raise HTTPException(status_code=502, detail=f"Chat request failed: {e}")
 
     if isinstance(call, FunctionCall):
-        reply_text = "Sure — let's set that up." if call.name == "draft_task" else "Sure — which app should I block?"
         assistant_row = models.ChatMessage(
-            child_id=child_id, role="assistant", text=reply_text,
-            tool_call=call.name, tool_args=call.args,
+            child_id=child_id, role="assistant",
+            text=_TOOL_REPLIES.get(call.name, _DEFAULT_TOOL_REPLY),
+            tool_call=call.name, tool_args=_stringify_tool_args(call.args),
         )
     else:
         assistant_row = models.ChatMessage(child_id=child_id, role="assistant", text=text or "...")

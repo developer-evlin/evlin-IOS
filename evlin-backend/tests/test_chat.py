@@ -82,6 +82,59 @@ def test_chat_access_control(client, db_session, monkeypatch):
     assert client.get(f"/children/{kid.id}/chat", headers=auth("pb")).status_code == 404
 
 
+def test_numeric_tool_args_are_stored_as_strings(client, db_session, monkeypatch):
+    # The iOS client decodes tool_args as [String: String]; a raw JSON number
+    # from the model would fail the decode of the whole ChatMessage and take
+    # the entire transcript down with it, not just the one card.
+    async def _numeric_args(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="draft_task", args={"title": "Read", "bonus_minutes": 30, "nothing": None})
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _numeric_args)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+
+    body = client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "reading task worth 30 min"}).json()
+    assert body["tool_args"] == {"title": "Read", "bonus_minutes": "30", "nothing": ""}
+    assert all(isinstance(v, str) for v in body["tool_args"].values())
+
+
+def test_unknown_tool_does_not_borrow_another_tools_reply(client, db_session, monkeypatch):
+    # Previously a binary if/else: any tool that wasn't draft_task answered
+    # "which app should I block?", which gets wrong the moment a third exists.
+    async def _other_tool(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="some_future_tool", args={})
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _other_tool)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+
+    body = client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "do the thing"}).json()
+    assert body["tool_call"] == "some_future_tool"
+    assert "block" not in body["text"].lower()
+
+
+def test_system_prompt_lists_the_tools_actually_passed(client, db_session, monkeypatch):
+    captured = {}
+
+    async def _capture(system_prompt, messages, tools=None):
+        captured["prompt"] = system_prompt
+        captured["tools"] = tools
+        return "ok", None
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _capture)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "hi"})
+
+    for tool in captured["tools"]:
+        assert tool["name"] in captured["prompt"]
+    # and no stale count claim that a new tool would falsify
+    assert "two tools" not in captured["prompt"]
+
+
 def test_grounding_reflects_real_tasks_not_invented_ones(client, db_session, monkeypatch):
     captured = {}
 

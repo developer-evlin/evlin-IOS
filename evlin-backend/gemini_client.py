@@ -13,7 +13,11 @@ import os
 import httpx
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-_MODEL = "gemini-2.0-flash"
+# The rolling alias, not a pinned version: the previously hardcoded
+# "gemini-2.0-flash" was retired by Google and every call started 404ing
+# with "no longer available". The alias tracks whatever the current flash
+# model is, so that breakage can't recur on the next rotation.
+_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 _BASE_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{_MODEL}:generateContent"
 
 

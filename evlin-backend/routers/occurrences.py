@@ -87,28 +87,22 @@ def get_occurrences(child_id: UUID, target_date: date = Query(...), db: Session 
     return occurrences
 
 @router.put("/occurrences/{occurrence_id}/status", response_model=schemas.OccurrenceResponse)
-def update_occurrence_status(occurrence_id: UUID, status_update: schemas.OccurrenceStatusUpdate, 
-                             current_parent: models.Parent = Depends(get_current_parent), 
+def update_occurrence_status(occurrence_id: UUID, status_update: schemas.OccurrenceStatusUpdate,
+                             current_parent: models.Parent = Depends(get_current_parent),
                              db: Session = Depends(get_db)):
-    """Parent approves or rejects an occurrence"""
-    occurrence = get_occurrence_for_parent(db, current_parent, occurrence_id)
+    """Parent approves or rejects an occurrence.
+
+    Delegates to _review like the /approve and /reject routes do: approving
+    has side effects (bonus minutes, and more as they land) and which of the
+    two review endpoints a client happens to call must not decide whether
+    those fire. The app uses this route for redo-with-a-note and the POST
+    routes for plain approve/reject, so both are live.
+    """
     if status_update.status not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="status must be 'approved' or 'rejected'")
 
-    occurrence.status = status_update.status
-    if status_update.status == "approved":
-        occurrence.approved_at = datetime.now(timezone.utc)
-        occurrence.approved_by = current_parent.id
-    elif status_update.status == "rejected":
-        occurrence.rejection_note = status_update.rejection_note
-        # If rejecting a bypass request, clear the bypass flag so it stays pending
-        if occurrence.bypass_requested:
-            occurrence.bypass_requested = False
-            occurrence.status = "pending"
-            
-    db.commit()
-    db.refresh(occurrence)
-    return occurrence
+    return _review(occurrence_id, status_update.status == "approved", current_parent, db,
+                   rejection_note=status_update.rejection_note)
 
 @router.post("/occurrences/{occurrence_id}/bypass", response_model=schemas.OccurrenceResponse)
 def request_bypass(occurrence_id: UUID, bypass_req: schemas.OccurrenceBypassRequest, 
@@ -150,21 +144,46 @@ def submit_occurrence(occurrence_id: UUID, body: schemas.OccurrenceBypassRequest
     return occurrence
 
 
-def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Session):
+def _award_task_bonus(occurrence: models.Occurrence, task: models.Task | None,
+                      parent: models.Parent, db: Session) -> None:
+    """A special task's screen-time reward. Doesn't commit — _review owns that."""
+    if task and task.bonus_minutes > 0:
+        award_time_grant(
+            db, occurrence.child_id, task.bonus_minutes, source="task_bonus",
+            reason=f"Task: {task.title}", granted_by_parent_id=parent.id,
+            source_ref_id=occurrence.id,
+        )
+
+
+def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Session,
+            rejection_note: str | None = None):
+    """The one place a parent's review of an occurrence is applied.
+
+    Every approval side effect hangs off here rather than off a route, so
+    they can't silently not fire depending on which endpoint was called.
+    Each is an independent step over the same occurrence/task rows, folded
+    into the single commit at the end.
+    """
     occurrence = get_occurrence_for_parent(db, parent, occurrence_id)
+    task = db.query(models.Task).filter(models.Task.id == occurrence.task_id).first()
+
     if approved:
         occurrence.status = "approved"
         occurrence.approved_at = datetime.now(timezone.utc)
         occurrence.approved_by = parent.id
-        task = db.query(models.Task).filter(models.Task.id == occurrence.task_id).first()
-        if task and task.bonus_minutes > 0:
-            award_time_grant(
-                db, occurrence.child_id, task.bonus_minutes, source="task_bonus",
-                reason=f"Task: {task.title}", granted_by_parent_id=parent.id,
-                source_ref_id=occurrence.id,
-            )
+        _award_task_bonus(occurrence, task, parent, db)
     else:
         occurrence.status = "rejected"
+        occurrence.rejection_note = rejection_note
+        # Rejecting a bypass means "no, you still owe me this one" — the
+        # request is withdrawn and the occurrence goes back to pending,
+        # rather than sitting in a rejected-but-still-requested state.
+        # (evlin-tables.sql documents this as the intended resolution; only
+        # the PUT route implemented it before these paths were unified.)
+        if occurrence.bypass_requested:
+            occurrence.bypass_requested = False
+            occurrence.status = "pending"
+
     db.commit()
     db.refresh(occurrence)
     return occurrence

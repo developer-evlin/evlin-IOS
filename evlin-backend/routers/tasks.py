@@ -27,7 +27,11 @@ def _derive_bucket(due_time: Optional[time]) -> str:
     return "evening"
 
 
-_VALID_SUBMISSION_KINDS = {"none", "photo", "voice", "either"}
+# 'course' means the task is completed by finishing an assigned course
+# (watch the videos, answer the quizzes) instead of by photo/voice evidence.
+# The DB's own CHECK constraint on this column has to accept it too — see
+# the submission_kind migration in main.py.
+_VALID_SUBMISSION_KINDS = {"none", "photo", "voice", "either", "course"}
 
 
 def _safe_submission_kind(value: str) -> str:

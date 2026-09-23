@@ -117,6 +117,31 @@ _MIGRATIONS = [
         created_at timestamptz NOT NULL DEFAULT now()
     )""",
     "CREATE INDEX IF NOT EXISTS chat_messages_child_id_idx ON app.chat_messages(child_id, created_at)",
+    # The original schema constrained submission_kind to
+    # ('none','photo','voice','either'). A "special task" — completed by
+    # finishing an assigned course rather than by photo/voice evidence —
+    # needs 'course' too, or every such save dies on the constraint. Same
+    # introspect-then-replace shape as the recurrence constraint above,
+    # for the same reason: the auto-generated name can't be relied on.
+    """DO $$
+    DECLARE r record;
+    BEGIN
+        FOR r IN
+            SELECT con.conname FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'app' AND rel.relname = 'tasks' AND con.contype = 'c'
+              AND pg_get_constraintdef(con.oid) ILIKE '%submission_kind%'
+        LOOP
+            EXECUTE format('ALTER TABLE app.tasks DROP CONSTRAINT %I', r.conname);
+        END LOOP;
+    END $$""",
+    """DO $$
+    BEGIN
+        ALTER TABLE app.tasks ADD CONSTRAINT tasks_submission_kind_check
+            CHECK (submission_kind IN ('none','photo','voice','either','course'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$""",
 ]
 
 
