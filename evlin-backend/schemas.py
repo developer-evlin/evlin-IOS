@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 from typing import Optional, List
 from datetime import datetime, date
 from uuid import UUID
@@ -260,6 +260,13 @@ class ChildStateUpdate(ChildStateBase):
 class ChildStateResponse(ChildStateBase):
     child_id: UUID
     updated_at: datetime
+    # Computed, not a column: whether an unresolved reflection is holding the
+    # gate closed. The client ORs this with its own task check — a pending
+    # reflection locks the device regardless of task status, and clearing it
+    # doesn't satisfy outstanding tasks. Defaults False so a response built
+    # straight from the ORM row (where this attribute doesn't exist) still
+    # validates.
+    has_open_reflection: bool = False
 
     class Config:
         from_attributes = True
@@ -406,6 +413,58 @@ class CourseAssignmentResponse(BaseModel):
 
 class CourseItemCompleteRequest(BaseModel):
     quiz_answers: Optional[List[int]] = None
+
+
+class ReflectionCreate(BaseModel):
+    """Either path to the video+quiz content: a specific video the parent
+    picked (the common case — a one-video course is made for it), or an
+    existing/generated course to assign."""
+    video_id: Optional[str] = None
+    video_title: Optional[str] = None
+    channel_title: Optional[str] = None
+    quiz: List[dict] = []
+    course_id: Optional[UUID] = None
+    written_prompt: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _one_content_source(self):
+        if bool(self.video_id) == bool(self.course_id):
+            raise ValueError("give exactly one of video_id or course_id")
+        return self
+
+
+class ReflectionSubmit(BaseModel):
+    written_response: Optional[str] = None
+
+
+class ReflectionReview(BaseModel):
+    status: str  # 'approved' | 'needs_redo'
+    review_note: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def _reviewable(cls, v):
+        if v not in ("approved", "needs_redo"):
+            raise ValueError("status must be 'approved' or 'needs_redo'")
+        return v
+
+
+class ReflectionResponse(BaseModel):
+    id: UUID
+    child_id: UUID
+    course_assignment_id: UUID
+    written_prompt: Optional[str] = None
+    written_response: Optional[str] = None
+    status: str
+    review_note: Optional[str] = None
+    created_by: str
+    created_at: datetime
+    submitted_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    assignment: Optional[CourseAssignmentResponse] = None
+
+    class Config:
+        from_attributes = True
 
 
 class ChatSendRequest(BaseModel):

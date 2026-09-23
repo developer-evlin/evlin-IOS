@@ -53,6 +53,16 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
     db.refresh(rules)
     return rules
 
+def _state_response(db: Session, state: models.ChildState) -> schemas.ChildStateResponse:
+    """The gate flag is a query result, not a column, so the response is
+    built explicitly rather than serialized straight off the ORM row."""
+    from routers.reflections import child_has_open_reflection
+
+    body = schemas.ChildStateResponse.model_validate(state)
+    body.has_open_reflection = child_has_open_reflection(db, state.child_id)
+    return body
+
+
 @router.get("/children/{child_id}/state", response_model=schemas.ChildStateResponse)
 def get_child_state(child_id: UUID, db: Session = Depends(get_db), _access: None = Depends(assert_child_access)):
     state = db.query(models.ChildState).filter(models.ChildState.child_id == child_id).first()
@@ -61,7 +71,7 @@ def get_child_state(child_id: UUID, db: Session = Depends(get_db), _access: None
         db.add(state)
         db.commit()
         db.refresh(state)
-    return state
+    return _state_response(db, state)
 
 @router.put("/children/{child_id}/state", response_model=schemas.ChildStateResponse)
 def update_child_state(child_id: UUID, state_update: schemas.ChildStateUpdate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
@@ -74,7 +84,7 @@ def update_child_state(child_id: UUID, state_update: schemas.ChildStateUpdate, c
     state.manual_lock = state_update.manual_lock
     state.task_gate_override = state_update.task_gate_override
     state.updated_at = datetime.now(timezone.utc)
-    
+
     db.commit()
     db.refresh(state)
-    return state
+    return _state_response(db, state)

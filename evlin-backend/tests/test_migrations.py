@@ -51,7 +51,7 @@ def test_every_new_table_has_a_migration_matching_its_model():
 
     sql = "\n".join(main._MIGRATIONS)
     for model in (models.Course, models.CourseItem, models.CourseAssignment,
-                  models.CourseItemProgress):
+                  models.CourseItemProgress, models.Reflection):
         table = model.__tablename__
         assert f"app.{table}" in sql, f"{table} has a model but no migration"
         for column in model.__table__.columns:

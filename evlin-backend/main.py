@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses, reflections
 from storage import storage_configured
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
@@ -191,6 +191,42 @@ _MIGRATIONS = [
     )""",
     """CREATE UNIQUE INDEX IF NOT EXISTS course_item_progress_assignment_item_uidx
         ON app.course_item_progress(assignment_id, course_item_id)""",
+    # The original evlin-tables.sql created an app.reflections that was never
+    # wired to anything (no model, no router, no way to write it) and whose
+    # columns are nothing like the real one below. CREATE TABLE IF NOT EXISTS
+    # would silently no-op against it, leaving the model pointing at columns
+    # that don't exist — passing every test (SQLite builds from models) and
+    # 500ing in production.
+    #
+    # Renamed rather than dropped: it's almost certainly empty, but "almost
+    # certainly" isn't a good enough reason to run an irreversible statement
+    # against a live database. Guarded so it's idempotent and can't touch the
+    # new table once that exists.
+    """DO $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables
+                   WHERE table_schema = 'app' AND table_name = 'reflections')
+           AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema = 'app' AND table_name = 'reflections'
+                             AND column_name = 'course_assignment_id')
+        THEN
+            ALTER TABLE app.reflections RENAME TO reflections_legacy;
+        END IF;
+    END $$""",
+    """CREATE TABLE IF NOT EXISTS app.reflections (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        course_assignment_id uuid NOT NULL REFERENCES app.course_assignments(id),
+        written_prompt text,
+        written_response text,
+        status text NOT NULL DEFAULT 'pending',
+        review_note text,
+        created_by text NOT NULL DEFAULT 'parent',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        submitted_at timestamptz,
+        reviewed_at timestamptz
+    )""",
+    "CREATE INDEX IF NOT EXISTS reflections_child_status_idx ON app.reflections(child_id, status)",
 ]
 
 
@@ -233,6 +269,7 @@ app.include_router(content.router)
 app.include_router(time_grants.router)
 app.include_router(chat.router)
 app.include_router(courses.router)
+app.include_router(reflections.router)
 
 @app.get("/")
 def read_root():
@@ -253,6 +290,7 @@ _EXPECTED_COLUMNS = [
     # from one curl instead.
     ("app.courses", "status"), ("app.course_items", "video_id"),
     ("app.course_assignments", "child_id"), ("app.course_item_progress", "status"),
+    ("app.reflections", "course_assignment_id"),
 ]
 
 

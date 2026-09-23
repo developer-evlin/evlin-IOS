@@ -312,6 +312,39 @@ class CourseItemProgress(Base):
     completed_at = Column(DateTime(timezone=True))
 
 
+class Reflection(Base):
+    """A gate the child clears by watching and answering, then writing.
+
+    Priority 0: while one is open the device is locked regardless of task
+    status, and clearing it doesn't satisfy outstanding tasks either — the
+    two gates are independent (see the iOS lock logic).
+
+    The video+quiz half is a course assignment rather than columns on this
+    table, so there's exactly one implementation of "watch, answer, unlock"
+    shared with special tasks and milestones. Usually that's a one-video
+    course created on the spot; it can equally be a full vetted course.
+
+    Note the original evlin-tables.sql had an unrelated, never-wired
+    app.reflections — see the rename guard in main.py's migrations.
+    """
+    __tablename__ = "reflections"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    course_assignment_id = Column(UUID(as_uuid=True), ForeignKey("app.course_assignments.id"), nullable=False)
+    written_prompt = Column(String)
+    written_response = Column(String)
+    # 'pending' | 'submitted' | 'approved' | 'needs_redo'. Only 'approved'
+    # closes the gate; 'needs_redo' sends it back to 'pending'.
+    status = Column(String, nullable=False, default="pending")
+    review_note = Column(String)
+    created_by = Column(String, nullable=False, default="parent")  # 'parent' | 'ai_agent'
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    submitted_at = Column(DateTime(timezone=True))
+    reviewed_at = Column(DateTime(timezone=True))
+
+
 class ICSFeed(Base):
     __tablename__ = "ics_feeds"
     __table_args__ = {"schema": "app"}
