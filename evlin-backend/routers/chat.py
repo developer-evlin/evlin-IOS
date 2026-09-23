@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
-from datetime import date, timezone
+from datetime import date, datetime, timezone
 import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
@@ -173,11 +173,89 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
     return "\n".join(lines)
 
 
+def _get_conversation_for_parent(db: Session, parent: models.Parent,
+                                 conversation_id: UUID) -> models.ChatConversation:
+    conversation = db.query(models.ChatConversation).filter(
+        models.ChatConversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    assert_parent_owns_child(db, parent, conversation.child_id)
+    return conversation
+
+
+def _title_from(text: str) -> str:
+    """A thread's name, taken from what was actually asked.
+
+    Deterministic rather than a second Gemini call: titling every new thread
+    with the model would add latency and cost to the first message of every
+    conversation for something a trim does well enough.
+    """
+    cleaned = " ".join(text.split())
+    return cleaned[:40].rstrip() + "…" if len(cleaned) > 40 else (cleaned or "New chat")
+
+
+@router.get("/children/{child_id}/conversations", response_model=list[schemas.ChatConversationResponse])
+def list_conversations(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent),
+                       db: Session = Depends(get_db)):
+    """Most recently active first — what the sidebar orders by."""
+    assert_parent_owns_child(db, current_parent, child_id)
+    return db.query(models.ChatConversation).filter(
+        models.ChatConversation.child_id == child_id
+    ).order_by(models.ChatConversation.updated_at.desc()).all()
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=list[schemas.ChatMessageResponse])
+def get_conversation_messages(conversation_id: UUID,
+                              current_parent: models.Parent = Depends(get_current_parent),
+                              db: Session = Depends(get_db)):
+    _get_conversation_for_parent(db, current_parent, conversation_id)
+    return db.query(models.ChatMessage).filter(
+        models.ChatMessage.conversation_id == conversation_id
+    ).order_by(models.ChatMessage.created_at).all()
+
+
+@router.put("/conversations/{conversation_id}", response_model=schemas.ChatConversationResponse)
+def rename_conversation(conversation_id: UUID, body: schemas.ChatConversationRename,
+                        current_parent: models.Parent = Depends(get_current_parent),
+                        db: Session = Depends(get_db)):
+    conversation = _get_conversation_for_parent(db, current_parent, conversation_id)
+    conversation.title = body.title
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
+@router.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: UUID,
+                        current_parent: models.Parent = Depends(get_current_parent),
+                        db: Session = Depends(get_db)):
+    conversation = _get_conversation_for_parent(db, current_parent, conversation_id)
+    # Messages go with it via ON DELETE CASCADE in Postgres; deleted here
+    # explicitly too because SQLite (the test harness) doesn't enforce it.
+    db.query(models.ChatMessage).filter(
+        models.ChatMessage.conversation_id == conversation_id
+    ).delete(synchronize_session=False)
+    db.delete(conversation)
+    db.commit()
+    return {"detail": "Conversation deleted"}
+
+
 @router.get("/children/{child_id}/chat", response_model=list[schemas.ChatMessageResponse])
 def get_chat_history(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    """The most recent thread — what the app opens on.
+
+    Still keyed by child rather than conversation so an older client that
+    doesn't know about threads keeps working; it just sees the latest one.
+    """
     assert_parent_owns_child(db, current_parent, child_id)
+    latest = db.query(models.ChatConversation).filter(
+        models.ChatConversation.child_id == child_id
+    ).order_by(models.ChatConversation.updated_at.desc()).first()
+    if latest is None:
+        return []
     return db.query(models.ChatMessage).filter(
-        models.ChatMessage.child_id == child_id
+        models.ChatMessage.conversation_id == latest.id
     ).order_by(models.ChatMessage.created_at).all()
 
 
@@ -196,8 +274,31 @@ async def send_chat_message(
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
 
-    user_row = models.ChatMessage(child_id=child_id, parent_id=current_parent.id, role="user", text=body.text)
+    conversation = None
+    if body.conversation_id is not None:
+        conversation = _get_conversation_for_parent(db, current_parent, body.conversation_id)
+    elif not body.new_conversation:
+        # Fall back to the running thread. This is what keeps a client that
+        # predates threading working unchanged — without it, every message
+        # from such a client would start its own thread and the assistant
+        # would forget the previous turn.
+        conversation = db.query(models.ChatConversation).filter(
+            models.ChatConversation.child_id == child_id
+        ).order_by(models.ChatConversation.updated_at.desc()).first()
+
+    if conversation is None:
+        # Created on the first message rather than when the client taps New
+        # chat, so a stray tap doesn't leave an empty thread behind.
+        conversation = models.ChatConversation(
+            child_id=child_id, parent_id=current_parent.id, title=_title_from(body.text),
+        )
+        db.add(conversation)
+        db.flush()
+
+    user_row = models.ChatMessage(child_id=child_id, conversation_id=conversation.id,
+                                  parent_id=current_parent.id, role="user", text=body.text)
     db.add(user_row)
+    conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
 
     tasks = db.query(models.Task).filter(models.Task.child_id == child_id, models.Task.active == True).all()  # noqa: E712
@@ -206,8 +307,11 @@ async def send_chat_message(
     ).all()
     rule = db.query(models.ChildRule).filter(models.ChildRule.child_id == child_id).first()
 
+    # Scoped to this thread, not the child. Sending every message the child
+    # ever generated would make separate threads share context — defeating
+    # the point of having them — and grow the prompt without bound.
     history_rows = db.query(models.ChatMessage).filter(
-        models.ChatMessage.child_id == child_id
+        models.ChatMessage.conversation_id == conversation.id
     ).order_by(models.ChatMessage.created_at).all()
     messages = [{"role": "user" if r.role == "user" else "model", "text": r.text} for r in history_rows if r.text]
 
@@ -221,14 +325,16 @@ async def send_chat_message(
         if call.name in _COURSE_BUILDING_TOOLS:
             args = await _build_course_for_tool(db, child, call.name, args, current_parent)
         assistant_row = models.ChatMessage(
-            child_id=child_id, role="assistant",
+            child_id=child_id, conversation_id=conversation.id, role="assistant",
             text=_TOOL_REPLIES.get(call.name, _DEFAULT_TOOL_REPLY),
             tool_call=call.name, tool_args=_stringify_tool_args(args),
         )
     else:
-        assistant_row = models.ChatMessage(child_id=child_id, role="assistant", text=text or "...")
+        assistant_row = models.ChatMessage(child_id=child_id, conversation_id=conversation.id,
+                                           role="assistant", text=text or "...")
 
     db.add(assistant_row)
+    conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(assistant_row)
     return assistant_row

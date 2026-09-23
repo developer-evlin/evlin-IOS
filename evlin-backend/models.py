@@ -210,17 +210,53 @@ class TimeGrant(Base):
     credited_date = Column(Date, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+class ChatConversation(Base):
+    """One thread of chat about one child.
+
+    Chat used to be a single continuous transcript per child, which the
+    history sidebar had always been designed against as separate named
+    threads — so that UI ran on mock data and couldn't rename, delete or
+    search anything for real. This table is what makes it real.
+
+    Unrelated to the legacy chat.conversations in evlin-tables.sql, which
+    models 'setup' vs 'kid_agent' surfaces and is dead (no model, no router,
+    nothing writes it). Different schema, so no collision.
+
+    parent_id is attribution only, and ON DELETE SET NULL for the same
+    reason courses.created_by_parent_id is: it must not block deleting an
+    account.
+    """
+    __tablename__ = "chat_conversations"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
+    title = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # What the sidebar orders by — bumped on every message, so an active
+    # thread rises to the top.
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class ChatMessage(Base):
-    """One running conversation per child (not per-parent, not per-thread)
-    — matches how the UI already frames it ("your child"). Scoped by
-    child_id like everything else in this backend, no new family_id
-    concept. See gemini_client.py / routers/chat.py — this table has no
-    idea an LLM produced the assistant rows, it's just a transcript."""
+    """One message in one conversation.
+
+    This table has no idea an LLM produced the assistant rows — it's just a
+    transcript. See gemini_client.py / routers/chat.py.
+
+    conversation_id is nullable only so the backfill of pre-threading rows
+    can't leave the table unwritable if it half-fails; the API always sets
+    it. child_id is kept alongside it (rather than reached through the
+    conversation) because every access check in this backend is child-scoped
+    and this keeps those checks one query.
+    """
     __tablename__ = "chat_messages"
     __table_args__ = {"schema": "app"}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("app.chat_conversations.id", ondelete="CASCADE"))
     parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
     role = Column(String, nullable=False)  # 'user' | 'assistant'
     text = Column(String, nullable=False)

@@ -1,3 +1,4 @@
+import uuid
 from datetime import date
 
 import models
@@ -61,6 +62,9 @@ def test_task_shaped_request_returns_a_tool_call_not_a_write(client, db_session,
 
 
 def test_history_persists_and_returns_in_order(client, db_session, monkeypatch):
+    # A client that says nothing about conversations keeps appending to the
+    # running thread — the behaviour every build shipped before threading
+    # depends on.
     monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
     monkeypatch.setattr(chat_router, "generate", _fake_plain_reply)
     p = make_parent(db_session, "pa")
@@ -232,3 +236,143 @@ def test_grounding_reflects_real_tasks_not_invented_ones(client, db_session, mon
 
     client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "what's up"})
     assert "Real task from the DB" in captured["prompt"]
+
+
+# ---- real threads --------------------------------------------------------
+
+def _threaded(client, db_session, monkeypatch):
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _fake_plain_reply)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    return p, c
+
+
+def test_first_message_creates_a_thread_titled_from_what_was_asked(client, db_session, monkeypatch):
+    p, c = _threaded(client, db_session, monkeypatch)
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                json={"text": "Lock all apps at 9pm on school nights"})
+
+    convs = client.get(f"/children/{c.id}/conversations", headers=auth("pa")).json()
+    assert len(convs) == 1
+    assert convs[0]["title"] == "Lock all apps at 9pm on school nights"
+
+
+def test_a_long_first_message_is_trimmed_into_a_title(client, db_session, monkeypatch):
+    p, c = _threaded(client, db_session, monkeypatch)
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                json={"text": "x" * 200})
+    title = client.get(f"/children/{c.id}/conversations", headers=auth("pa")).json()[0]["title"]
+    assert len(title) <= 41 and title.endswith("…")
+
+
+def test_new_thread_does_not_inherit_the_other_threads_context(client, db_session, monkeypatch):
+    # The property that makes threads worth having. Previously every message
+    # for the child went into the prompt, so separate threads would have
+    # silently shared context.
+    captured = {}
+
+    async def _capture(system_prompt, messages, tools=None):
+        captured["messages"] = messages
+        return "ok", None
+
+    p, c = _threaded(client, db_session, monkeypatch)
+    monkeypatch.setattr(chat_router, "generate", _capture)
+
+    first = client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                        json={"text": "about bedtime"}).json()
+    assert [m["text"] for m in captured["messages"]] == ["about bedtime"]
+
+    second = client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                         json={"text": "about tiktok", "new_conversation": True}).json()
+    assert second["conversation_id"] != first["conversation_id"]
+    assert [m["text"] for m in captured["messages"]] == ["about tiktok"]
+
+    # Continuing the first thread sees its own history and nothing else.
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                json={"text": "and weekends?", "conversation_id": first["conversation_id"]})
+    texts = [m["text"] for m in captured["messages"]]
+    assert "about bedtime" in texts and "about tiktok" not in texts
+
+
+def test_messages_are_fetchable_per_thread(client, db_session, monkeypatch):
+    p, c = _threaded(client, db_session, monkeypatch)
+    a = client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "first thread"}).json()
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                json={"text": "second thread", "new_conversation": True})
+
+    msgs = client.get(f"/conversations/{a['conversation_id']}/messages", headers=auth("pa")).json()
+    assert [m["text"] for m in msgs] == ["first thread", "Got it — here's a real, grounded reply."]
+
+
+def test_rename_and_delete_are_real(client, db_session, monkeypatch):
+    p, c = _threaded(client, db_session, monkeypatch)
+    sent = client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "rename me"}).json()
+    cid = sent["conversation_id"]
+
+    renamed = client.put(f"/conversations/{cid}", headers=auth("pa"),
+                         json={"title": "Bedtime rules"}).json()
+    assert renamed["title"] == "Bedtime rules"
+    assert client.get(f"/children/{c.id}/conversations", headers=auth("pa")).json()[0]["title"] == "Bedtime rules"
+
+    assert client.delete(f"/conversations/{cid}", headers=auth("pa")).status_code == 200
+    assert client.get(f"/children/{c.id}/conversations", headers=auth("pa")).json() == []
+    # Its messages go with it rather than being orphaned.
+    assert db_session.query(models.ChatMessage).filter(
+        models.ChatMessage.conversation_id == uuid.UUID(cid)).count() == 0
+
+
+def test_blank_rename_is_rejected(client, db_session, monkeypatch):
+    p, c = _threaded(client, db_session, monkeypatch)
+    sent = client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "x"}).json()
+    assert client.put(f"/conversations/{sent['conversation_id']}", headers=auth("pa"),
+                      json={"title": "   "}).status_code == 422
+
+
+def test_child_chat_endpoint_returns_the_most_recent_thread(client, db_session, monkeypatch):
+    p, c = _threaded(client, db_session, monkeypatch)
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "older"})
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                json={"text": "newer", "new_conversation": True})
+
+    opened = client.get(f"/children/{c.id}/chat", headers=auth("pa")).json()
+    assert [m["text"] for m in opened][0] == "newer"
+
+
+def test_threads_are_scoped_to_the_owning_parent(client, db_session, monkeypatch):
+    p, c = _threaded(client, db_session, monkeypatch)
+    make_parent(db_session, "pb")
+    sent = client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "private"}).json()
+    cid = sent["conversation_id"]
+
+    assert client.get(f"/children/{c.id}/conversations", headers=auth("pb")).status_code == 404
+    assert client.get(f"/conversations/{cid}/messages", headers=auth("pb")).status_code == 404
+    assert client.put(f"/conversations/{cid}", headers=auth("pb"), json={"title": "mine now"}).status_code == 404
+    assert client.delete(f"/conversations/{cid}", headers=auth("pb")).status_code == 404
+    # And you can't post into someone else's thread.
+    assert client.post(f"/children/{c.id}/chat", headers=auth("pb"),
+                       json={"text": "hi", "conversation_id": cid}).status_code == 404
+
+
+def test_active_thread_rises_to_the_top(client, db_session, monkeypatch):
+    p, c = _threaded(client, db_session, monkeypatch)
+    first = client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "older thread"}).json()
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "newer thread"})
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                json={"text": "bump", "conversation_id": first["conversation_id"]})
+
+    convs = client.get(f"/children/{c.id}/conversations", headers=auth("pa")).json()
+    assert convs[0]["id"] == first["conversation_id"]
+
+
+def test_a_client_that_knows_nothing_about_threads_keeps_one_conversation(client, db_session, monkeypatch):
+    # Deploy-ordering guard: the shipped iOS build sends no conversation_id.
+    # If that meant "new thread", every message would land in its own and the
+    # assistant would forget the previous turn.
+    p, c = _threaded(client, db_session, monkeypatch)
+    for text in ("one", "two", "three"):
+        client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": text})
+
+    convs = client.get(f"/children/{c.id}/conversations", headers=auth("pa")).json()
+    assert len(convs) == 1
+    assert len(client.get(f"/conversations/{convs[0]['id']}/messages", headers=auth("pa")).json()) == 6

@@ -267,6 +267,42 @@ _MIGRATIONS = [
         resolved_at timestamptz
     )""",
     "CREATE INDEX IF NOT EXISTS app_blocks_child_active_idx ON app.app_blocks(child_id, resolved)",
+    # Real chat threads. The history sidebar was always designed around
+    # separate named conversations; the backend only had one continuous
+    # transcript per child, so that UI ran on mock rows and could never
+    # really rename, delete or search anything.
+    """CREATE TABLE IF NOT EXISTS app.chat_conversations (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        parent_id uuid REFERENCES app.parents(id) ON DELETE SET NULL,
+        title text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    """CREATE INDEX IF NOT EXISTS chat_conversations_child_idx
+        ON app.chat_conversations(child_id, updated_at DESC)""",
+    """ALTER TABLE app.chat_messages ADD COLUMN IF NOT EXISTS conversation_id uuid
+        REFERENCES app.chat_conversations(id) ON DELETE CASCADE""",
+    """CREATE INDEX IF NOT EXISTS chat_messages_conversation_idx
+        ON app.chat_messages(conversation_id, created_at)""",
+    # Backfill: every message written before threading existed gets grouped
+    # into one conversation per child, so nothing is orphaned or disappears
+    # from the UI. One statement rather than an insert plus a title-matched
+    # update, so it's atomic and can't half-apply; a rerun finds no NULL
+    # rows and does nothing.
+    """WITH new_convs AS (
+        INSERT INTO app.chat_conversations (id, child_id, title, created_at, updated_at)
+        SELECT gen_random_uuid(), child_id, 'Earlier messages',
+               MIN(created_at), MAX(created_at)
+        FROM app.chat_messages
+        WHERE conversation_id IS NULL
+        GROUP BY child_id
+        RETURNING id, child_id
+    )
+    UPDATE app.chat_messages m
+    SET conversation_id = n.id
+    FROM new_convs n
+    WHERE m.child_id = n.child_id AND m.conversation_id IS NULL""",
 ]
 
 

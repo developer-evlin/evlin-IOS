@@ -614,6 +614,12 @@ class ReflectionResponse(BaseModel):
 
 class ChatSendRequest(BaseModel):
     text: str
+    conversation_id: Optional[UUID] = None
+    # Starting a thread is opt-in so that a client which knows nothing about
+    # conversations (every build shipped before threading) keeps appending to
+    # the running one instead of silently starting a new thread per message
+    # and losing all continuity.
+    new_conversation: bool = False
 
     @field_validator("text")
     @classmethod
@@ -622,9 +628,32 @@ class ChatSendRequest(BaseModel):
             raise ValueError("text must not be blank")
         return v.strip()
 
+
+class ChatConversationResponse(BaseModel):
+    id: UUID
+    child_id: UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ChatConversationRename(BaseModel):
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def _not_blank(cls, v):
+        if not v or not v.strip():
+            raise ValueError("title must not be blank")
+        return v.strip()[:120]
+
 class ChatMessageResponse(BaseModel):
     id: UUID
     child_id: UUID
+    conversation_id: Optional[UUID] = None
     role: str
     text: str
     tool_call: Optional[str] = None
