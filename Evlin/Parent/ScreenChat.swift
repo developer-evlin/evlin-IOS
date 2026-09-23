@@ -19,7 +19,7 @@ private enum ChatCardKind {
     // text for a repeat cadence, so tapping a specific request ("...to
     // clean his room every Saturday morning") hands back a drafted task to
     // confirm/edit rather than a blank form the parent re-types by hand.
-    case addTask(prompt: String)
+    case addTask(draft: TaskDraft)
     // The agent has already searched, checked and drafted a real course by
     // the time this appears — these carry its id so the card shows the
     // actual videos it picked and why, not a description of them.
@@ -314,153 +314,205 @@ private struct BlockDurationCard: View {
 // Title/Due too, so this reads as the AI having drafted a task rather than
 // handing back an empty form to fill in by hand.
 private struct AddTaskCard: View {
-    var initialPrompt: String = ""
-    var onCreate: (_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) -> Void
+    var draft: TaskDraft
+    var onCreate: (_ draft: TaskDraft) -> Void
 
     @State private var title: String
-    @State private var whatToDo = ""
-    @State private var due: String
+    @State private var whatToDo: String
+    @State private var dueDate: Date
+    @State private var dueTime: Date
+    @State private var hasDueDate: Bool
+    @State private var hasDueTime: Bool
+    @State private var recurrence: String
+    @State private var showingRepeatPicker = false
     @State private var submitted = false
 
-    init(initialPrompt: String = "", onCreate: @escaping (_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) -> Void) {
-        self.initialPrompt = initialPrompt
+    init(draft: TaskDraft, onCreate: @escaping (_ draft: TaskDraft) -> Void) {
+        self.draft = draft
         self.onCreate = onCreate
-        let parsed = Self.parse(initialPrompt)
-        _title = State(initialValue: parsed.title)
-        _due = State(initialValue: parsed.due)
+        _title = State(initialValue: draft.title)
+        _whatToDo = State(initialValue: draft.instructions)
+        _hasDueDate = State(initialValue: draft.dueDate != nil)
+        _hasDueTime = State(initialValue: draft.dueMinutes != nil)
+        _dueDate = State(initialValue: draft.dueDate ?? Date())
+        let minutes = draft.dueMinutes ?? (18 * 60)
+        _dueTime = State(initialValue: Calendar.current.date(
+            bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()) ?? Date())
+        _recurrence = State(initialValue: draft.recurrence)
     }
 
-    // Crude "...to <task> every/on/at <schedule>" extraction — good enough
-    // for the specific, realistic requests this card is actually shown
-    // from (the chat suggestion tile, or a parent's own typed request);
-    // anything that doesn't match this shape just leaves both fields
-    // blank, same as before this existed.
-    private static func parse(_ prompt: String) -> (title: String, due: String) {
-        guard let toRange = prompt.range(of: " to ", options: .caseInsensitive) else { return ("", "") }
-        let after = String(prompt[toRange.upperBound...])
-        let lower = after.lowercased()
-        for marker in ["every ", " on ", " at "] {
-            if let r = lower.range(of: marker) {
-                let titlePart = String(after[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
-                let duePart = String(after[r.lowerBound...]).trimmingCharacters(in: .whitespaces)
-                return (capitalizeFirst(titlePart), capitalizeFirst(duePart))
-            }
-        }
-        return (capitalizeFirst(after), "")
-    }
-
-    private static func capitalizeFirst(_ s: String) -> String {
-        guard let first = s.first else { return s }
-        return first.uppercased() + s.dropFirst()
-    }
-
-    private var canCreate: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty && !submitted }
-
-    // Simple keyword scan over what's typed so far — stands in for real
-    // language understanding the same way this whole chat's "AI" is
-    // mocked elsewhere (see respondAfterDelay). Checked in order: an
-    // explicit weekday/weekend cue wins over a bare "every day", which
-    // wins over the one-time default.
-    // Named weekdays checked first — "every Tuesday and Thursday" should
-    // read as exactly that, not fall through to a vaguer daily/weekday
-    // bucket. Gives free-typed text the same day-by-day expressiveness the
-    // old manual bubble picker had, instead of only the three canned
-    // buckets below it.
-    private let namedWeekdays: [(name: String, code: String)] = [
-        ("sunday", "sun"), ("monday", "mon"), ("tuesday", "tue"), ("wednesday", "wed"),
-        ("thursday", "thu"), ("friday", "fri"), ("saturday", "sat"),
-    ]
-
-    private var inferredRepeats: (label: String, codes: String) {
-        let text = "\(title) \(whatToDo) \(due)".lowercased()
-
-        let mentioned = namedWeekdays.filter { text.contains($0.name) }
-        if !mentioned.isEmpty {
-            let codes = weekDayCodes.filter { code in mentioned.contains { $0.code == code } }
-            let codeString = codes.joined(separator: ",")
-            return ("Repeats \(repeatDisplayLabel(codeString))", codeString)
-        }
-        if text.contains("weekend") {
-            return ("Repeats weekends", "sat,sun")
-        }
-        if text.contains("school night") || text.contains("school day") || text.contains("weekday") {
-            return ("Repeats on weekdays", "mon,tue,wed,thu,fri")
-        }
-        if text.contains("every day") || text.contains("everyday") || text.contains("each day") || text.contains("daily") || text.contains("every night") {
-            return ("Repeats daily", "sun,mon,tue,wed,thu,fri,sat")
-        }
-        return ("One-time task", "none")
-    }
+    private var trimmedTitle: String { title.trimmingCharacters(in: .whitespaces) }
+    private var canCreate: Bool { !trimmedTitle.isEmpty && !submitted }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "checklist").font(.system(size: 15)).foregroundStyle(EColor.primary)
-                Text("Add a task").font(Typography.font(15, weight: .bold)).foregroundStyle(EColor.onSurface)
+        VStack(alignment: .leading, spacing: 14) {
+            header
+
+            // Title is the one thing that must be there, so it gets the
+            // prominence rather than sitting in an identical box to the
+            // optional fields.
+            TextField("Task name", text: $title)
+                .font(Typography.font(17, weight: .semibold))
+                .textFieldStyle(.plain)
+                .submitLabel(.done)
+
+            Divider()
+
+            // Optional fields read as optional: a row you add, not an empty
+            // box implying something is missing.
+            optionalRow(
+                isOn: $hasDueDate, icon: "calendar", label: "Date",
+                addLabel: "Add a date"
+            ) {
+                DatePicker("", selection: $dueDate, displayedComponents: .date)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
             }
 
-            cardField(label: "Title") {
-                TextField("e.g. Read for 20 minutes", text: $title)
-                    .font(Typography.font(13.5, weight: .regular))
+            optionalRow(
+                isOn: $hasDueTime, icon: "clock", label: "Time",
+                addLabel: "Add a time"
+            ) {
+                DatePicker("", selection: $dueTime, displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
             }
 
-            cardField(label: "What to do") {
-                TextField("Instructions…", text: $whatToDo, axis: .vertical)
-                    .font(Typography.font(13.5, weight: .regular))
-                    .lineLimit(2...4)
-            }
+            repeatRow
 
-            cardField(label: "Due (optional)") {
-                TextField("e.g. Today, 6:00 PM, or every school night", text: $due)
-                    .font(Typography.font(13.5, weight: .regular))
+            if !whatToDo.isEmpty || submitted {
+                Divider()
+                TextField("Notes", text: $whatToDo, axis: .vertical)
+                    .font(Typography.font(14))
+                    .lineLimit(1...4)
+            } else {
+                Button { whatToDo = " " } label: {
+                    Label("Add notes", systemImage: "text.alignleft")
+                        .font(Typography.font(14))
+                        .foregroundStyle(EColor.primary)
+                }
+                .buttonStyle(.plain)
+                .frame(minHeight: 44, alignment: .leading)
             }
-
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles").font(.system(size: 10, weight: .semibold))
-                Text(inferredRepeats.label)
-            }
-            .font(Typography.font(11.5, weight: .semibold))
-            .foregroundStyle(EColor.primary)
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(EColor.primaryContainer)
-            .clipShape(Capsule())
-            .animation(.easeOut(duration: 0.15), value: inferredRepeats.label)
 
             Button {
                 submitted = true
-                onCreate(title, whatToDo, due, inferredRepeats.codes)
+                onCreate(currentDraft)
             } label: {
                 Text("Create task")
-                    .font(Typography.font(13.5, weight: .bold))
+                    .font(Typography.font(15, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .frame(height: 48)
                     .background(canCreate ? Brand.greenDeep : EColor.outlineVariant)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(!canCreate)
+            .accessibilityHint(trimmedTitle.isEmpty ? "Add a task name first" : "")
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: bubbleMaxWidth + 60, alignment: .leading)
         .background(EColor.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(EColor.outlineVariant))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(EColor.outlineVariant))
         .disabled(submitted)
     }
 
-    @ViewBuilder
-    private func cardField<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(label.uppercased())
-                .font(Typography.font(10.5, weight: .bold))
-                .tracking(0.5)
-                .foregroundStyle(EColor.onSurfaceVariant)
-            content()
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .background(EColor.surfaceContainerHigh)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checklist").font(.system(size: 15)).foregroundStyle(EColor.primary)
+            Text("Add a task").font(Typography.font(15, weight: .bold)).foregroundStyle(EColor.onSurface)
+            Spacer()
+            if submitted {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Brand.greenDeep)
+                    .transition(.scale.combined(with: .opacity))
+            }
         }
+    }
+
+    /// A field that isn't required: off, it's a single "add" row; on, it
+    /// shows the real control with a way back out.
+    @ViewBuilder
+    private func optionalRow<Content: View>(
+        isOn: Binding<Bool>, icon: String, label: String, addLabel: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        if isOn.wrappedValue {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(EColor.onSurfaceVariant)
+                    .frame(width: 20)
+                Text(label).font(Typography.font(14)).foregroundStyle(EColor.onSurface)
+                Spacer()
+                content()
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { isOn.wrappedValue = false }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove \(label.lowercased())")
+            }
+            .frame(minHeight: 44)
+        } else {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { isOn.wrappedValue = true }
+            } label: {
+                Label(addLabel, systemImage: icon)
+                    .font(Typography.font(14))
+                    .foregroundStyle(EColor.primary)
+            }
+            .buttonStyle(.plain)
+            .frame(minHeight: 44, alignment: .leading)
+        }
+    }
+
+    /// The model's recurrence, shown as something correctable rather than a
+    /// static readout — it's a decision it made, and decisions should be
+    /// editable in place.
+    private var repeatRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "repeat")
+                .font(.system(size: 14))
+                .foregroundStyle(EColor.onSurfaceVariant)
+                .frame(width: 20)
+            Text("Repeats").font(Typography.font(14)).foregroundStyle(EColor.onSurface)
+            Spacer()
+            Menu {
+                Button("One-time task") { recurrence = "none" }
+                Button("Every day") { recurrence = "sun,mon,tue,wed,thu,fri,sat" }
+                Button("School nights") { recurrence = "mon,tue,wed,thu,fri" }
+                Button("Weekends") { recurrence = "sat,sun" }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(recurrence == "none" ? "One-time" : repeatDisplayLabel(recurrence))
+                        .font(Typography.font(14, weight: .medium))
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(EColor.primary)
+            }
+        }
+        .frame(minHeight: 44)
+    }
+
+    private var currentDraft: TaskDraft {
+        var out = draft
+        out.title = trimmedTitle
+        out.instructions = whatToDo.trimmingCharacters(in: .whitespaces)
+        out.dueDate = hasDueDate ? dueDate : nil
+        if hasDueTime {
+            let c = Calendar.current.dateComponents([.hour, .minute], from: dueTime)
+            out.dueMinutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+        } else {
+            out.dueMinutes = nil
+        }
+        out.recurrence = recurrence
+        return out
     }
 }
 
@@ -588,7 +640,7 @@ private var welcomeSuggestions: [ChatSuggestion] {[
     ChatSuggestion(
         icon: "sf:checklist", title: "Add a task",
         prompt: "Add a task for your child to clean his room every Saturday morning",
-        card: .addTask(prompt: "Add a task for your child to clean his room every Saturday morning")
+        card: .addTask(draft: TaskDraft(title: "Clean his room", recurrence: "sat"))
     ),
     ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for your child", card: .blockApp),
     ChatSuggestion(
@@ -1154,19 +1206,17 @@ struct ScreenChat: View {
         switch message.toolCall {
         case "open_block_picker": return .blockApp
         case "draft_task":
-            let title = message.toolArgs?["title"] ?? ""
-            let due = message.toolArgs?["due_hint"] ?? ""
-            let repeatsHint = message.toolArgs?["repeats_hint"] ?? ""
-            var prompt = "to \(title)"
-            if !repeatsHint.isEmpty { prompt += " every \(repeatsHint)" }
-            else if !due.isEmpty { prompt += " at \(due)" }
-            return .addTask(prompt: prompt)
+            // Straight through as structured values. This used to flatten
+            // the model's fields into an English sentence that the card then
+            // re-parsed with string matching — which failed on every real
+            // tool call, so the card always arrived empty.
+            return .addTask(draft: TaskDraft(toolArgs: message.toolArgs))
         case "propose_reflection":
             // The model suggests *that* a reflection should happen, not its
             // content — the parent picks the video and questions, same as
             // draft_task hands over a title rather than a finished task.
             let title = message.toolArgs?["title"] ?? ""
-            return .addTask(prompt: "a reflection about \(title)")
+            return .addTask(draft: TaskDraft(title: title))
         case "generate_course":
             guard let courseId = message.toolArgs?["course_id"], !courseId.isEmpty else { return nil }
             return .reviewCourse(courseId: courseId,
@@ -1271,19 +1321,22 @@ struct ScreenChat: View {
     // as when a parent skips "More Options" anywhere else in this app.
     // `repeats` (from inferredRepeats.codes) is already a real recurrence
     // code ("mon,wed,fri"/"daily"/"none") and is used as-is.
-    private func handleAddTask(_ title: String, _ whatToDo: String, _ due: String, _ repeats: String) {
-        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
-        guard !trimmedTitle.isEmpty, let childId = session.activeChildId else { return }
+    private func handleAddTask(_ draft: TaskDraft) {
+        guard !draft.isEmpty, let childId = session.activeChildId else { return }
         Task {
             do {
+                // The due date and time now actually reach the API. The old
+                // signature took a free-text `due` string and never sent it
+                // at all, so even a correctly filled card lost the schedule.
                 let saved = try await APIClient.shared.createTask(
-                    childId: childId, title: trimmedTitle, instructions: whatToDo,
-                    recurrence: repeats, category: "Chore", submissionKind: "none"
+                    childId: childId, title: draft.title, instructions: draft.instructions,
+                    recurrence: draft.recurrence, category: "Chore", submissionKind: "none",
+                    dueTime: draft.dueTimeString, dueDate: draft.dueDateString,
+                    bonusMinutes: draft.bonusMinutes, createdBy: "ai_agent"
                 )
                 await AppSync.shared.syncBackendData()
-                let repeatsText = repeats == "none" ? "" : " (\(repeatDisplayLabel(repeats).lowercased()))"
                 await MainActor.run {
-                    messages.append(ChatMessage(fromUser: false, text: "Added \"\(saved.title)\" for your child\(repeatsText)."))
+                    messages.append(ChatMessage(fromUser: false, text: confirmation(for: draft, title: saved.title)))
                 }
             } catch {
                 await MainActor.run {
@@ -1293,6 +1346,32 @@ struct ScreenChat: View {
         }
     }
 
+    /// Says back what was actually saved, including the schedule — so a
+    /// wrong date is visible immediately rather than discovered later on the
+    /// calendar.
+    private func confirmation(for draft: TaskDraft, title: String) -> String {
+        var parts: [String] = []
+        if let date = draft.dueDate {
+            let f = DateFormatter()
+            f.dateFormat = Calendar.current.isDateInToday(date) || Calendar.current.isDateInTomorrow(date)
+                ? "EEEE" : "EEEE d MMM"
+            parts.append(Calendar.current.isDateInToday(date) ? "today"
+                         : Calendar.current.isDateInTomorrow(date) ? "tomorrow"
+                         : "on \(f.string(from: date))")
+        }
+        if let minutes = draft.dueMinutes {
+            let f = DateFormatter()
+            f.dateFormat = "h:mm a"
+            let d = Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date())
+            parts.append("at \(f.string(from: d ?? Date()))")
+        }
+        if draft.recurrence != "none" {
+            parts.append("repeating \(repeatDisplayLabel(draft.recurrence).lowercased())")
+        }
+        let when = parts.isEmpty ? "" : " " + parts.joined(separator: " ")
+        return "Added \"\(title)\"\(when)."
+    }
+
     @ViewBuilder
     private func cardView(for kind: ChatCardKind) -> some View {
         switch kind {
@@ -1300,8 +1379,8 @@ struct ScreenChat: View {
             BlockAppCard(onSelectTargets: handleSelectTargets)
         case .blockDuration(let apps):
             BlockDurationCard(apps: apps) { minutes in handleBlockDuration(apps: apps, minutes: minutes) }
-        case .addTask(let prompt):
-            AddTaskCard(initialPrompt: prompt, onCreate: handleAddTask)
+        case .addTask(let draft):
+            AddTaskCard(draft: draft, onCreate: handleAddTask)
         case .reviewCourse(let courseId, let title):
             CourseProposalCard(courseId: courseId, title: title, bonusMinutes: nil) { note in
                 messages.append(ChatMessage(fromUser: false, text: note))

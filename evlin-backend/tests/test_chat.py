@@ -376,3 +376,55 @@ def test_a_client_that_knows_nothing_about_threads_keeps_one_conversation(client
     convs = client.get(f"/children/{c.id}/conversations", headers=auth("pa")).json()
     assert len(convs) == 1
     assert len(client.get(f"/conversations/{convs[0]['id']}/messages", headers=auth("pa")).json()) == 6
+
+
+def test_system_prompt_tells_the_model_todays_date(client, db_session, monkeypatch):
+    # Without this the model resolves "tomorrow at 6pm" against its training
+    # cutoff, so every relative date it produced was a guess.
+    from datetime import date as _date
+    captured = {}
+
+    async def _capture(system_prompt, messages, tools=None):
+        captured["prompt"] = system_prompt
+        return "ok", None
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _capture)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "hi"})
+
+    assert _date.today().isoformat() in captured["prompt"]
+
+
+def test_draft_task_args_survive_as_structured_values(client, db_session, monkeypatch):
+    # The card reads these keys directly now. They used to be flattened into
+    # an English sentence and re-parsed with string matching, which produced
+    # an empty card on every real tool call.
+    async def _draft(system_prompt, messages, tools=None):
+        return None, FunctionCall(name="draft_task", args={
+            "title": "Tidy his room", "instructions": "Floor and desk",
+            "due_date": "2026-09-24", "due_time": "18:00",
+            "recurrence": "mon,wed,fri", "gates_apps": True, "bonus_minutes": 15,
+        })
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    monkeypatch.setattr(chat_router, "generate", _draft)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+
+    args = client.post(f"/children/{c.id}/chat", headers=auth("pa"),
+                       json={"text": "tidy his room mon wed fri at 6"}).json()["tool_args"]
+    assert args["title"] == "Tidy his room"
+    assert args["due_date"] == "2026-09-24"
+    assert args["due_time"] == "18:00"
+    assert args["recurrence"] == "mon,wed,fri"
+    assert args["bonus_minutes"] == "15"
+
+
+def test_draft_task_schema_asks_for_dates_not_free_text():
+    # The free-text due_hint/repeats_hint are what forced the re-parsing.
+    draft = next(t for t in chat_router._TOOLS if t["name"] == "draft_task")
+    props = draft["parameters"]["properties"]
+    assert "due_date" in props and "due_time" in props and "recurrence" in props
+    assert "due_hint" not in props and "repeats_hint" not in props

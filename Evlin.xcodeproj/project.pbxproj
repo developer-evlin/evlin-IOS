@@ -26,6 +26,7 @@
 		3FEF485A64930BED9F97B5C7 /* ScreenHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 752627A3153FA4BAC917E81A /* ScreenHome.swift */; };
 		47E5A82E81FB42FAF0817531 /* OnboardingV2ChildSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818AC7F90F32DFC21EF0ABCD /* OnboardingV2ChildSteps.swift */; };
 		4AACFAADF8DEB0286BD9011F /* ScreenTabletSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFF2DE909A421AEC9AAC1B6 /* ScreenTabletSettings.swift */; };
+		4C8C7EAF799C61CB7218BCD7 /* TaskDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6232FC3D995912972B6E33F7 /* TaskDraft.swift */; };
 		4D70C02A86B5F3D2CFB4C74A /* PlusJakartaSans-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 88F7804CB00AEEE75276DFA2 /* PlusJakartaSans-Regular.ttf */; };
 		4E1248962C6DAD733E08BF47 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFD68341BE83A8C061FB9E00 /* APIModels.swift */; };
 		5029518C72E408C60F160118 /* Baloo2-ExtraBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = ACBE52D14408BCE1201654E8 /* Baloo2-ExtraBold.ttf */; };
@@ -105,6 +106,7 @@
 		49E21D3FF95D075AF53A0C55 /* OnboardingV2Coordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingV2Coordinator.swift; sourceTree = "<group>"; };
 		4B3DF9077E531DFD27E0F35B /* LessonReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LessonReaderView.swift; sourceTree = "<group>"; };
 		52A3A4F008D897EF73D1585D /* AddFormComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddFormComponents.swift; sourceTree = "<group>"; };
+		6232FC3D995912972B6E33F7 /* TaskDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskDraft.swift; sourceTree = "<group>"; };
 		68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTabletLibrary.swift; sourceTree = "<group>"; };
 		70F936FC0D519AF37A8CC44C /* ParentAdaptive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParentAdaptive.swift; sourceTree = "<group>"; };
 		7235C9F06F3B36BEC827AACB /* ScreenTimePINVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimePINVideoView.swift; sourceTree = "<group>"; };
@@ -345,6 +347,7 @@
 				8E244BEA48A8808398D2FFF6 /* ScreenMilestones.swift */,
 				96621E11FF6F30CF0A987182 /* ScreenProfile.swift */,
 				B1EAE71E90939074687633EC /* ScreenSettings.swift */,
+				6232FC3D995912972B6E33F7 /* TaskDraft.swift */,
 				E708678BD054B24BF7AE4495 /* TaskReviewDeck.swift */,
 				000EBD45529C8CD083CC6A0F /* Settings */,
 			);
@@ -504,6 +507,7 @@
 				BE9E925FD91473528D791854 /* TabletRootView.swift in Sources */,
 				E39F20EDA4CFBFEFD8F1FD55 /* TaskData.swift in Sources */,
 				AE9953D62A105427AFE39AF9 /* TaskDetailView.swift in Sources */,
+				4C8C7EAF799C61CB7218BCD7 /* TaskDraft.swift in Sources */,
 				9C9190CC48E4BD8845C27F9E /* TaskReviewDeck.swift in Sources */,
 				63EC9119F6DAA91C32857517 /* Theme.swift in Sources */,
 				F4D373F2437F2C20235F1577 /* YouTubeEmbedView.swift in Sources */,

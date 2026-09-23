@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
@@ -20,13 +20,27 @@ router = APIRouter(tags=["chat"])
 _TOOLS = [
     {
         "name": "draft_task",
-        "description": "Pre-fill the app's Add Task card for the parent to review and confirm — does not create the task itself.",
+        "description": (
+            "Pre-fill the app's Add Task card for the parent to review and confirm — does not create the task "
+            "itself. Work out the concrete date, time and recurrence from what the parent said; the card is "
+            "meant to arrive correct, not to be filled in by hand afterwards."
+        ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "title": {"type": "STRING", "description": "Short task title"},
-                "due_hint": {"type": "STRING", "description": "Free-text due time/date hint, e.g. '6pm today', or empty if none"},
-                "repeats_hint": {"type": "STRING", "description": "Free-text recurrence hint, e.g. 'every Saturday', or empty if one-time"},
+                "title": {"type": "STRING", "description": "Short task title, e.g. 'Tidy his room'"},
+                "instructions": {"type": "STRING", "description": "What to actually do, if the parent said. Empty otherwise."},
+                "due_date": {"type": "STRING", "description": "Resolved calendar date as YYYY-MM-DD. Empty if no specific day."},
+                "due_time": {"type": "STRING", "description": "24-hour HH:MM. Empty if no specific time."},
+                "recurrence": {
+                    "type": "STRING",
+                    "description": (
+                        "'none' for a one-off, 'daily', or comma-joined weekday codes from "
+                        "mon,tue,wed,thu,fri,sat,sun — e.g. 'mon,wed,fri' or 'sat,sun'. Nothing else."
+                    ),
+                },
+                "gates_apps": {"type": "BOOLEAN", "description": "Whether not doing it should keep apps locked. Default true."},
+                "bonus_minutes": {"type": "INTEGER", "description": "Extra screen-time minutes for finishing it, 0 if the parent didn't say."},
             },
             "required": ["title"],
         },
@@ -151,6 +165,16 @@ async def _build_course_for_tool(db: Session, child: models.Child, tool_name: st
 def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: list[models.Occurrence], rule: models.ChildRule | None) -> str:
     today_occ_by_task = {o.task_id: o for o in occurrences}
     lines = [f"You are Evlin, a parental-control assistant helping a parent manage {child.name}'s tasks and screen time."]
+    # Without this the model resolves "tomorrow at 6pm" against its training
+    # cutoff — i.e. guesses. Most of what a parent says about scheduling is
+    # relative, so every date it produces was unreliable until this was here.
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    lines.append(
+        f"\nToday is {today:%A, %-d %B %Y} ({today.isoformat()}). "
+        f"Tomorrow is {tomorrow:%A} ({tomorrow.isoformat()}). "
+        "Resolve any relative date the parent uses against these, and emit real calendar dates."
+    )
     # Listed from _TOOLS rather than restated in prose, so the prompt can't
     # drift into describing a tool set the model wasn't actually given.
     tool_names = " or ".join(t["name"] for t in _TOOLS)
