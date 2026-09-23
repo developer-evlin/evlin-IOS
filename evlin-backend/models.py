@@ -322,6 +322,38 @@ class CourseItemProgress(Base):
     completed_at = Column(DateTime(timezone=True))
 
 
+class AppBlock(Base):
+    """One app blocked for this child, either for a while or until a task is
+    done.
+
+    The app already had a way to "block an app": a free-text sentence in
+    child_rules.custom_rules ("Block TikTok, Blocked for 2h"). That's fine
+    for showing a parent what they asked for and useless for anything else —
+    no bundle id, no expiry, no task link, nothing a "has this resolved yet"
+    check or an enforcement layer could ever read. This is the structured
+    version, so "no YouTube until homework is done" can actually resolve
+    itself when the homework is approved.
+
+    Display/state only for now: real per-app shielding needs
+    ManagedSettingsStore and an ApplicationToken, which is deliberately not
+    part of this pass. Nothing here has to change when it lands.
+    """
+    __tablename__ = "app_blocks"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    app_name = Column(String, nullable=False)
+    app_bundle_id = Column(String)
+    block_type = Column(String, nullable=False)  # 'duration' | 'until_task'
+    duration_minutes = Column(Integer)
+    until_task_id = Column(UUID(as_uuid=True), ForeignKey("app.tasks.id", ondelete="SET NULL"))
+    resolved = Column(Boolean, nullable=False, default=False)
+    created_by = Column(String, nullable=False, default="parent")  # 'parent' | 'ai_agent'
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    resolved_at = Column(DateTime(timezone=True))
+
+
 class Milestone(Base):
     """A longer-arc goal with a prize, tracked separately from day-to-day
     tasks.

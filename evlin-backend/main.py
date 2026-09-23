@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses, reflections, milestones
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses, reflections, milestones, app_blocks
 from storage import storage_configured
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
@@ -251,6 +251,22 @@ _MIGRATIONS = [
         REFERENCES app.course_assignments(id) ON DELETE SET NULL""",
     """ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS milestone_id uuid
         REFERENCES app.milestones(id) ON DELETE SET NULL""",
+    # Structured app blocks, replacing the free-text custom_rules sentence
+    # for anything that needs to resolve itself — see models.py's AppBlock.
+    """CREATE TABLE IF NOT EXISTS app.app_blocks (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        app_name text NOT NULL,
+        app_bundle_id text,
+        block_type text NOT NULL,
+        duration_minutes integer,
+        until_task_id uuid REFERENCES app.tasks(id) ON DELETE SET NULL,
+        resolved boolean NOT NULL DEFAULT false,
+        created_by text NOT NULL DEFAULT 'parent',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        resolved_at timestamptz
+    )""",
+    "CREATE INDEX IF NOT EXISTS app_blocks_child_active_idx ON app.app_blocks(child_id, resolved)",
 ]
 
 
@@ -295,6 +311,7 @@ app.include_router(chat.router)
 app.include_router(courses.router)
 app.include_router(reflections.router)
 app.include_router(milestones.router)
+app.include_router(app_blocks.router)
 
 @app.get("/")
 def read_root():
@@ -317,6 +334,7 @@ _EXPECTED_COLUMNS = [
     ("app.course_assignments", "child_id"), ("app.course_item_progress", "status"),
     ("app.reflections", "course_assignment_id"), ("app.milestones", "kind"),
     ("app.tasks", "course_assignment_id"), ("app.tasks", "milestone_id"),
+    ("app.app_blocks", "block_type"),
 ]
 
 

@@ -425,6 +425,47 @@ class CourseItemCompleteRequest(BaseModel):
     quiz_answers: Optional[List[int]] = None
 
 
+class AppBlockCreate(BaseModel):
+    app_name: str
+    app_bundle_id: Optional[str] = None
+    block_type: str  # 'duration' | 'until_task'
+    duration_minutes: Optional[int] = None
+    until_task_id: Optional[UUID] = None
+    created_by: str = "parent"
+
+    @field_validator("block_type")
+    @classmethod
+    def _known_type(cls, v):
+        if v not in ("duration", "until_task"):
+            raise ValueError("block_type must be 'duration' or 'until_task'")
+        return v
+
+    @model_validator(mode="after")
+    def _type_has_what_it_needs(self):
+        if self.block_type == "until_task" and not self.until_task_id:
+            raise ValueError("an until_task block needs until_task_id")
+        if self.block_type == "duration" and not self.duration_minutes:
+            raise ValueError("a duration block needs duration_minutes")
+        return self
+
+
+class AppBlockResponse(BaseModel):
+    id: UUID
+    child_id: UUID
+    app_name: str
+    app_bundle_id: Optional[str] = None
+    block_type: str
+    duration_minutes: Optional[int] = None
+    until_task_id: Optional[UUID] = None
+    resolved: bool
+    created_by: str
+    created_at: datetime
+    resolved_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class MilestoneCreate(BaseModel):
     title: str
     description: Optional[str] = None

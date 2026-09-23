@@ -164,6 +164,20 @@ def _award_task_bonus(occurrence: models.Occurrence, task: models.Task | None,
         )
 
 
+def _resolve_app_blocks(task: models.Task | None, db: Session) -> None:
+    """"No YouTube until homework is done" lifts itself when the homework is
+    approved. Doesn't commit — _review owns that."""
+    if not task:
+        return
+    blocks = db.query(models.AppBlock).filter(
+        models.AppBlock.until_task_id == task.id,
+        models.AppBlock.resolved == False,  # noqa: E712
+    ).all()
+    for block in blocks:
+        block.resolved = True
+        block.resolved_at = datetime.now(timezone.utc)
+
+
 def _bump_milestone_progress(task: models.Task | None, db: Session) -> None:
     """A task tagged toward a milestone ticks it on approval.
 
@@ -195,6 +209,7 @@ def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Sess
         occurrence.approved_at = datetime.now(timezone.utc)
         occurrence.approved_by = parent.id
         _award_task_bonus(occurrence, task, parent, db)
+        _resolve_app_blocks(task, db)
         _bump_milestone_progress(task, db)
     else:
         occurrence.status = "rejected"
