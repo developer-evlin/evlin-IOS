@@ -28,28 +28,36 @@ final class CachedTask {
     var bonusMinutes: Int
     var createdBy: String
     var createdAt: String?
+    // A special task's course, cached so the kid can still see which task
+    // needs which course with no connectivity.
+    var courseAssignmentId: String?
+    var milestoneId: String?
 
     init(id: String, childId: String, title: String, instructions: String?, category: String?,
          recurrence: String, gatesApps: Bool, submissionKind: String, dueDate: String?, dueTime: String?,
-         active: Bool, bonusMinutes: Int, createdBy: String, createdAt: String?) {
+         active: Bool, bonusMinutes: Int, createdBy: String, createdAt: String?,
+         courseAssignmentId: String? = nil, milestoneId: String? = nil) {
         self.id = id; self.childId = childId; self.title = title; self.instructions = instructions
         self.category = category; self.recurrence = recurrence; self.gatesApps = gatesApps
         self.submissionKind = submissionKind; self.dueDate = dueDate; self.dueTime = dueTime
         self.active = active; self.bonusMinutes = bonusMinutes; self.createdBy = createdBy
         self.createdAt = createdAt
+        self.courseAssignmentId = courseAssignmentId; self.milestoneId = milestoneId
     }
 
     convenience init(_ api: ApiTask, childId: String) {
         self.init(id: api.id, childId: childId, title: api.title, instructions: api.instructions,
                    category: api.category, recurrence: api.recurrence, gatesApps: api.gatesApps,
                    submissionKind: api.submissionKind, dueDate: api.dueDate, dueTime: api.dueTime,
-                   active: true, bonusMinutes: api.bonusMinutes, createdBy: api.createdBy, createdAt: api.createdAt)
+                   active: true, bonusMinutes: api.bonusMinutes, createdBy: api.createdBy, createdAt: api.createdAt,
+                   courseAssignmentId: api.courseAssignmentId, milestoneId: api.milestoneId)
     }
 
     func apiShape() -> ApiTask {
         ApiTask(id: id, title: title, instructions: instructions, recurrence: recurrence, gatesApps: gatesApps,
                 submissionKind: submissionKind, bucket: "anytime", category: category, dueDate: dueDate,
-                dueTime: dueTime, createdAt: createdAt, bonusMinutes: bonusMinutes, createdBy: createdBy)
+                dueTime: dueTime, createdAt: createdAt, bonusMinutes: bonusMinutes, createdBy: createdBy,
+                courseAssignmentId: courseAssignmentId, milestoneId: milestoneId)
     }
 }
 

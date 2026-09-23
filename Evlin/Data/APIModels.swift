@@ -20,6 +20,11 @@ struct ApiTask: Codable {
     // see evlin-backend's TaskBase.
     let bonusMinutes: Int
     let createdBy: String
+    /// Set on a "special task": it's completed by finishing this course
+    /// rather than by photo/voice evidence (with submissionKind "course").
+    let courseAssignmentId: String?
+    /// Approving this task's occurrence ticks that milestone's progress.
+    let milestoneId: String?
 }
 
 struct ApiEvent: Codable {

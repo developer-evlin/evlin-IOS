@@ -16,6 +16,7 @@
 		1F33184BFBCF1E8D9D149BC8 /* ParentApprovalWaitingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818BC70482046C9B2A75F3A3 /* ParentApprovalWaitingView.swift */; };
 		20E8B05A98EBF758644644E5 /* Alerts.json in Resources */ = {isa = PBXBuildFile; fileRef = 01B8F0802B5C16AE690C7954 /* Alerts.json */; };
 		27D4FDEE06BBCC6977B84F4A /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C46E9E8CEB0D72A8F8DF30F7 /* ImageCache.swift */; };
+		29887B18311EF62FA19D49DC /* ReflectionFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2942DC513D2FC526A4779016 /* ReflectionFlowView.swift */; };
 		2C729D3AF8CE056AA0C5F437 /* OnboardingV2Coordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49E21D3FF95D075AF53A0C55 /* OnboardingV2Coordinator.swift */; };
 		2D1D2F8854FF1338EAD6B405 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21383A1C819AF4B03A22E5B /* KeychainStore.swift */; };
 		2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8069A78F21788AAE2D1285B1 /* FamilyData.swift */; };
@@ -43,6 +44,7 @@
 		830D36AEAD7BC8AD2381B74A /* Baloo2-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = F6429EA9A106FA7A030F074A /* Baloo2-SemiBold.ttf */; };
 		8819F6AB3C97E70A536C7F84 /* NotificationsData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35BFBEFD1BE687497AFA1F11 /* NotificationsData.swift */; };
 		8981DFDD4250E877E419BE29 /* EvlinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECA8F6DEBD7ADA92781241C1 /* EvlinApp.swift */; };
+		8D482D12CDD0FF591EB2A54F /* CourseFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFD0201ACE84ACB5944A2B66 /* CourseFlowView.swift */; };
 		921E72916B874CDB46D07674 /* CameraCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3750CF9610765D464C94AE3 /* CameraCapture.swift */; };
 		92DC34646CFAF122652CB8C6 /* SettingsLockListManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1736580F21DF3B408C4C1C4F /* SettingsLockListManagerView.swift */; };
 		934B4680FD244C8DB77CFD51 /* SecurityLottieView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE355C0A6FCB8D50FB0E1618 /* SecurityLottieView.swift */; };
@@ -87,6 +89,7 @@
 		1736580F21DF3B408C4C1C4F /* SettingsLockListManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLockListManagerView.swift; sourceTree = "<group>"; };
 		21D3DCE7BE6480B09C478F49 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		2695F864BB0C2A358F00D312 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		2942DC513D2FC526A4779016 /* ReflectionFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReflectionFlowView.swift; sourceTree = "<group>"; };
 		3068C0082A87BDF5C6700E02 /* YouTubeEmbedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeEmbedView.swift; sourceTree = "<group>"; };
 		315F7E412521D00D78CFF094 /* BillingData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillingData.swift; sourceTree = "<group>"; };
 		35BFBEFD1BE687497AFA1F11 /* NotificationsData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsData.swift; sourceTree = "<group>"; };
@@ -114,6 +117,7 @@
 		A9DE2737C34245BDDEB5C3BE /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		ACBE52D14408BCE1201654E8 /* Baloo2-ExtraBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Baloo2-ExtraBold.ttf"; sourceTree = "<group>"; };
 		AE355C0A6FCB8D50FB0E1618 /* SecurityLottieView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLottieView.swift; sourceTree = "<group>"; };
+		AFD0201ACE84ACB5944A2B66 /* CourseFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CourseFlowView.swift; sourceTree = "<group>"; };
 		B126EFB0851C847E22CA77C7 /* ScreenChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenChat.swift; sourceTree = "<group>"; };
 		B1EAE71E90939074687633EC /* ScreenSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenSettings.swift; sourceTree = "<group>"; };
 		B61198FEA8092F22132638AF /* PlusJakartaSans-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlusJakartaSans-Bold.ttf"; sourceTree = "<group>"; };
@@ -302,8 +306,10 @@
 			isa = PBXGroup;
 			children = (
 				F3750CF9610765D464C94AE3 /* CameraCapture.swift */,
+				AFD0201ACE84ACB5944A2B66 /* CourseFlowView.swift */,
 				0EA395A2576B1DCBBCC9CA19 /* KidAdaptive.swift */,
 				818BC70482046C9B2A75F3A3 /* ParentApprovalWaitingView.swift */,
+				2942DC513D2FC526A4779016 /* ReflectionFlowView.swift */,
 				D1649C506DCAF2B417D8C70E /* ScreenTabletCalendar.swift */,
 				EA6BD1B156CBB84E08FAA023 /* ScreenTabletHome.swift */,
 				68734CAA7047409A78C79424 /* ScreenTabletLibrary.swift */,
@@ -441,6 +447,7 @@
 				55D8223509D4076490266270 /* CalendarData.swift in Sources */,
 				921E72916B874CDB46D07674 /* CameraCapture.swift in Sources */,
 				93DD2562F31193DC22691A81 /* Components.swift in Sources */,
+				8D482D12CDD0FF591EB2A54F /* CourseFlowView.swift in Sources */,
 				F8CFDA3F8D2A3780B2E8727B /* EnforcementState.swift in Sources */,
 				8981DFDD4250E877E419BE29 /* EvlinApp.swift in Sources */,
 				2DF297D33E75CD6E3B9A101C /* FamilyData.swift in Sources */,
@@ -461,6 +468,7 @@
 				BF1F029B64C057F9D75B7C8A /* ParentAdaptive.swift in Sources */,
 				1F33184BFBCF1E8D9D149BC8 /* ParentApprovalWaitingView.swift in Sources */,
 				BE203569B419A363FA541488 /* ParentRootView.swift in Sources */,
+				29887B18311EF62FA19D49DC /* ReflectionFlowView.swift in Sources */,
 				DD71A4DD17F3570749AD6DA2 /* RootView.swift in Sources */,
 				1CAC7371C19EB0230B7CCB3A /* ScreenCalendar.swift in Sources */,
 				5B274B0071D8E0E721100258 /* ScreenChat.swift in Sources */,

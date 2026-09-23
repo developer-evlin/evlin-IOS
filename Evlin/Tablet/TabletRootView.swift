@@ -45,6 +45,7 @@ struct TabletRootView: View {
     // parent Redo) so finishing everything again replays the payoff.
     @State private var celebrationStage: CelebrationStage?
     @State private var didCelebrateThisCompletion = false
+    @State private var openReflection: ApiReflection?
 
     // Gates the actual unlock — must only count a real parent decision
     // (approved/bypassed), never .review. task.done alone means "submitted
@@ -69,6 +70,16 @@ struct TabletRootView: View {
     private var locked: Bool {
         guard let childId = session.activeChildId else { return approvedCount < tasks.count }
         return LocalStore.shared.enforcementState(childId: childId).isLocked
+    }
+
+    /// The reflection currently holding the gate closed, if any. Fetched
+    /// rather than read from the cache because the flow needs the full
+    /// record (prompt, review note, its course assignment), not just the
+    /// boolean the lock is computed from.
+    private func loadOpenReflection() async {
+        guard let childId = session.activeChildId else { return }
+        guard let open = try? await APIClient.shared.fetchReflections(childId: childId, status: "open") else { return }
+        withAnimation(.easeInOut(duration: 0.2)) { openReflection = open.first }
     }
     private var minutesLeft: Int { max(0, limitMin - usedMin) }
     private var onBreak: Bool { if let until = onBreakUntil { return Date() < until } else { return false } }
@@ -139,6 +150,20 @@ struct TabletRootView: View {
                 .transition(.opacity)
             }
 
+            // A reflection locks the device, so its own flow has to be
+            // reachable while it's open — a gate with no door is just a
+            // broken tablet. Covers everything else on purpose: it's the
+            // highest-priority gate, and there's nothing else to do until
+            // it's handed in.
+            if let reflection = openReflection {
+                ReflectionFlowView(reflection: reflection) {
+                    await AppSync.shared.syncBackendData()
+                    await loadOpenReflection()
+                }
+                .transition(.opacity)
+                .zIndex(2)
+            }
+
             if let stage = celebrationStage {
                 TaskCompletionOverlay(stage: stage, childName: childName, limitMin: limitMin) {
                     switch stage {
@@ -184,6 +209,7 @@ struct TabletRootView: View {
         .task {
             while !Task.isCancelled {
                 await AppSync.shared.syncBackendData()
+                await loadOpenReflection()
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
             }
         }

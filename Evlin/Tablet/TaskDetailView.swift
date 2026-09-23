@@ -55,6 +55,8 @@ struct TaskDetailView: View {
     @State private var showBypassSheet = false
     @State private var bypassSent = false
     @State private var viewerIndex: Int?
+    @State private var courseAssignment: ApiCourseAssignment?
+    @State private var courseFullyDone = false
     // Drives the note field's tap-to-dismiss below — see the guarded
     // simultaneousGesture on the ScrollView's content for why this exists
     // instead of the blanket dismissKeyboardOnTap() this screen used to
@@ -99,6 +101,13 @@ struct TaskDetailView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         if bypassSent {
                             bypassSentCard
+                        } else if let assignment = courseAssignment, !submitted {
+                            // A special task is finished by finishing its
+                            // course, so the camera/voice flow doesn't apply
+                            // — this is the first submission kind that
+                            // genuinely branches (photo and voice are both
+                            // offered unconditionally today).
+                            courseTaskContent(assignment)
                         } else if !submitted {
                             notYetSubmittedContent
                         } else {
@@ -151,6 +160,7 @@ struct TaskDetailView: View {
         // touch — see SwipeToDismiss's own doc comment.
         .swipeToDismiss(interactive: false) { dismiss() }
         .task {
+            await reloadCourseAssignment()
             guard let occurrenceId = task.occurrenceId else { return }
             await loadExistingSubmissions(occurrenceId: occurrenceId)
             resumePendingUploads()
@@ -196,6 +206,64 @@ struct TaskDetailView: View {
     }
 
     // MARK: - Not-yet-submitted flow (capture + note + "All done!")
+
+    /// A special task: watch the course, answer its quizzes, hand in. The
+    /// backend refuses the submission until the course is actually finished,
+    /// so the button here matches that rather than letting them tap it and
+    /// get an error.
+    @ViewBuilder private func courseTaskContent(_ assignment: ApiCourseAssignment) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            if bonusMinutesForTask > 0 {
+                HStack(spacing: 8) {
+                    Image(systemName: "hourglass")
+                        .foregroundStyle(KidTheme.greenDeep)
+                    Text("Finish this to earn \(bonusMinutesForTask) more minutes")
+                        .font(Typography.font(15, weight: .bold))
+                        .foregroundStyle(KidTheme.ink)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(KidTheme.greenTint))
+            }
+
+            CourseFlowView(assignment: assignment) {
+                await reloadCourseAssignment()
+            }
+
+            Button {
+                justSubmitted = true
+                submitted = true
+            } label: {
+                Text("All done!")
+                    .font(Typography.display(18, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Capsule().fill(courseFullyDone ? KidTheme.greenDeep : KidTheme.mutedBorder))
+            }
+            .buttonStyle(.plain)
+            .disabled(!courseFullyDone)
+        }
+        .padding(.top, 12)
+    }
+
+    private var bonusMinutesForTask: Int {
+        guard let childId = SessionManager.shared.activeChildId else { return 0 }
+        return LocalStore.shared.cachedTasks(childId: childId)
+            .first { $0.id == task.id }?.bonusMinutes ?? 0
+    }
+
+    private func reloadCourseAssignment() async {
+        guard let childId = SessionManager.shared.activeChildId,
+              let assignmentId = LocalStore.shared.cachedTasks(childId: childId)
+                  .first(where: { $0.id == task.id })?.courseAssignmentId
+        else { return }
+        guard let refreshed = try? await APIClient.shared.fetchCourseAssignments(childId: childId)
+            .first(where: { $0.id == assignmentId }) else { return }
+        courseAssignment = refreshed
+        courseFullyDone = !refreshed.progress.isEmpty
+            && refreshed.progress.allSatisfy { $0.status == "completed" }
+    }
 
     @ViewBuilder private var notYetSubmittedContent: some View {
         HStack(alignment: .top, spacing: 12) {
