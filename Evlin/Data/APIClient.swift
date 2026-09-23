@@ -32,11 +32,31 @@ extension Error {
         }
         if let u = self as? URLError {
             switch u.code {
-            case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed:
-                return "No internet connection."
+            // iOS is telling us outright there's no route to the network, so
+            // it's safe to say so plainly.
+            case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed,
+                 .internationalRoamingOff:
+                return "You're offline. Check your internet connection and try again."
+
+            // Reached the network but not us — a dropped Wi-Fi link, DNS, a
+            // VPN or captive portal, or the server genuinely being down.
+            // We can't tell which from here, so don't claim they're offline;
+            // point at the one thing they can actually check. (-1004 landed
+            // in the old generic branch and read as "the server is broken",
+            // which is the least likely cause and the least useful thing to
+            // tell someone.)
+            case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+                 .secureConnectionFailed, .serverCertificateUntrusted:
+                return "Couldn't reach Evlin. Check your internet connection and try again."
+
             case .timedOut:
-                return "The server took too long to answer. It may be waking up — try again in a moment."
-            default: return "Couldn't reach the server (\(u.code.rawValue))."
+                return "Evlin took too long to answer — it may be waking up. Try again in a moment."
+
+            case .cancelled:
+                return "That was cancelled before it finished."
+
+            default:
+                return "Couldn't reach Evlin (\(u.code.rawValue)). Check your connection and try again."
             }
         }
         return "Unexpected error: \(localizedDescription)"
