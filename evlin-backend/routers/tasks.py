@@ -73,11 +73,42 @@ def get_child_tasks(child_id: UUID, db: Session = Depends(get_db), _access: None
     tasks = db.query(models.Task).filter(models.Task.child_id == child_id).all()
     return tasks
 
+def _attach_course(db: Session, task: schemas.TaskCreate, child_id: UUID) -> Optional[UUID]:
+    """Turn a course_id on a task create into this child's own assignment.
+
+    A course still pending review is published here: the parent tapping
+    Create on the proposal card is the approval. Doing both inside the
+    task's own transaction means there's never a task pointing at an
+    unpublished course, or a course published by a call whose task then
+    failed to save.
+    """
+    if task.course_id is None:
+        return None
+
+    # Imported here rather than at module scope: courses.py doesn't import
+    # this module today, but routers importing each other at import time is
+    # how the time_grants/occurrences circular-import problem started.
+    from routers.courses import assign_course
+
+    course = db.query(models.Course).filter(models.Course.id == task.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.status == "pending_review":
+        course.status = "published"
+        course.published_at = datetime.now(timezone.utc)
+        db.flush()
+
+    assignment = assign_course(db, course.id, child_id, assigned_by="parent")
+    db.flush()
+    return assignment.id
+
+
 @router.post("/children/{child_id}/tasks", response_model=schemas.TaskResponse)
 def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
     """Create a new task for a child"""
     assert_parent_owns_child(db, current_parent, child_id)
     parsed_time, parsed_date = _parse_due(task)
+    assignment_id = _attach_course(db, task, child_id)
 
     new_task = models.Task(
         child_id=child_id,
@@ -93,7 +124,9 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         submission_kind=_safe_submission_kind(task.submission_kind),
         active=task.active,
         bonus_minutes=task.bonus_minutes,
-        created_by=task.created_by
+        created_by=task.created_by,
+        course_assignment_id=assignment_id,
+        milestone_id=task.milestone_id,
     )
     db.add(new_task)
     _commit_or_400(db)

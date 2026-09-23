@@ -104,7 +104,15 @@ class TaskBase(BaseModel):
     created_by: str = "parent"
 
 class TaskCreate(TaskBase):
-    pass
+    # Makes this a "special task": the course is assigned to the child and
+    # the task is completed by finishing it. A course still awaiting review
+    # is published by this same call — the parent tapping Create on the
+    # proposal card *is* the approval, and doing it in one transaction means
+    # there's no window where a task points at an unpublished course.
+    course_id: Optional[UUID] = None
+    # Tag this task toward a milestone: approving its occurrence ticks that
+    # milestone's progress_count.
+    milestone_id: Optional[UUID] = None
 
     @field_validator("title")
     @classmethod
@@ -123,6 +131,8 @@ class TaskResponse(TaskBase):
     id: UUID
     child_id: UUID
     created_at: datetime
+    course_assignment_id: Optional[UUID] = None
+    milestone_id: Optional[UUID] = None
 
     class Config:
         from_attributes = True
@@ -413,6 +423,70 @@ class CourseAssignmentResponse(BaseModel):
 
 class CourseItemCompleteRequest(BaseModel):
     quiz_answers: Optional[List[int]] = None
+
+
+class MilestoneCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    kind: str = "count"
+    target_count: Optional[int] = None
+    prize_text: Optional[str] = None
+    prize_minutes: int = 0
+    created_by: str = "parent"
+    # For kind='course': the course whose completion achieves this milestone.
+    course_id: Optional[UUID] = None
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, v):
+        if not v or not v.strip():
+            raise ValueError("title must not be blank")
+        return v.strip()
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, v):
+        if v not in ("count", "streak", "course", "custom"):
+            raise ValueError("kind must be count, streak, course or custom")
+        return v
+
+    @model_validator(mode="after")
+    def _kind_has_what_it_needs(self):
+        if self.kind == "course" and not self.course_id:
+            raise ValueError("a course milestone needs a course_id")
+        if self.kind in ("count", "streak") and not self.target_count:
+            raise ValueError("a count/streak milestone needs a target_count")
+        return self
+
+
+class MilestoneResponse(BaseModel):
+    id: UUID
+    child_id: UUID
+    title: str
+    description: Optional[str] = None
+    kind: str
+    target_count: Optional[int] = None
+    progress_count: int
+    course_assignment_id: Optional[UUID] = None
+    prize_text: Optional[str] = None
+    prize_minutes: int
+    status: str
+    created_by: str
+    created_at: datetime
+    achieved_at: Optional[datetime] = None
+    # Computed: whether the thing this milestone asks for is actually done.
+    # For count/streak that's progress vs target; for a course it's the
+    # assignment being finished — two different questions, one answer the
+    # client can just read.
+    achievable: bool = False
+    assignment: Optional[CourseAssignmentResponse] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MilestoneGenerateRequest(BaseModel):
+    hint: Optional[str] = None
 
 
 class ReflectionCreate(BaseModel):

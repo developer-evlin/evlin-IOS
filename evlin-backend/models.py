@@ -108,6 +108,16 @@ class Task(Base):
     bonus_minutes = Column(Integer, nullable=False, default=0)
     # 'parent' | 'ai_agent' | 'system' — who/what authored this task.
     created_by = Column(String, nullable=False, default="parent")
+    # A "special task": completed by finishing this course rather than by
+    # photo/voice evidence (submission_kind == 'course'). Paired with
+    # bonus_minutes, that's "watch this and answer the quizzes to earn screen
+    # time" — and the reward needs no new code, since approving any task with
+    # bonus_minutes already writes to the ledger.
+    course_assignment_id = Column(UUID(as_uuid=True), ForeignKey("app.course_assignments.id", ondelete="SET NULL"))
+    # Approving this task's occurrence ticks the tagged milestone's progress.
+    # SET NULL on both: without it, deleting a milestone or an assignment
+    # would fail while any task still points at it.
+    milestone_id = Column(UUID(as_uuid=True), ForeignKey("app.milestones.id", ondelete="SET NULL"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class Occurrence(Base):
@@ -310,6 +320,39 @@ class CourseItemProgress(Base):
     quiz_answers = Column(JSON)
     quiz_score = Column(Integer)
     completed_at = Column(DateTime(timezone=True))
+
+
+class Milestone(Base):
+    """A longer-arc goal with a prize, tracked separately from day-to-day
+    tasks.
+
+    Two shapes of progress, deliberately not merged: 'count'/'streak' tick up
+    as tagged tasks get approved (tasks.milestone_id is what makes a task
+    count toward one — without that linkage nothing would ever increment it),
+    while 'course' is achieved by finishing an assigned course, reusing the
+    same completion check reflections and special tasks use.
+
+    The prize pays out through the existing time-grant ledger
+    (source='milestone'), which has had a source_ref_id with no FK reserved
+    for exactly this since before milestones existed.
+    """
+    __tablename__ = "milestones"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String, nullable=False)
+    description = Column(String)
+    kind = Column(String, nullable=False, default="count")  # 'count' | 'streak' | 'course' | 'custom'
+    target_count = Column(Integer)
+    progress_count = Column(Integer, nullable=False, default=0)
+    course_assignment_id = Column(UUID(as_uuid=True), ForeignKey("app.course_assignments.id"))
+    prize_text = Column(String)
+    prize_minutes = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default="active")  # 'active' | 'achieved' | 'expired'
+    created_by = Column(String, nullable=False, default="parent")  # 'parent' | 'ai_agent'
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    achieved_at = Column(DateTime(timezone=True))
 
 
 class Reflection(Base):

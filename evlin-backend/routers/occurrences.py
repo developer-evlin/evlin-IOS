@@ -134,6 +134,15 @@ def submit_occurrence(occurrence_id: UUID, body: schemas.OccurrenceBypassRequest
     occurrence = db.query(models.Occurrence).filter(models.Occurrence.id == occurrence_id).first()
     if not occurrence or occurrence.child_id != current_device.child_id:
         raise HTTPException(status_code=404, detail="Occurrence not found")
+
+    # A special task is done when its course is done — "watch this and answer
+    # the quizzes" can't be satisfied by tapping Done on the task itself.
+    task = db.query(models.Task).filter(models.Task.id == occurrence.task_id).first()
+    if task and task.submission_kind == "course" and task.course_assignment_id:
+        from routers.courses import course_assignment_fully_completed
+        if not course_assignment_fully_completed(db, task.course_assignment_id):
+            raise HTTPException(status_code=400, detail="Finish the videos and quizzes first")
+
     occurrence.status = "submitted"
     occurrence.rejection_note = None   # a resubmission answers the earlier redo request
     occurrence.completed_at = datetime.now(timezone.utc)
@@ -155,6 +164,20 @@ def _award_task_bonus(occurrence: models.Occurrence, task: models.Task | None,
         )
 
 
+def _bump_milestone_progress(task: models.Task | None, db: Session) -> None:
+    """A task tagged toward a milestone ticks it on approval.
+
+    Only count/streak milestones track progress this way — a course
+    milestone is achieved by finishing its course, not by task approvals.
+    Doesn't commit — _review owns that.
+    """
+    if not task or not task.milestone_id:
+        return
+    milestone = db.query(models.Milestone).filter(models.Milestone.id == task.milestone_id).first()
+    if milestone and milestone.status == "active" and milestone.kind in ("count", "streak"):
+        milestone.progress_count = (milestone.progress_count or 0) + 1
+
+
 def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Session,
             rejection_note: str | None = None):
     """The one place a parent's review of an occurrence is applied.
@@ -172,6 +195,7 @@ def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Sess
         occurrence.approved_at = datetime.now(timezone.utc)
         occurrence.approved_by = parent.id
         _award_task_bonus(occurrence, task, parent, db)
+        _bump_milestone_progress(task, db)
     else:
         occurrence.status = "rejected"
         occurrence.rejection_note = rejection_note

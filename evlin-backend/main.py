@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses, reflections
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses, reflections, milestones
 from storage import storage_configured
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
@@ -227,6 +227,30 @@ _MIGRATIONS = [
         reviewed_at timestamptz
     )""",
     "CREATE INDEX IF NOT EXISTS reflections_child_status_idx ON app.reflections(child_id, status)",
+    """CREATE TABLE IF NOT EXISTS app.milestones (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        title text NOT NULL,
+        description text,
+        kind text NOT NULL DEFAULT 'count',
+        target_count integer,
+        progress_count integer NOT NULL DEFAULT 0,
+        course_assignment_id uuid REFERENCES app.course_assignments(id),
+        prize_text text,
+        prize_minutes integer NOT NULL DEFAULT 0,
+        status text NOT NULL DEFAULT 'active',
+        created_by text NOT NULL DEFAULT 'parent',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        achieved_at timestamptz
+    )""",
+    "CREATE INDEX IF NOT EXISTS milestones_child_status_idx ON app.milestones(child_id, status)",
+    # Special tasks and milestone tagging. SET NULL on both: without it,
+    # deleting a milestone or a course assignment fails while any task still
+    # references it.
+    """ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS course_assignment_id uuid
+        REFERENCES app.course_assignments(id) ON DELETE SET NULL""",
+    """ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS milestone_id uuid
+        REFERENCES app.milestones(id) ON DELETE SET NULL""",
 ]
 
 
@@ -270,6 +294,7 @@ app.include_router(time_grants.router)
 app.include_router(chat.router)
 app.include_router(courses.router)
 app.include_router(reflections.router)
+app.include_router(milestones.router)
 
 @app.get("/")
 def read_root():
@@ -290,7 +315,8 @@ _EXPECTED_COLUMNS = [
     # from one curl instead.
     ("app.courses", "status"), ("app.course_items", "video_id"),
     ("app.course_assignments", "child_id"), ("app.course_item_progress", "status"),
-    ("app.reflections", "course_assignment_id"),
+    ("app.reflections", "course_assignment_id"), ("app.milestones", "kind"),
+    ("app.tasks", "course_assignment_id"), ("app.tasks", "milestone_id"),
 ]
 
 
