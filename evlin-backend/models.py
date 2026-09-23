@@ -218,6 +218,100 @@ class ChatMessage(Base):
     tool_args = Column(JSON)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+class Course(Base):
+    """A vetted, ordered sequence of YouTube videos — shared library content,
+    deliberately with no child_id.
+
+    Vetting a course is the expensive part (a real YouTube search plus an LLM
+    pass over the candidates' real metadata), so it happens once and any
+    number of children can then be assigned to the same course. That split is
+    the whole reason this is two pairs of tables: Course/CourseItem is the
+    content, CourseAssignment/CourseItemProgress is one child's journey
+    through it. A shared row is never mutated by a child's progress.
+
+    Same no-owner shape as SlideLesson/ComicGuide. created_by_parent_id is
+    attribution only and is ON DELETE SET NULL: a course outliving the parent
+    who requested it is correct for a shared library, and without that the
+    row would block account deletion (courses aren't reachable by the
+    child-cascade that clears everything else).
+    """
+    __tablename__ = "courses"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String, nullable=False)
+    topic = Column(String)
+    category = Column(String)
+    # 'pending_review' until a parent approves it — nothing reaches a child
+    # from an unapproved course. Then 'published' (browsable/assignable) or
+    # 'archived'.
+    status = Column(String, nullable=False, default="pending_review")
+    created_by = Column(String, nullable=False, default="ai_agent")  # 'parent' | 'ai_agent'
+    created_by_parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    published_at = Column(DateTime(timezone=True))
+
+
+class CourseItem(Base):
+    """One video in a course. Shared content: no per-child state lives here —
+    that's CourseItemProgress. `quiz` is optional; an empty list means the
+    video alone completes the item."""
+    __tablename__ = "course_items"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    course_id = Column(UUID(as_uuid=True), ForeignKey("app.courses.id", ondelete="CASCADE"), nullable=False)
+    order_index = Column(Integer, nullable=False)
+    video_id = Column(String, nullable=False)   # YouTube video id — the only source
+    video_title = Column(String)
+    channel_title = Column(String)
+    # Why the vetting pass picked this one (age-appropriateness, channel,
+    # topic match) — shown to the parent on the approval card.
+    vetting_notes = Column(String)
+    quiz = Column(JSON, nullable=False, default=list)  # [{question, options, correct_index}]
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CourseAssignment(Base):
+    """One child working through one course.
+
+    Claimed by exactly one consumer — a reflection, a task, or a milestone —
+    or by nothing at all for a course assigned straight from the library.
+    Never shared between two of them: if a reflection and a task pointed at
+    the same assignment, finishing it for one would silently finish the
+    other. Assigning the same course to the same child twice for two
+    purposes is fine — that's two assignments, two independent progress
+    tracks, one shared course.
+    """
+    __tablename__ = "course_assignments"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    course_id = Column(UUID(as_uuid=True), ForeignKey("app.courses.id"), nullable=False)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String, nullable=False, default="active")  # 'active' | 'completed'
+    assigned_by = Column(String, nullable=False, default="parent")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    completed_at = Column(DateTime(timezone=True))
+
+
+class CourseItemProgress(Base):
+    """One child's state on one video of one course — the per-child half of
+    the split described on Course. Seeded one row per item when the
+    assignment is created: the lowest order_index starts 'available', the
+    rest 'locked', and completing one unlocks exactly the next."""
+    __tablename__ = "course_item_progress"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    assignment_id = Column(UUID(as_uuid=True), ForeignKey("app.course_assignments.id", ondelete="CASCADE"), nullable=False)
+    course_item_id = Column(UUID(as_uuid=True), ForeignKey("app.course_items.id"), nullable=False)
+    status = Column(String, nullable=False, default="locked")  # 'locked' | 'available' | 'completed'
+    quiz_answers = Column(JSON)
+    quiz_score = Column(Integer)
+    completed_at = Column(DateTime(timezone=True))
+
+
 class ICSFeed(Base):
     __tablename__ = "ics_feeds"
     __table_args__ = {"schema": "app"}

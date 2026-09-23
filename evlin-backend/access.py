@@ -42,12 +42,13 @@ def get_occurrence_for_parent(db: Session, parent: models.Parent, occurrence_id:
     return occ
 
 
-def assert_child_access(
-    child_id: UUID,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),
-) -> None:
-    """Allow either the child's own paired device or a parent of that child."""
+def check_child_access(db: Session, credentials: HTTPAuthorizationCredentials, child_id: UUID) -> None:
+    """Allow either the child's own paired device or a parent of that child.
+
+    The plain-function form, for routes that resolve the child id from a row
+    mid-handler rather than taking it in the path (where the dependency
+    version below can't be used).
+    """
     device = db.query(models.Device).filter(
         models.Device.token_hash == hash_token(credentials.credentials),
         models.Device.revoked_at == None,  # noqa: E711
@@ -58,6 +59,15 @@ def assert_child_access(
         return
     parent = get_current_parent(credentials, db)
     assert_parent_owns_child(db, parent, child_id)
+
+
+def assert_child_access(
+    child_id: UUID,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> None:
+    """Allow either the child's own paired device or a parent of that child."""
+    check_child_access(db, credentials, child_id)
 
 
 def get_occurrence_for_device_or_parent(

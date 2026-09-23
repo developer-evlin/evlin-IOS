@@ -299,6 +299,115 @@ class TimeGrantsSummary(BaseModel):
     available_minutes: int
     grants: List[TimeGrantResponse]
 
+class QuizQuestion(BaseModel):
+    question: str
+    options: List[str]
+    correct_index: int
+
+
+class CourseItemResponse(BaseModel):
+    id: UUID
+    order_index: int
+    video_id: str
+    video_title: Optional[str] = None
+    channel_title: Optional[str] = None
+    vetting_notes: Optional[str] = None
+    quiz: List[dict] = []
+
+    class Config:
+        from_attributes = True
+
+
+class CourseResponse(BaseModel):
+    id: UUID
+    title: str
+    topic: Optional[str] = None
+    category: Optional[str] = None
+    status: str
+    created_by: str
+    created_at: datetime
+    published_at: Optional[datetime] = None
+    items: List[CourseItemResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+class CourseGenerateRequest(BaseModel):
+    topic: str
+    video_count: int = 4
+    # Optional: generating from a child's context lets the vetting prompt
+    # mention their age. A course is still shared library content either way.
+    child_id: Optional[UUID] = None
+
+    @field_validator("topic")
+    @classmethod
+    def _topic_not_blank(cls, v):
+        if not v or not v.strip():
+            raise ValueError("topic must not be blank")
+        return v.strip()
+
+    @field_validator("video_count")
+    @classmethod
+    def _sane_count(cls, v):
+        if not 1 <= v <= 10:
+            raise ValueError("video_count must be between 1 and 10")
+        return v
+
+
+class CourseApproveRequest(BaseModel):
+    # Approving from a child's context both publishes the course to the
+    # shared library and assigns it to that child, so the parent doesn't
+    # have to do it in two steps. Omit to publish only.
+    assign_to_child_id: Optional[UUID] = None
+
+
+class SingleVideoCourseRequest(BaseModel):
+    """A parent picking one specific video — no vetting pass, published
+    immediately, because they chose it themselves."""
+    video_id: str
+    video_title: Optional[str] = None
+    channel_title: Optional[str] = None
+    quiz: List[dict] = []
+    title: Optional[str] = None
+
+
+class CourseAssignRequest(BaseModel):
+    course_id: UUID
+
+
+class CourseItemProgressResponse(BaseModel):
+    id: UUID
+    assignment_id: UUID
+    course_item_id: UUID
+    status: str
+    quiz_answers: Optional[list] = None
+    quiz_score: Optional[int] = None
+    completed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CourseAssignmentResponse(BaseModel):
+    id: UUID
+    course_id: UUID
+    child_id: UUID
+    status: str
+    assigned_by: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    course: Optional[CourseResponse] = None
+    progress: List[CourseItemProgressResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+class CourseItemCompleteRequest(BaseModel):
+    quiz_answers: Optional[List[int]] = None
+
+
 class ChatSendRequest(BaseModel):
     text: str
 

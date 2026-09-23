@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses
 from storage import storage_configured
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
@@ -142,6 +142,55 @@ _MIGRATIONS = [
             CHECK (submission_kind IN ('none','photo','voice','either','course'));
     EXCEPTION WHEN duplicate_object THEN NULL;
     END $$""",
+    # Courses: shared vetted content (courses/course_items, no child_id) +
+    # per-child progress (course_assignments/course_item_progress). See
+    # models.py's Course for why that's split rather than one per-child table.
+    # id has no DEFAULT here, matching time_grants/chat_messages above — the
+    # models supply it Python-side.
+    """CREATE TABLE IF NOT EXISTS app.courses (
+        id uuid PRIMARY KEY,
+        title text NOT NULL,
+        topic text,
+        category text,
+        status text NOT NULL DEFAULT 'pending_review',
+        created_by text NOT NULL DEFAULT 'ai_agent',
+        created_by_parent_id uuid REFERENCES app.parents(id) ON DELETE SET NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        published_at timestamptz
+    )""",
+    """CREATE TABLE IF NOT EXISTS app.course_items (
+        id uuid PRIMARY KEY,
+        course_id uuid NOT NULL REFERENCES app.courses(id) ON DELETE CASCADE,
+        order_index integer NOT NULL,
+        video_id text NOT NULL,
+        video_title text,
+        channel_title text,
+        vetting_notes text,
+        quiz jsonb NOT NULL DEFAULT '[]'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS course_items_course_order_idx ON app.course_items(course_id, order_index)",
+    """CREATE TABLE IF NOT EXISTS app.course_assignments (
+        id uuid PRIMARY KEY,
+        course_id uuid NOT NULL REFERENCES app.courses(id),
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        status text NOT NULL DEFAULT 'active',
+        assigned_by text NOT NULL DEFAULT 'parent',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        completed_at timestamptz
+    )""",
+    "CREATE INDEX IF NOT EXISTS course_assignments_child_idx ON app.course_assignments(child_id, status)",
+    """CREATE TABLE IF NOT EXISTS app.course_item_progress (
+        id uuid PRIMARY KEY,
+        assignment_id uuid NOT NULL REFERENCES app.course_assignments(id) ON DELETE CASCADE,
+        course_item_id uuid NOT NULL REFERENCES app.course_items(id),
+        status text NOT NULL DEFAULT 'locked',
+        quiz_answers jsonb,
+        quiz_score integer,
+        completed_at timestamptz
+    )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS course_item_progress_assignment_item_uidx
+        ON app.course_item_progress(assignment_id, course_item_id)""",
 ]
 
 
@@ -183,6 +232,7 @@ app.include_router(compliance.router)
 app.include_router(content.router)
 app.include_router(time_grants.router)
 app.include_router(chat.router)
+app.include_router(courses.router)
 
 @app.get("/")
 def read_root():
@@ -197,6 +247,12 @@ _EXPECTED_COLUMNS = [
     ("app.parents", "name"), ("app.tasks", "due_date"),
     ("app.events", "category"), ("app.events", "note"), ("app.events", "recurrence"),
     ("app.child_rules", "daily_limit_enabled"), ("app.child_rules", "custom_rules"),
+    # A model with no matching migration is a table that doesn't exist in
+    # production — the failure shows up as a 500 in whatever feature needed
+    # it, long after deploy. These make a silently-failed migration visible
+    # from one curl instead.
+    ("app.courses", "status"), ("app.course_items", "video_id"),
+    ("app.course_assignments", "child_id"), ("app.course_item_progress", "status"),
 ]
 
 
