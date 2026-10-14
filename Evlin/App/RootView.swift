@@ -27,22 +27,61 @@ struct RootView: View {
     // Filled by the parent's pairing poll (see ParentScanCodeStep).
     @State private var pairedKidName: String?
 
-    private enum Saved {
+    enum Saved {
         static let mode = "evlin.mode"
         static let parent = "evlin.parentOnboarded"
         static let child = "evlin.childOnboarded"
     }
 
     init() {
+        let saved = Self.savedSession()
+        _parentOnboarded = State(initialValue: saved.parent)
+        _childOnboarded = State(initialValue: saved.child)
+        _mode = State(initialValue: saved.mode)
+    }
+
+    /// Who was signed in last time, from the Keychain and UserDefaults, and
+    /// the role to reopen straight into.
+    static func savedSession() -> (parent: Bool, child: Bool, mode: AppMode?) {
         let d = UserDefaults.standard
         let s = SessionManager.shared
         let parentOK = s.hasParentSession && d.bool(forKey: Saved.parent)
         let childOK = s.hasChildSession && d.bool(forKey: Saved.child)
-        _parentOnboarded = State(initialValue: parentOK)
-        _childOnboarded = State(initialValue: childOK)
-        // Reopen straight into the role that was in use last.
         let last = d.string(forKey: Saved.mode).flatMap(AppMode.init(rawValue:))
-        _mode = State(initialValue: (last == .parent && parentOK) || (last == .tablet && childOK) ? last : nil)
+        // A kid's phone that was reinstalled: the Keychain kept its device
+        // token but UserDefaults lost everything. Go straight back to the
+        // kid side, where onboarding skips pairing (OnboardingV2Coordinator).
+        if !s.hasParentSession, s.hasChildSession, !childOK, last == nil {
+            return (parentOK, false, .tablet)
+        }
+        return (parentOK, childOK, (last == .parent && parentOK) || (last == .tablet && childOK) ? last : nil)
+    }
+
+    /// A launch before the phone's first unlock reads an empty Keychain and
+    /// shows the mode picker. Once it opens, pick the session back up. Only
+    /// while nobody is in: a sign-out cleared the Keychain, so it can't come
+    /// back this way.
+    private func restoreSessionIfMissed() {
+        guard !parentOnboarded, !childOnboarded, mode == nil else { return }
+        SessionManager.shared.reloadMissingFromKeychain()
+        let saved = Self.savedSession()
+        guard saved.parent || saved.child else { return }
+        if saved.parent { LocalStore.shared.hydrateIfNeeded() }
+        parentOnboarded = saved.parent
+        childOnboarded = saved.child
+        mode = saved.mode
+        Task { await AppSync.shared.syncBackendData() }
+    }
+
+    /// The live-updates stream runs exactly while someone is signed in and
+    /// the app is on screen. iOS suspends a backgrounded app's sockets
+    /// anyway, and the foreground sync below catches up on return.
+    private func updateLiveUpdates() {
+        if scenePhase == .active && (parentOnboarded || childOnboarded) {
+            LiveUpdates.shared.start()
+        } else {
+            LiveUpdates.shared.stop()
+        }
     }
 
     /// The backend refused the stored login/device token for good: forget
@@ -74,18 +113,18 @@ struct RootView: View {
                             role: .parent,
                             onExitToModePicker: { mode = nil },
                             onComplete: {
-                                // Load the real family before showing Home, so
-                                // the parent lands on their child's actual name
-                                // instead of a placeholder that gets swapped a
-                                // moment later. The name typed on the child's
-                                // device (announced when pairing finished) is
-                                // the fallback if the sync can't complete.
+                                // Show the app as soon as sign-in/setup is done.
+                                // First-run SwiftData creation and the full sync
+                                // can take long enough to make this button feel
+                                // dead; Home has its own first-sync loading state.
+                                LocalStore.shared.hydrateIfNeeded()
+                                parentOnboarded = true
                                 Task {
                                     await AppSync.shared.syncBackendData()
                                     if FamilyStore.children.isEmpty {
                                         FamilyStore.addOnboardedChild(name: pairedKidName ?? "Your child")
+                                        SyncState.shared.publish()
                                     }
-                                    parentOnboarded = true
                                 }
                             }
                         )
@@ -112,8 +151,14 @@ struct RootView: View {
             if let name = note.object as? String, !name.isEmpty { pairedKidName = name }
         }
         .onChange(of: mode) { _, new in UserDefaults.standard.set(new?.rawValue, forKey: Saved.mode) }
-        .onChange(of: parentOnboarded) { _, new in UserDefaults.standard.set(new, forKey: Saved.parent) }
-        .onChange(of: childOnboarded) { _, new in UserDefaults.standard.set(new, forKey: Saved.child) }
+        .onChange(of: parentOnboarded) { _, new in
+            UserDefaults.standard.set(new, forKey: Saved.parent)
+            updateLiveUpdates()
+        }
+        .onChange(of: childOnboarded) { _, new in
+            UserDefaults.standard.set(new, forKey: Saved.child)
+            updateLiveUpdates()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .evlinSessionExpired)) { _ in
             if parentOnboarded || childOnboarded { signOutBecauseSessionEnded() }
         }
@@ -122,10 +167,21 @@ struct RootView: View {
         } message: {
             Text("Your session ended. Please sign in again.")
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+            restoreSessionIfMissed()
+        }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .active { restoreSessionIfMissed() }
             if phase == .active, parentOnboarded || childOnboarded {
                 Task { await AppSync.shared.syncBackendData() }
             }
+            // Leaving: send what's waiting with the seconds iOS allows, and
+            // book the next background refresh.
+            if phase == .background, parentOnboarded || childOnboarded {
+                BackgroundSync.finishPendingWork()
+                BackgroundSync.scheduleRefresh()
+            }
+            updateLiveUpdates()
         }
         // Used to be a blanket dismissKeyboardOnTap() here covering the
         // whole app (mode picker, every onboarding step, both tab roots) —
@@ -139,39 +195,58 @@ struct RootView: View {
         // simultaneousGesture alone doesn't fully prevent this at the
         // scale of "every screen in the app."
         .task {
-            // Was a 1.1s hold + 0.3s fade (~1.4s total) — a real wait to
-            // sit through on every single launch, not just the first one.
-            // Still a beat long enough to register the brand, just not a
-            // stall.
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            withAnimation(.easeInOut(duration: 0.2)) { showSplash = false }
-            
-            if parentOnboarded || childOnboarded {
-                await AppSync.shared.syncBackendData()
+            // The family's last known state first, from the phone, so the
+            // app opens with real content instead of waiting on the network.
+            // (The kid side does the same in TabletRootView.)
+            if parentOnboarded { LocalStore.shared.hydrateIfNeeded() }
+            DayClock.shared.start()
+            Outbox.startWatchingNetwork()
+            updateLiveUpdates()
+            // Sync starts now, under the splash, not after it.
+            let sync = Task {
+                if parentOnboarded || childOnboarded { await AppSync.shared.syncBackendData() }
             }
+            // The splash stays a beat for the brand, then until the first
+            // sync has brought the latest tasks, capped so a slow network
+            // never holds the app closed. It used to lift as soon as the
+            // saved data was in, which showed the last session's state
+            // (tasks since approved or sent in) for a second before the
+            // sync replaced it. Past the cap, the saved data shows.
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            let started = Date()
+            while (parentOnboarded || childOnboarded)
+                    && !SyncState.shared.hasFreshChildren
+                    && !SyncState.shared.hasFinishedFirstSync
+                    && Date().timeIntervalSince(started) < 2.5 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            withAnimation(.easeInOut(duration: 0.2)) { showSplash = false }
+            await sync.value
         }
     }
 }
 
-// Full-bleed brand splash — dark forest-green background, centered mascot
-// mark, thin pulsing loading bar pinned near the bottom (mirrors the
-// Robinhood-style reference: solid brand color, single centered logo mark,
-// minimal loading affordance, no other chrome).
+// Brand splash: the app icon's artwork centred on white, with a thin pulsing
+// green loading bar near the bottom. White rather than the dark brand ink,
+// which fought the icon's bright green.
 struct SplashScreenView: View {
     @State private var pulse = false
 
     var body: some View {
         ZStack {
-            EColor.primary.ignoresSafeArea()
+            Color.white.ignoresSafeArea()
 
-            Image(systemName: "flame.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(Color(hex: "8CE6A8"))
+            // The app icon's own artwork, so the app opens on the same mark
+            // the parent tapped on the home screen.
+            Image("AppLogo")
+                .resizable()
+                .frame(width: 96, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
 
             VStack {
                 Spacer()
                 Capsule()
-                    .fill(Color.white.opacity(pulse ? 1 : 0.3))
+                    .fill(Brand.greenDeep.opacity(pulse ? 1 : 0.25))
                     .frame(width: 120, height: 4)
                     .padding(.bottom, 48)
             }
@@ -218,18 +293,24 @@ struct ModePickerView: View {
             // block instead. See OnboardingV2ScreenContainer's identical
             // fix for the reasoning in full.
             if !isRegular { Spacer() }
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .fill(EColor.primary)
-                .frame(width: isRegular ? 140 : 96, height: isRegular ? 140 : 96)
-                .overlay(
-                    Image(systemName: "flame.fill")
-                        .font(.system(size: isRegular ? 62 : 44))
-                        .foregroundStyle(Color(hex: "8CE6A8"))
-                )
-                .shadow(color: EColor.primary.opacity(0.35), radius: 24, y: 10)
+            // Same artwork as the app icon.
+            Image("AppLogo")
+                .resizable()
+                .frame(width: isRegular ? 160 : 112, height: isRegular ? 160 : 112)
+                .clipShape(RoundedRectangle(cornerRadius: isRegular ? 36 : 26, style: .continuous))
+                .shadow(color: Brand.greenDeep.opacity(0.3), radius: 24, y: 10)
 
-            Text("Evlin")
-                .font(Typography.font(isRegular ? 46 : 34, weight: .heavy))
+            // Bold with tightened tracking: ExtraBold at default spacing
+            // crowded its letters at this size.
+            VStack(spacing: 6) {
+                Text("Evlin")
+                    .font(Typography.font(isRegular ? 46 : 34, weight: .bold))
+                    .tracking(isRegular ? -1.1 : -0.8)
+                    .foregroundStyle(Brand.ink)
+                Text("Ever learning, ever kind.")
+                    .font(Typography.font(isRegular ? 20 : 17, weight: .medium))
+                    .foregroundStyle(Brand.inkSoft)
+            }
 
             if !isRegular { Spacer() }
 
@@ -238,22 +319,14 @@ struct ModePickerView: View {
                     Button {
                         mode = m
                     } label: {
-                        HStack {
-                            Text(m.label)
-                                .font(Typography.font(isRegular ? 21 : 16, weight: .bold))
-                            Spacer()
-                            Image(systemName: "arrow.right")
-                                .font(.system(size: isRegular ? 18 : 15, weight: .semibold))
-                        }
-                        .foregroundStyle(m == .parent ? .white : EColor.onSurface)
-                        .padding(.horizontal, isRegular ? 28 : 22)
-                        .frame(height: isRegular ? 78 : 58)
-                        .background(m == .parent ? EColor.primary : EColor.surfaceContainerLowest)
-                        .clipShape(RoundedRectangle(cornerRadius: isRegular ? 24 : 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: isRegular ? 24 : 18, style: .continuous)
-                                .strokeBorder(EColor.outlineVariant, lineWidth: m == .parent ? 0 : 1)
-                        )
+                        // Centred, on the same axis as the logo and title above.
+                        Text(m.label)
+                            .font(Typography.font(isRegular ? 21 : 16, weight: .bold))
+                            .foregroundStyle(m == .parent ? .white : Brand.emeraldInk)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: isRegular ? 78 : 58)
+                            .background(m == .parent ? Brand.emerald : Brand.mint)
+                            .clipShape(RoundedRectangle(cornerRadius: isRegular ? 24 : 18, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
@@ -264,6 +337,6 @@ struct ModePickerView: View {
             .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(EColor.surface)
+        .background(Brand.cream)
     }
 }

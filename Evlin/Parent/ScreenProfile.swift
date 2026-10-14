@@ -1,33 +1,29 @@
 import SwiftUI
 import UIKit
 
+// The selected child's space: Home's whole content (see ScreenHome, whose
+// avatars switch which child this shows).
 struct ScreenProfile: View {
     var childId: String
-    var onBack: () -> Void
-    // Set when this profile IS the screen it's shown on (ScreenHome's
-    // single-child demo flow — see its own comment) rather than something
-    // pushed over another screen — there's nowhere for the chevron to go
-    // back to, so it's hidden instead of sitting there doing nothing.
-    var hideBackButton: Bool = false
 
     @ObservedObject private var child: Child
-    // A real Binding into TaskStore's cache, not a local copy — so an
-    // approval made here is still there if a notification tap opens
-    // TaskReviewDeckView directly (see ScreenHome), and vice versa. Used to
-    // be @State seeded once from TaskStore.tasks(for:), which meant each
-    // fresh ScreenProfile (or a separately-opened review deck) got its own
-    // disconnected copy and silently lost whatever the other one changed.
-    @Binding private var tasks: [ChildTask]
-    // Which task the parent tapped — opens TaskReviewDeckView starting there
-    // (a Tinder-style swipeable queue over `tasks`, not a single-task sheet).
-    @State private var reviewStartIndex: Int?
-    @State private var showReflection = false
+    // Read from the phone's database (TaskStore), never copied: a change
+    // made anywhere (here, the review deck, a sync) is on this list the
+    // moment it's saved.
+    private var tasks: [ChildTask] { TaskStore.tasks(for: childId) }
+    // Opens the review deck on a task. Home presents it, not this page:
+    // this page redraws whenever anything above it updates, and a deck
+    // presented from here was rebuilt along with it, dropping the edit sheet
+    // the moment it opened.
+    var onReview: (_ taskId: String) -> Void
     // Was a menu offering "Add Task" or "Add Rule" — rules (including
     // downtime) now come from chat instead, so the "+" goes straight to
     // adding a task, no intermediate menu with a single choice on it.
     @State private var showAddTask = false
-    @State private var taskSaveFailed = false
-    @State private var taskSaveError = ""
+    // A task on the Tomorrow tab, open in the edit form. Tomorrow's tasks
+    // have nothing to review yet, so tapping one edits it instead.
+    @State private var editingTomorrowTask: ChildTask?
+    @State private var showScreenTime = false
     @State private var showUnlockConfirm = false
     @State private var showGrantTimeSheet = false
     // Drives the brief "verifying it's you" beat between tapping Approve in
@@ -42,118 +38,103 @@ struct ScreenProfile: View {
     // immediately reappear from some other body re-evaluation.
     @State private var showTrialPopup = false
     @State private var showProtectionSetupPopup = false
-    @State private var backPending = false
+    // Today / Tomorrow tabs over the task list.
+    @State private var showingTomorrow = false
+    // The page the Today / Tomorrow pager is on.
+    @State private var pagerTomorrow: Bool? = false
+    @Namespace private var dayTabs
+    // A success tap as a new task is saved.
+    @State private var addedTick = 0
+    // Rings ticked a moment ago, drawn done while their rows wait to move.
+    @State private var justChecked: Set<String> = []
+    @State private var checkedTick = 0
+    @State private var undoneTick = 0
+    @State private var landedTick = 0
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var adaptive: ParentAdaptive { ParentAdaptive(hSizeClass) }
 
-    init(childId: String, onBack: @escaping () -> Void, hideBackButton: Bool = false) {
+    init(childId: String, onReview: @escaping (_ taskId: String) -> Void) {
         self.childId = childId
-        self.onBack = onBack
-        self.hideBackButton = hideBackButton
+        self.onReview = onReview
         let c = FamilyStore.child(childId)
         _child = ObservedObject(wrappedValue: c)
-        _tasks = TaskStore.binding(for: childId)
     }
 
     // A task due on some other day (tomorrow, via the New Task date
     // picker) isn't part of today's list at all — nil dueDate (every
     // pre-seeded mock task) always counts as visible today.
-    private func isDueToday(_ task: ChildTask) -> Bool {
-        guard let due = task.dueDate else { return true }
-        return Calendar.current.isDateInToday(due)
-    }
-
-    private static func dueTimeString(_ date: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f.string(from: date)
-    }
+    private func isDueToday(_ task: ChildTask) -> Bool { task.isDueToday }
 
     private static func dueDateString(_ date: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f.string(from: date)
     }
 
+    private static func dueTimeString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: date)
+    }
+
     private var todaysTasks: [ChildTask] { tasks.filter(isDueToday) }
     private var doneCount: Int { todaysTasks.filter { $0.state == .done }.count }
 
-    // True once there's nothing left for the kid to actually do — every
-    // task still needing action has already been submitted for review or
-    // is asking to bypass, none outstanding or overdue. Screen time stays
-    // locked while this holds (there's no "unlock" decision to make, just
-    // an approval one), so headerCard swaps the manual lock/unlock slider
-    // for a single Approve All button — one tap resolves every review and
-    // bypass at once instead of stepping through each task individually.
-    private var allTasksAwaitingReview: Bool {
-        let outstanding = todaysTasks.contains { $0.state == .pending || $0.state == .overdue }
-        let awaiting = todaysTasks.contains { $0.state == .review || $0.state == .bypass }
-        return !outstanding && awaiting
-    }
-
-    // Mirrors TaskReviewDeckView's own per-task Approve action (.review ->
-    // .done, .bypass -> .bypassed) plus the same unlock reset
-    // UnlockConfirmCard's onUnlock uses — approving everything is what
-    // earns the unlock here, not a separate manual slide.
-    private func approveAllPendingReview() {
-        var occurrenceIds: [String] = []
-        for i in tasks.indices where isDueToday(tasks[i]) {
-            switch tasks[i].state {
-            case .review: tasks[i].state = .done
-            case .bypass: tasks[i].state = .bypassed
-            default: continue
-            }
-            if let occ = tasks[i].occurrenceId { occurrenceIds.append(occ) }
-        }
-        // Tell the server too, or the next sync would put them all back in review.
-        if !occurrenceIds.isEmpty {
-            BackendWrite.run("Approving these tasks") {
-                for id in occurrenceIds { _ = try await APIClient.shared.approveTask(occurrenceId: id) }
-            }
-        }
-        child.timeLeft = formatMinutes(child.dailyLimitMin)
-        child.timePct = 100
-    }
-
-    // Drives headerCard's "Unlimited screen time today" state — the daily
-    // cap only stops applying once this built-in rule is switched off (from
-    // this child's settings sheet, under Settings > Family — see
-    // ScreenSettings.swift's ChildSettingsSheet), not just because the
-    // child happens to be unlocked.
-    private var screenTimeLimitOff: Bool {
-        !(child.rules.first(where: { $0.kind == .screenTimeLimit })?.on ?? true)
-    }
-
-    // Same partitioned time bar as the family dashboard grid (ScreenHome's
-    // ProfileBubble) — 30-minute blocks laid out in a row, so "time left"
-    // reads identically whether you're looking at the family grid or a
-    // single kid's own profile. Fixed brand green rather than the child's
-    // own avatar color, matching ScreenHome's ProfileBubble.
-    private var barColor: Color { child.status == .unlocked ? Color(hex: "25924A") : Color(hex: "CBD5E1") }
-
-    private var timePoolFilledMinutes: Int {
-        guard child.status == .unlocked else { return 0 }
-        return Int((Double(child.dailyLimitMin) * Double(child.timePct) / 100).rounded())
-    }
 
     var body: some View {
-        // Reading this re-renders the profile whenever a backend sync lands
-        // (TaskStore is a static cache SwiftUI can't observe on its own).
+        // Re-renders on a change to the family (FamilyStore isn't observed);
+        // tasks are, through TaskStore.
         let _ = SyncState.shared.version
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                headerCard
-
-                if child.reflection != nil {
-                    reflectionSummaryCard
-                } else {
-                    tasksSection
-                }
-
-                milestonesLink
-                memoryLink
+        // The status and the Today / Tomorrow tabs stay put; only the list
+        // below them scrolls (and bounces).
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                statusCard
+                    .padding(.top, 6)
+                dayTabBar
+                    .padding(.top, 18)
+                    .padding(.bottom, 4)
             }
             .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 24)
+            .padding(.top, 6)
             .parentContentColumn(adaptive.contentMaxWidth)
+
+            // Today and Tomorrow side by side in the system's own paging
+            // scroll view: iOS tells a sideways swipe from a scroll itself,
+            // with its own physics, so the two never fight.
+            GeometryReader { geo in
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 0) {
+                        ForEach([false, true], id: \.self) { tomorrow in
+                            ScrollView {
+                                dayList(tomorrow: tomorrow)
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 24)
+                                    .parentContentColumn(adaptive.contentMaxWidth)
+                            }
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .id(tomorrow)
+                        }
+                    }
+                    .scrollTargetLayout()
+                }
+                .scrollTargetBehavior(.paging)
+                .scrollIndicators(.hidden)
+                .scrollPosition(id: $pagerTomorrow)
+            }
+            .onChange(of: pagerTomorrow) { _, t in
+                guard let t, t != showingTomorrow else { return }
+                showingTomorrow = t
+            }
         }
+        .accessibilityAction(named: "Show tomorrow") { showDay(tomorrow: true) }
+        .accessibilityAction(named: "Show today") { showDay(tomorrow: false) }
+        // Adding a task feels like approving one: success, as it's saved.
+        .sensoryFeedback(.success, trigger: addedTick)
+        // A selection tick, like a segmented control, when the day changes.
+        .sensoryFeedback(.selection, trigger: showingTomorrow)
+        .sensoryFeedback(.success, trigger: checkedTick)
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: landedTick)
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.7), trigger: undoneTick)
         .background(EColor.surface)
         // A safeAreaInset (not a ZStack + guessed bottom padding) reserves
         // real layout space for the FAB, so the scroll content's last row —
@@ -167,11 +148,14 @@ struct ScreenProfile: View {
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 56, height: 56)
-                        .background(Brand.ink)
+                        // Ink, not green: on Home green means "the phone is
+                        // open" (the switch, the time bar).
+                        .background(EColor.primary)
                         .clipShape(Circle())
-                        .shadow(color: .black.opacity(0.3), radius: 14, y: 6)
+                        .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Add a task")
             }
             .padding(.trailing, 20)
             .padding(.bottom, 16)
@@ -211,14 +195,12 @@ struct ScreenProfile: View {
                         // child.timeLeft with that literal string, which
                         // read as the pool being SET to 30 minutes rather
                         // than increased by 30. Now posts a real, signed
-                        // ledger entry (see time_grants); the imminent sync
-                        // BackendWrite.run triggers corrects the display to
-                        // the real new total within a moment.
+                        // ledger entry (see time_grants); the sync its live
+                        // update brings corrects the display to the real
+                        // new total within a moment.
                         applyGateOverride()
-                        let childId = child.id
-                        BackendWrite.run("Extra time") {
-                            try await APIClient.shared.createTimeGrant(childId: childId, minutes: minutes)
-                        }
+                        Outbox.send(APIClient.Write.createTimeGrant(childId: child.id, minutes: minutes),
+                                    childId: child.id, label: "Extra time")
                         withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = false }
                     },
                     onCancel: { withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = false } }
@@ -276,72 +258,70 @@ struct ScreenProfile: View {
                 )
             }
         }
+        // This page sits under Home's header, so its cards' backdrops stop
+        // at the header's edge. Home reads this and dims the header to match.
+        .preference(key: HomeScrimKey.self, value: cardScrimOpacity)
         .task {
             if child.trialExhausted { withAnimation(.easeOut(duration: 0.2)) { showTrialPopup = true } }
             if child.needsProtectionSetup { withAnimation(.easeOut(duration: 0.2)) { showProtectionSetupPopup = true } }
         }
-        .navigationTitle("\(child.name)'s Space")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if !hideBackButton {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        // onBack() dismisses the fullScreenCover this whole
-                        // screen lives in (see ScreenHome's openChildId) — a
-                        // second tap landing before that animation finishes
-                        // would otherwise re-fire onBack() into a screen that's
-                        // already mid-teardown, which reads as the button
-                        // needing repeated taps to register.
-                        guard !backPending else { return }
-                        backPending = true
-                        onBack()
-                    } label: { Image(systemName: "chevron.left") }
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-            }
+        .sheet(isPresented: $showScreenTime) {
+            Group {
+            ChildScreenTimeSheet(child: child)
         }
-        .fullScreenCover(isPresented: Binding<Bool>(get: { reviewStartIndex != nil }, set: { if !$0 { reviewStartIndex = nil } })) {
-            TaskReviewDeckView(tasks: $tasks, childName: child.name, childId: childId, startIndex: reviewStartIndex ?? 0, onDismiss: { reviewStartIndex = nil })
+            .presentationDragIndicator(.visible)
         }
-        .alert("Couldn't save task", isPresented: $taskSaveFailed) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(taskSaveError)
+        .sheet(item: $editingTomorrowTask) { task in
+            Group {
+            EditTaskReviewSheet(
+                task: task,
+                onSave: { updated in
+                    TaskEdits.save(updated, clearDueTime: task.dueLabel != nil && updated.dueLabel == nil)
+                    editingTomorrowTask = nil
+                },
+                onDelete: {
+                    // The sheet slides away first, then the row leaves.
+                    editingTomorrowTask = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + TaskEdits.sheetCloseDelay) {
+                        withAnimation(.spring(duration: 0.35, bounce: 0)) { TaskEdits.delete(task) }
+                    }
+                },
+                onCancel: { editingTomorrowTask = nil }
+            )
+            .presentationDetents([.large])
+        }
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showAddTask) {
-            AddTaskSheet(child: child, onCreate: { newTask in
+            Group {
+            AddTaskSheet(child: child, day: selectedDay, onCreate: { created in
                 showAddTask = false
-                Task {
-                    do {
-                        let saved = try await APIClient.shared.createTask(
+                let day = selectedDay
+                // Saved to the phone's database just as the sheet finishes
+                // sliding away, so the row lands in its sorted place then;
+                // the outbox sends it.
+                addedTick += 1   // felt at the tap, as for an approval
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.snappy(duration: 0.3)) {
+                        _ = TaskEdits.create(
                             childId: childId,
-                            title: newTask.title,
-                            instructions: newTask.description,
-                            recurrence: newTask.repeats,
-                            category: newTask.category,
-                            submissionKind: "none", // tap-to-complete, no photo/voice required
-                            dueTime: newTask.dueDate.map { Self.dueTimeString($0) },
-                            dueDate: newTask.dueDate.map { Self.dueDateString($0) }
+                            title: created.title,
+                            instructions: created.description,
+                            recurrence: created.repeats,
+                            category: created.category,
+                            // Due on the chosen day; at a time only when the
+                            // parent added a deadline.
+                            dueTime: created.dueLabel == nil ? nil : created.dueDate.map { Self.dueTimeString($0) },
+                            dueDate: Self.dueDateString(day)
                         )
-                        // Show it right away under its real database id; the
-                        // sync below then replaces it with the canonical row.
-                        var created = newTask
-                        created.id = saved.id
-                        tasks.append(created)
-                        await AppSync.shared.syncBackendData()
-                    } catch {
-                        print("Failed to save task to backend: \(error)")
-                        taskSaveError = error.apiUserMessage
-                        taskSaveFailed = true
                     }
                 }
             }, onCancel: { showAddTask = false })
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .interactiveDismissDisabled()
             .presentationDetents([.large])
             .presentationBackground(EColor.surface)
-            .presentationDragIndicator(.hidden)
+        }
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -418,104 +398,117 @@ struct ScreenProfile: View {
         .buttonStyle(.plain)
     }
 
-    private var headerCard: some View {
-        Card {
-            VStack(spacing: 0) {
-                HStack(spacing: adaptive.of(18, 24)) {
-                    Circle().fill(child.color).frame(width: adaptive.of(64, 84), height: adaptive.of(64, 84))
-                        .overlay(Text(String(child.name.prefix(1))).font(Typography.font(adaptive.of(24, 32), weight: .heavy)).foregroundStyle(.white))
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(child.name).font(Typography.font(adaptive.of(22, 28), weight: .heavy)).foregroundStyle(EColor.primary)
-                        if child.reflection != nil {
-                            Label("Under Reflection", systemImage: "figure.mind.and.body")
-                                .font(Typography.font(10, weight: .bold))
-                                .foregroundStyle(Color(hex: "4A3215"))
-                        } else if child.status == .unlocked && screenTimeLimitOff {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Label("Unlimited screen time today", systemImage: "infinity")
-                                    .font(Typography.font(12, weight: .bold))
-                                    .foregroundStyle(EColor.secondary)
-                                Text("Screen Time Limit reapplies tomorrow")
-                                    .font(Typography.font(10.5, weight: .medium))
-                                    .foregroundStyle(EColor.onSurfaceVariant)
-                            }
-                        } else if child.status == .unlocked {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("\(child.timeLeft) left today").font(Typography.font(11, weight: .semibold)).foregroundStyle(Color(hex: "25924A"))
-                                SegmentedTimeBar(
-                                    totalMinutes: child.dailyLimitMin,
-                                    filledMinutes: timePoolFilledMinutes,
-                                    filledColor: barColor,
-                                    emptyColor: Color(hex: "CBD5E1").opacity(0.35)
-                                )
-                                .frame(width: 160, height: 7)
-                            }
-                        } else if child.status == .downtime {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Label("Downtime", systemImage: "moon.fill")
-                                    .font(Typography.font(17, weight: .heavy))
-                                    .foregroundStyle(downtimeIndigo)
-                                Text("Until \(child.downtimeUntil ?? "") tomorrow")
-                                    .font(Typography.font(13, weight: .semibold))
-                                    .foregroundStyle(downtimeIndigo.opacity(0.8))
-                            }
-                        } else {
-                            Label(child.status == .lockedTasks ? "Locked · \(doneCount)/\(todaysTasks.count) tasks" : "Locked", systemImage: "lock.fill")
-                                .font(Typography.font(10, weight: .bold))
-                                .foregroundStyle(EColor.danger)
-                        }
-                    }
-                    Spacer()
-                }
+    // The backdrop opacity of whichever card is showing over this page (all
+    // of them dim with black at these strengths), or 0 when none is.
+    private var cardScrimOpacity: Double {
+        if showApprovalVerify { return 0.36 }
+        if showUnlockConfirm || showGrantTimeSheet || showTrialPopup || showProtectionSetupPopup
+            || child.parentApprovalStatus == .pending { return 0.32 }
+        return 0
+    }
 
-                if child.status != .downtime, child.reflection == nil, allTasksAwaitingReview {
-                    // Nothing to lock or unlock manually right now — the
-                    // kid already did their part, so the one action left
-                    // is approving it. A plain tap is fine here (unlike
-                    // the slider below): approving is the safe, expected
-                    // direction, not the "instantly cut a kid off" one
-                    // that gesture guards against.
-                    PrimaryButton(title: "Approve All", systemIcon: "checkmark.circle.fill", action: approveAllPendingReview)
-                        .padding(.top, 16)
-                } else if child.status != .downtime, child.reflection == nil {
-                    LockActionButton(
-                        label: child.status == .unlocked ? "Tap to lock phone" : "Tap to unlock phone",
-                        systemImage: child.status == .unlocked ? "lock.fill" : "lock.open.fill",
-                        tint: child.status == .unlocked ? Brand.greenDeep : EColor.danger
-                    ) {
-                        if child.status == .unlocked {
-                            // Doesn't touch timeLeft/timePct — a manual lock
-                            // is a pause, not the allowance being spent, so
-                            // whatever real time was left stays banked
-                            // (invisible while locked, since the display
-                            // above only reads it in the .unlocked branch)
-                            // and comes back as-is on unlock instead of
-                            // being reported as used up.
-                            applyManualLock(locked: true)
-                        } else if todaysTasks.count - doneCount > 0 {
-                            // Unlocking (unlike locking) needs a confirm — it's
-                            // the easy-to-regret direction, especially with
-                            // chores still open, so don't apply it on the
-                            // first tap.
-                            withAnimation(.easeOut(duration: 0.2)) { showUnlockConfirm = true }
-                        } else if child.timePct > 0 {
-                            // Tasks are done and there's still real banked
-                            // time (e.g. a one-off manual lock, not the
-                            // daily allowance running out) — resume it
-                            // directly instead of running the "how much
-                            // extra" Grant Time flow, which frames this as
-                            // bonus time beyond an exhausted limit.
-                        } else {
-                            // Tasks are done and the daily allowance is
-                            // genuinely used up — the question here isn't
-                            // "unlock or not," it's "how much," so ask for
-                            // an amount instead of a bare confirm.
-                            withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = true }
-                        }
-                    }
-                    .padding(.top, 16)
+    // MARK: - Today's counts
+
+    // Every task that lands on tomorrow, repeats included (TaskStore builds
+    // this from the repeat rules at sync). Filtering `tasks` by date missed
+    // every repeating task: its one entry carries today's date.
+    private var tomorrowsTasks: [ChildTask] { TaskStore.tomorrowTasks(for: childId) }
+    private var waitingForReview: [ChildTask] { todaysTasks.filter { $0.state == .review || $0.state == .bypass } }
+    private var leftToDo: Int { todaysTasks.filter { $0.state == .pending || $0.state == .overdue }.count }
+
+    // MARK: - Status header
+
+    // The phone's state as one line: today's progress (or the time left, or
+    // downtime) on the left, and a track that runs from it to the lock
+    // button and wraps around it. Below, the one way into screen time:
+    // blocked apps and the limit.
+    private var statusCard: some View {
+        VStack(spacing: 0) {
+            StatusPathHeader(phase: statusPhase, childName: child.name, action: toggleLock)
+
+            Button { showScreenTime = true } label: {
+                HStack {
+                    Text("View blocked apps & screen time limit")
+                        .font(Typography.font(14, weight: .regular))
+                        .foregroundStyle(StatusCardStyle.secondaryLabel)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(StatusCardStyle.tertiaryLabel)
                 }
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(PressedOpacityStyle())
+        }
+    }
+
+    // Today's finished tasks: approved, or a skip said yes to.
+    private var finishedCount: Int { todaysTasks.filter { $0.state == .done || $0.state == .bypassed }.count }
+
+    // The button says what a tap will do:
+    // - open, time left: an open lock; a tap locks.
+    // - locked by hand: a red lock; a tap opens it again.
+    // - tasks still to do: progress and a red lock; a tap asks first.
+    // - everything sent in, waiting on the parent: a green check; a tap
+    //   approves them all, which opens the phone.
+    // - out of time: a red lock; a tap asks how much longer.
+    private var statusPhase: StatusPathHeader.Phase {
+        switch child.status {
+        case .downtime:
+            return .downtime(until: child.downtimeUntil ?? "morning")
+        case .unlocked:
+            return child.timePct > 0
+                ? .open(timeLeft: child.timeLeft, fraction: Double(child.timePct) / 100)
+                : .timeUp
+        case .locked, .lockedTasks:
+            // Tasks still to do always show as progress ("2 tasks left"),
+            // however the phone came to be locked.
+            let total = todaysTasks.count
+            if total > 0 && leftToDo > 0 { return .tasks(done: finishedCount, total: total) }
+            if child.manualLock {
+                return child.timePct > 0 ? .paused(timeLeft: child.timeLeft) : .timeUp
+            }
+            if !waitingForReview.isEmpty { return .ready(timeLeft: child.timeLeft) }
+            return child.timePct > 0 ? .paused(timeLeft: child.timeLeft) : .timeUp
+        }
+    }
+
+    // The same decisions the old Lock/Unlock button made: locking is
+    // immediate; unlocking with tasks left asks first; with tasks done and
+    // the day's time used up, it asks how much more.
+    private func toggleLock() {
+        switch statusPhase {
+        case .open:
+            // A manual lock is a pause, not time spent: whatever was left
+            // comes back as-is on unlock.
+            applyManualLock(locked: true)
+        case .ready(_):
+            approveAll()
+        case .timeUp:
+            withAnimation(.easeOut(duration: 0.2)) { showGrantTimeSheet = true }
+        case .tasks:
+            if leftToDo > 0 {
+                withAnimation(.easeOut(duration: 0.2)) { showUnlockConfirm = true }
+            } else {
+                applyManualLock(locked: false)
+            }
+        case .paused:
+            if leftToDo > 0 {
+                withAnimation(.easeOut(duration: 0.2)) { showUnlockConfirm = true }
+            } else {
+                applyManualLock(locked: false)
+            }
+        case .downtime:
+            break
+        }
+    }
+
+    // Everything the kid sent in (or asked to skip), approved in one go:
+    // with nothing left, the phone opens on its own.
+    private func approveAll() {
+        withAnimation(.spring(duration: 0.35, bounce: 0)) {
+            for task in waitingForReview { TaskEdits.approve(task, childId: childId) }
         }
     }
 
@@ -528,225 +521,189 @@ struct ScreenProfile: View {
 
     private func applyManualLock(locked: Bool) {
         child.manualLock = locked
-        let id = child.id, gate = child.taskGateOverride
-        BackendWrite.run(locked ? "Locking the phone" : "Unlocking the phone") {
-            _ = try await APIClient.shared.updateChildState(childId: id, manualLock: locked, taskGateOverride: gate)
-        }
+        child.saveState(label: locked ? "Locking the phone" : "Unlocking the phone")
     }
-    
+
     private func applyGateOverride() {
         child.manualLock = false
         child.taskGateOverride = true
-        let id = child.id
-        BackendWrite.run("Unlocking the phone") {
-            _ = try await APIClient.shared.updateChildState(childId: id, manualLock: false, taskGateOverride: true)
-        }
+        child.saveState(label: "Unlocking the phone")
     }
     
 
-    /// Milestones live per-child, so they hang off the child's own profile
-    /// rather than becoming a sixth top-level tab. The badge is the point of
-    /// putting it here: a suggestion the kid sent needs a parent to act on
-    /// it, and it would otherwise sit unseen.
-    private var milestonesLink: some View {
-        NavigationLink {
-            ScreenMilestones(childId: childId, childName: child.name)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "target")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Brand.greenDeep)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(Brand.greenTint))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Milestones").font(Typography.font(15, weight: .bold))
-                    Text("Bigger goals and prizes")
-                        .font(Typography.font(13))
-                        .foregroundStyle(Brand.inkSoft)
-                }
-                Spacer()
-                if pendingMilestoneProposals > 0 {
-                    Text("\(pendingMilestoneProposals)")
-                        .font(Typography.font(12, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(Brand.greenDeep))
-                }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Brand.inkSoft)
-            }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.black.opacity(0.07), lineWidth: 1)
-            )
+    // MARK: - Tasks (Today / Tomorrow, flat rows)
+
+    private var dayTabBar: some View {
+        HStack(spacing: 18) {
+            dayTab("Today", on: !showingTomorrow) { showDay(tomorrow: false) }
+            dayTab("Tomorrow", on: showingTomorrow) { showDay(tomorrow: true) }
         }
-        .buttonStyle(.plain)
     }
 
-    /// Auditable by design: whatever the assistant has inferred about this
-    /// child is one tap away, and every bit of it can be removed.
-    private var memoryLink: some View {
-        NavigationLink {
-            ScreenMemory(childId: childId, childName: child.name)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "brain")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Brand.greenDeep)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(Brand.greenTint))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("What Evlin remembers").font(Typography.font(15, weight: .bold))
-                    Text("Review or remove what it has learned")
-                        .font(Typography.font(13))
-                        .foregroundStyle(Brand.inkSoft)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Brand.inkSoft)
-            }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.black.opacity(0.07), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Read from the cache rather than fetched — this is a badge on a row,
-    /// not worth a network call every time the profile appears.
-    private var pendingMilestoneProposals: Int {
-        LocalStore.shared.cachedMilestones(childId: childId)
-            .filter { $0.status == "proposed" }.count
-    }
-
-    private var tasksSection: some View {
+    @ViewBuilder private func dayList(tomorrow: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            // No done/total pill here anymore — headerCard's status line
-            // ("Locked · 1/5 tasks") already says how many are left, so
-            // this was the same count shown twice on one screen.
-            SectionHead("Today's Tasks")
-            VStack(spacing: 10) {
-                // Enumerate the full array first, filter after — `i` has
-                // to stay the task's true index into `tasks` (what
-                // reviewStartIndex/TaskReviewDeckView expect), not its
-                // position among just today's visible rows.
-                ForEach(Array(tasks.enumerated()).filter { isDueToday($0.element) }, id: \.element.id) { i, task in
-                    TaskRowView(task: task, onOpen: { reviewStartIndex = i })
+            if tomorrow {
+                if tomorrowsTasks.isEmpty {
+                    emptyLine("Nothing planned for tomorrow yet.")
+                } else {
+                    taskList([(nil, tomorrowsTasks)], isTomorrow: true)
                 }
+            } else if todaysTasks.isEmpty {
+                emptyLine("Nothing left for today.")
+            } else {
+                // Grouped by what each needs, most urgent first: late, then
+                // waiting on the parent, then still to do, then done. "To do"
+                // gets a heading only when there's a group above it to tell
+                // it apart from; on its own it's just the list.
+                let overdue = todaysTasks.filter { $0.state == .overdue }
+                let waiting = todaysTasks.filter { $0.state == .review || $0.state == .bypass }
+                taskList([
+                    ("Overdue", overdue),
+                    ("Waiting for you", waiting),
+                    (overdue.isEmpty && waiting.isEmpty ? nil : "To do", todaysTasks.filter { $0.state == .pending }),
+                    ("Completed", todaysTasks.filter { $0.state == .done || $0.state == .bypassed }),
+                ], isTomorrow: false)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // The ring as a checkbox. Ticking completes the task (as Approve does):
+    // the ring fills at once, then a beat later the row moves to Completed,
+    // so the tick is seen before the list changes. Un-ticking a done task
+    // sends it back to the kid as a to-do (as Redo does, with no note).
+    private func toggleDone(_ task: ChildTask) {
+        if task.state == .done || task.state == .bypassed {
+            undoneTick += 1
+            withAnimation(.spring(duration: 0.35, bounce: 0)) { TaskEdits.redo(task, note: "", childId: childId) }
+            return
+        }
+        guard !justChecked.contains(task.id) else { return }
+        checkedTick += 1
+        withAnimation(.spring(duration: 0.3, bounce: 0.4)) { _ = justChecked.insert(task.id) }
+        // Held ticked for half a second so it's seen, then it leaves; a soft
+        // tap as it lands in Completed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            withAnimation(.spring(duration: 0.35, bounce: 0)) {
+                TaskEdits.approve(task, childId: childId)
+                justChecked.remove(task.id)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { landedTick += 1 }
+        }
+    }
+
+    // A tab tap: the pager slides to that day.
+    private func showDay(tomorrow: Bool) {
+        guard tomorrow != showingTomorrow else { return }
+        withAnimation(.snappy(duration: 0.3)) {
+            showingTomorrow = tomorrow
+            pagerTomorrow = tomorrow
+        }
+    }
+
+    // The list's lines: a section heading, or a task (with a hairline above
+    // it unless it opens its section).
+    private enum ListLine: Identifiable {
+        case heading(String)
+        case task(ChildTask, hairline: Bool, section: String)
+
+        // A task's identity includes its section: changing section is
+        // leaving one place and arriving in another, not a move.
+        var id: String {
+            switch self {
+            case .heading(let title): return "heading-\(title)"
+            case .task(let task, _, let section): return "\(section)-\(task.id)"
             }
         }
     }
 
-    private var reflectionSummaryCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionHead("Reflection Assignment") {
-                Text("ACTIVE").font(Typography.font(9, weight: .bold)).foregroundStyle(Color(hex: "B26A00"))
-                    .padding(.horizontal, 8).padding(.vertical, 3).background(Color(hex: "FFF3E0")).clipShape(Capsule())
-            }
-            Card {
-                VStack(alignment: .leading, spacing: 14) {
-                    Label("Screen time locked · \(child.reflection?.minutes ?? 0) min", systemImage: "lock.fill")
-                        .font(Typography.font(11, weight: .bold)).foregroundStyle(Color(hex: "4A3215"))
-                    Text("\(child.name) must finish a 3-step reflection")
-                        .font(Typography.font(18, weight: .heavy)).foregroundStyle(Color(hex: "2E1F08"))
-
-                    ForEach(Array(ReflectionStep.allCases.enumerated()), id: \.offset) { _, step in
-                        HStack(spacing: 12) {
-                            Image(systemName: EIcon.sf(step.icon)).foregroundStyle(Color(hex: "6E4F26"))
-                                .frame(width: 34, height: 34).background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Step \(step.stepNumber) of 3 — \(step.title)").font(Typography.font(13, weight: .bold)).foregroundStyle(Color(hex: "2E1F08"))
-                                Text(step.subtitle).font(Typography.font(11, weight: .regular)).foregroundStyle(Color(hex: "6E4F26"))
-                            }
-                            Spacer()
-                        }
-                    }
-
-                    if let r = child.reflection, !r.writtenText.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("EVLIN ASKS").font(Typography.font(9, weight: .bold)).foregroundStyle(Color(hex: "15803D"))
-                            Text(ReflectionContent.prompt).font(Typography.font(13, weight: .semibold))
-                        }
-                        .padding(12)
-                        .background(Color(hex: "DCFCE7"))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                        Text("\"\(r.writtenText)\"")
-                            .font(Typography.font(13, weight: .regular))
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.white)
-                            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(EColor.outlineVariant))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                        if r.review == "pending" {
-                            HStack(spacing: 10) {
-                                PrimaryButton(title: "Approve") { child.reflection?.review = "approved" }
-                                Button("Request redo") { child.reflection?.review = "redo" }
-                                    .font(Typography.font(13, weight: .bold))
-                                    .frame(maxWidth: .infinity).frame(height: 44)
-                                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(EColor.outlineVariant))
-                            }
-                        } else {
-                            Text(r.review == "approved" ? "You approved this reflection." : "\(child.name) will be asked to write again.")
-                                .font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                        }
-                    }
-
-                    Button("Cancel reflection") { child.reflection = nil }
-                        .font(Typography.font(13, weight: .heavy))
-                        .foregroundStyle(Color(hex: "6E4F26"))
-                        .frame(maxWidth: .infinity).frame(height: 44)
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color(hex: "B7935E")))
-                }
-                .padding(4)
+    // All the sections as one list: small bold headings, then rows with
+    // hairlines between them (not above a section's first), inset to start
+    // under the text. A task that changes section (ticked off, sent back)
+    // fades out where it was while the rows below close up, then fades in
+    // at its new place, as Things and Reminders do; it never travels across
+    // the list over the other rows, which is what looked glitchy.
+    private func taskList(_ sections: [(String?, [ChildTask])], isTomorrow: Bool) -> some View {
+        var lines: [ListLine] = []
+        for (title, tasks) in sections where !tasks.isEmpty {
+            if let title { lines.append(.heading(title)) }
+            for (i, task) in tasks.enumerated() {
+                lines.append(.task(task, hairline: i > 0, section: title ?? "list"))
             }
         }
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines) { line in
+                switch line {
+                case .heading(let title):
+                    Text(title)
+                        .font(Typography.font(15, weight: .bold))
+                        .foregroundStyle(EColor.onSurface)
+                        .padding(.top, 18)
+                        .padding(.bottom, 2)
+                        .transition(Self.lineTransition)
+                case .task(let task, let hairline, _):
+                    HomeTaskRow(task: task, color: child.color, isTomorrow: isTomorrow,
+                                justChecked: justChecked.contains(task.id),
+                                onRingTap: isTomorrow ? nil : { toggleDone(task) })
+                        .overlay(alignment: .top) {
+                            Rectangle().fill(HomeStyle.line).frame(height: 1).padding(.leading, 54)
+                                .opacity(hairline ? 1 : 0)
+                        }
+                        .onTapGesture {
+                            if isTomorrow { editingTomorrowTask = task } else { onReview(task.id) }
+                        }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHint(isTomorrow ? "Edits this task" : "Opens this task")
+                        .transition(Self.lineTransition)
+                }
+            }
+        }
+        // Every change to the list moves the same way, a tick here or a
+        // change a sync brought, so nothing jumps.
+        .animation(.spring(duration: 0.35, bounce: 0), value: lines.map(\.id))
     }
 
-}
+    // A line arriving fades in where it lands, once the lines around it
+    // have finished moving (its space is kept from the start): shown at once,
+    // the heading above slid down across it. A line leaving goes at once:
+    // the rows below slide up into its place, and fading it out instead left
+    // it see-through on top of the row moving in. (A ticked task's ring
+    // already showed the tick for half a second before it leaves.)
+    private static let lineTransition: AnyTransition = .asymmetric(
+        insertion: .opacity.animation(.easeOut(duration: 0.2).delay(0.3)),
+        removal: .identity
+    )
 
-// MARK: - Slide-to-confirm lock/unlock control
-
-// A real drag, not a tap — matching iOS's own "slide to power off," this
-// makes the single most consequential action on the profile (instantly
-// locking or unlocking a kid's devices) something a parent has to commit
-// to, not something a stray tap can trigger the same as any other row.
-// `action` fires once the thumb crosses the completion threshold; the
-// thumb then eases back to the start so the control is ready to use again
-// rather than staying stuck "completed."
-// A plain tap button — this used to be a slide-to-confirm gesture (the
-// reasoning was that this is the single most consequential control on the
-// profile, so it deserved a deliberate gesture instead of an easy-to-misfire
-// tap, mirroring iOS's own power-off slider). Reverted back to a button:
-// a slide gesture is unfamiliar friction for what parents expect to be a
-// one-tap action, and the wording alone ("Tap to lock/unlock phone") already
-// tells a parent plainly what tapping it does.
-private struct LockActionButton: View {
-    var label: String
-    var systemImage: String
-    var tint: Color
-    var action: () -> Void
-
-    var body: some View {
+    private func dayTab(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: systemImage).font(.system(size: 16, weight: .bold))
-                Text(label).font(Typography.font(14, weight: .heavy)).lineLimit(1)
-            }
-            .foregroundStyle(.white)
-            .frame(width: 260, height: 48)
-            .background(Capsule().fill(tint))
+            Text(title)
+                .font(Typography.font(16, weight: .heavy))
+                .foregroundStyle(on ? EColor.onSurface : HomeStyle.muted)
+                .padding(.bottom, 5)
+                .overlay(alignment: .bottom) {
+                    if on {
+                        Rectangle().fill(EColor.onSurface).frame(height: 2.5)
+                            .matchedGeometryEffect(id: "dayTabUnderline", in: dayTabs)
+                    }
+                }
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
+
+    // The day the + adds to: whichever of Today / Tomorrow is showing.
+    private var selectedDay: Date {
+        let today = Calendar.current.startOfDay(for: Date())
+        return showingTomorrow ? (Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today) : today
+    }
+
+    private func emptyLine(_ text: String) -> some View {
+        Text(text)
+            .font(Typography.font(14, weight: .heavy))
+            .foregroundStyle(HomeStyle.muted)
+            .padding(.vertical, 14)
+    }
+
 }
 
 // MARK: - Protection setup nudge (Leo's "PIN not set" prompt)
@@ -883,8 +840,7 @@ private struct TrialExhaustedPopupCard: View {
 
 // MARK: - Grant extra time (tasks already done, allowance used up)
 
-// Ported concept from the reflection/earn-back philosophy elsewhere in the
-// app: once chores are done, unlocking isn't a "should they" question
+// Once chores are done, unlocking isn't a "should they" question
 // anymore, it's a "how much" one — so this asks for an amount instead of a
 // bare confirm, and warns proportionally to how much is picked, rather than
 // scaring the parent off of any top-up at all.
@@ -991,11 +947,6 @@ private struct GrantExtraTimeSheet: View {
                     Text("Give \(childName) more time?")
                         .font(Typography.font(18, weight: .heavy))
                         .foregroundStyle(EColor.onSurface)
-
-                    Text("\(childName) finished all their tasks today but has used the full \(formatMinutes(dailyLimitMin)) allowance.")
-                        .font(Typography.font(14, weight: .medium))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                        .fixedSize(horizontal: false, vertical: true)
 
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: alreadyOverTwoHours ? "exclamationmark.octagon.fill" : "clock.fill")
@@ -1182,10 +1133,10 @@ private struct UnlockConfirmCard: View {
     private var warning: (color: Color, icon: String, text: String) {
         guard remaining > 0 else {
             return (Color(hex: "25924A"), "checkmark.circle.fill",
-                    "Locked time is what makes the limits stick. Unlocking early — even occasionally — can undo that and make future locks harder to enforce.")
+                    "Sticking to the usual schedule keeps limits predictable for \(childName).")
         }
         let task = remaining == 1 ? "task" : "tasks"
-        let text = "\(childName) still has \(remaining) \(task) left to do. Unlocking now teaches them screen time comes before responsibilities — it can build a bad habit."
+        let text = "\(childName) has \(remaining) \(task) left today. Finishing them first helps screen time feel earned."
         // One task left reads as "almost done" (amber); several still open is
         // the more serious "unlocking before real progress" case (red) —
         // same two-tier escalation GrantExtraTimeSheet uses for its amount.
@@ -1232,7 +1183,7 @@ private struct UnlockConfirmCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     VStack(spacing: 10) {
-                        cardButton("Unlock anyway", tint: EColor.danger, action: onUnlock)
+                        cardButton("Unlock now", tint: EColor.danger, action: onUnlock)
                         cardButton("Cancel", tint: EColor.onSurfaceVariant, action: onCancel)
                     }
                     .padding(.top, 4)
@@ -1267,197 +1218,6 @@ private struct UnlockConfirmCard: View {
     }
 }
 
-// What a TypeChip shows above its label: an icon (rule types) or a colored
-// dot (task categories) — same bordered-box selector, different glyph.
-private enum ChipGlyph {
-    case icon(String)
-    case dot(Color?)
-}
-
-// Bordered glyph-over-label box — matches the rule-type picker in
-// AddRuleForm (index.html:2098). Reused for Add Task's category picker so
-// both "type" selectors in the add sheets share one visual language instead
-// of the pill-shaped DotChip used for "For"/"Repeats".
-private struct TypeChip: View {
-    var glyph: ChipGlyph
-    var label: String
-    var selected: Bool
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                switch glyph {
-                case .icon(let name):
-                    Image(systemName: EIcon.sf(name)).font(.system(size: 20))
-                case .dot(let color):
-                    Circle().fill(color ?? EColor.onSurfaceVariant).frame(width: 10, height: 10)
-                }
-                Text(label).font(Typography.font(12, weight: .bold))
-            }
-            .foregroundStyle(selected ? EColor.primary : EColor.onSurfaceVariant)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(selected ? EColor.primary.opacity(0.06) : .white)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? EColor.primary : EColor.outlineVariant, lineWidth: 2))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private let bypassPurple = Color(hex: "7C3AED")
-
-private struct TaskRowView: View {
-    var task: ChildTask
-    var onOpen: () -> Void
-
-    // dueLabel is stored as "Today, 1:00 PM" / "Yesterday, 5:00 PM" — the row
-    // only has room for a quick glance, and task.state's own pill (Pending,
-    // Overdue, …) already says whether it's on-time, so the day word here is
-    // redundant. Just the clock time is enough.
-    private func timeOnly(_ label: String) -> String {
-        label.split(separator: ",").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? label
-    }
-
-    // Each task is its own floating card (ported 1:1 from the real app's
-    // Components/TaskRow.swift) — not rows sharing one card with dividers.
-    // .review used to get the same full-wash treatment as overdue/bypass
-    // (a saturated orange background + a matching icon + a matching "Needs
-    // review" pill, three cues all saying the same thing). That's fine for
-    // one row, but a parent with several submissions waiting sees a wall of
-    // identical orange cards that's hard to tell apart and that buries the
-    // genuinely urgent state (overdue, in red) in the noise. Review is a
-    // routine, positive state — the kid did the work — so it now sits on
-    // the same plain card as a done/pending task and leans on the orange
-    // icon badge alone as its one cue, instead of three.
-    private var cardBackground: Color {
-        switch task.state {
-        case .overdue: return Color(hex: "FFF5F3")
-        case .bypass: return Color(hex: "F7F2FF")
-        default: return EColor.surfaceContainerLowest
-        }
-    }
-
-    // Approve/Redo (and Allow/Deny for a bypass request) used to live
-    // inline here too, duplicating what tapping into the task already
-    // offers via TaskReviewDeckView — a parent reviewing a submission
-    // needs to actually look at it first anyway, so the row is just an
-    // entry point now, not a second place to act without opening it.
-    var body: some View {
-        Button(action: onOpen) {
-            mainRow
-                .padding(14)
-                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(cardBackground))
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(EColor.outlineVariant.opacity(0.5), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var mainRow: some View {
-        HStack(spacing: 14) {
-            statusIcon
-            VStack(alignment: .leading, spacing: 3) {
-                Text(task.title)
-                    .font(Typography.font(16, weight: .heavy))
-                    .foregroundStyle(task.state == .done ? EColor.onSurfaceVariant : EColor.primary)
-                    .strikethrough(task.state == .done, color: EColor.onSurfaceVariant)
-                HStack(spacing: 6) {
-                    trailingLabel
-                    // Approve/Redo (review) and Allow/Deny (bypass) rows already have a
-                    // submission to act on — the due time only matters before that, so
-                    // it's shown for tasks still awaiting one.
-                    if let due = task.dueLabel, task.state != .review, task.state != .bypass {
-                        Text(timeOnly(due)).font(Typography.font(11, weight: .semibold)).foregroundStyle(EColor.onSurfaceVariant)
-                    }
-                }
-            }
-            Spacer(minLength: 4)
-            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(EColor.outline)
-        }
-    }
-
-    @ViewBuilder
-    private var trailingLabel: some View {
-        switch task.state {
-        case .done:
-            pill("Done", fg: Color(hex: "25924A"), bg: Color(hex: "E4F8E9"))
-        case .review:
-            // No pill — the orange camera-icon badge (see statusIcon) is
-            // already the state's one cue; repeating "Needs review" in text
-            // next to it on every row is what made a short list of
-            // submissions read as noise instead of a few distinct tasks.
-            EmptyView()
-        case .pending:
-            pill("Pending", fg: EColor.outline, bg: EColor.surfaceContainerHigh)
-        case .overdue:
-            Text("OVERDUE").font(Typography.font(11, weight: .heavy)).tracking(1.4).foregroundStyle(EColor.danger)
-        case .bypass:
-            Text("BYPASS REQUESTED")
-                .font(Typography.font(10, weight: .heavy)).tracking(1.2)
-                .foregroundStyle(bypassPurple)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(bypassPurple.opacity(0.12)).clipShape(Capsule())
-        case .bypassed:
-            pill("Bypassed", fg: EColor.outline, bg: EColor.surfaceContainerHigh)
-        }
-    }
-
-    private func pill(_ text: String, fg: Color, bg: Color) -> some View {
-        Text(text)
-            .font(Typography.font(11, weight: .bold))
-            .foregroundStyle(fg)
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background(bg).clipShape(Capsule())
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        switch task.state {
-        case .done:
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(hex: "25924A"))
-                Image(systemName: "checkmark").font(.system(size: 15, weight: .heavy)).foregroundStyle(.white)
-            }
-            .frame(width: 36, height: 36)
-        case .review:
-            // Hourglass, not a camera — a camera reads as "take a photo,"
-            // which is the kid's action, not what a parent glancing at this
-            // row needs to know. Matches ScreenTabletHome's own task chip
-            // for the exact same state from the kid's side ("Waiting for
-            // your parent to check it"), so the same underlying state reads
-            // consistently as "something's pending" on both ends.
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(hex: "EF6C00"))
-                Image(systemName: "hourglass").font(.system(size: 15, weight: .heavy)).foregroundStyle(.white)
-            }
-            .frame(width: 36, height: 36)
-        case .pending:
-            Circle().stroke(EColor.outline, lineWidth: 1.5).frame(width: 28, height: 28).padding(4)
-        case .overdue:
-            ZStack {
-                Circle().stroke(EColor.danger, lineWidth: 1.5)
-                Image(systemName: "exclamationmark").font(.system(size: 13, weight: .heavy)).foregroundStyle(EColor.danger)
-            }
-            .frame(width: 28, height: 28).padding(4)
-        case .bypass:
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(bypassPurple)
-                Image(systemName: EIcon.sf("pan_tool")).font(.system(size: 15, weight: .heavy)).foregroundStyle(.white)
-            }
-            .frame(width: 36, height: 36)
-        case .bypassed:
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(EColor.outlineVariant, lineWidth: 2)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(EColor.surfaceContainerLowest))
-                Image(systemName: EIcon.sf("block")).font(.system(size: 14, weight: .heavy)).foregroundStyle(EColor.outline)
-            }
-            .frame(width: 36, height: 36)
-        }
-    }
-}
-
 // MARK: - Add Task
 
 private struct AddTaskSheet: View {
@@ -1468,8 +1228,6 @@ private struct AddTaskSheet: View {
     @State private var title = ""
     @State private var category = "Chore"
     @State private var description = ""
-    @State private var dueDate = Date()
-    @State private var hasDueDate = false
     @State private var repeatDays: Set<String> = []
     // AddTaskFormFields is shared with Calendar's own Add Task, which
     // isn't scoped to one child and needs a real personId binding — this
@@ -1477,8 +1235,18 @@ private struct AddTaskSheet: View {
     // surfaced (fixedChild hides the For picker that would otherwise show it).
     @State private var personId: String
 
-    init(child: Child, onCreate: @escaping (ChildTask) -> Void, onCancel: @escaping () -> Void) {
+    // The day the task is due: the one Home's Today / Tomorrow tab is
+    // showing. No date picker here; the tab already says which day. A
+    // deadline (More options) only adds a time on that day.
+    var day: Date
+    @State private var hasDeadline = false
+    @State private var deadline = Date()
+
+    private var dueMoment: Date { TaskDeadlineField.moment(deadline, on: day) }
+
+    init(child: Child, day: Date, onCreate: @escaping (ChildTask) -> Void, onCancel: @escaping () -> Void) {
         self.child = child
+        self.day = day
         self.onCreate = onCreate
         self.onCancel = onCancel
         _personId = State(initialValue: child.id)
@@ -1490,22 +1258,401 @@ private struct AddTaskSheet: View {
         AddTaskFormFields(
             title: "New task", saveLabel: "Create task", fixedChild: child,
             taskTitle: $title, personId: $personId, whatToDo: $description, repeatDays: $repeatDays,
+            hasDeadline: $hasDeadline, deadline: $deadline, day: day,
             canSave: canSave, onCancel: onCancel, onSave: {
                 let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
                 onCreate(ChildTask(
                     id: UUID().uuidString, occurrenceId: nil, title: title, state: .pending, category: category,
                     description: description, note: nil, submittedAt: nil,
-                    dueLabel: hasDueDate ? formatted(dueDate) : nil, dueDate: hasDueDate ? dueDate : nil, photoCount: 0,
+                    dueLabel: hasDeadline ? ChildRule.fmtClock(dueMoment) : nil,
+                    dueDate: hasDeadline ? dueMoment : day, photoCount: 0,
                     repeats: repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
                 ))
             }
-        ) {
-            TaskWhenField(hasDueDate: $hasDueDate, dueDate: $dueDate)
-        }
-    }
-
-    private func formatted(_ date: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f.string(from: date)
+        )
     }
 }
 
+// MARK: - Home design pieces
+
+/// How strongly a card on a child's page is dimming the screen; Home dims
+/// its header by the same amount. With several pages (a swipeable pager),
+/// the strongest wins: only the page on screen can be showing a card.
+struct HomeScrimKey: PreferenceKey {
+    static var defaultValue: Double = 0
+    static func reduce(value: inout Double, nextValue: () -> Double) { value = max(value, nextValue()) }
+}
+
+// The Home design's own palette, where the app's tokens don't have an
+// equivalent: the soft grey review strip, the amber review accent and the
+// muted label grey.
+enum HomeStyle {
+    static let green = Color(hex: "1FA971")
+    static let red = Color(hex: "E0483C")
+    static let amber = Color(hex: "E8962C")
+    static let amberSoft = Color(hex: "FDF0DF")
+    static let sunk = Color(hex: "F6F7F9")
+    static let line = Color(hex: "EDEFF2")
+    static let muted = Color(hex: "8894A6")
+}
+
+// The status header's colours: iOS's own system green and red for open and
+// locked, and the system label greys.
+enum StatusCardStyle {
+    static let green = Color(hex: "34C759")
+    static let red = Color(hex: "FF3B30")
+    static let secondaryLabel = Color(red: 60/255, green: 60/255, blue: 67/255).opacity(0.6)
+    static let tertiaryLabel = Color(red: 60/255, green: 60/255, blue: 67/255).opacity(0.3)
+    static let separator = Color(red: 60/255, green: 60/255, blue: 67/255).opacity(0.15)
+}
+
+// A row that dims while pressed, like a system list cell.
+private struct PressedOpacityStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.6 : 1)
+    }
+}
+
+// The status header: the state in words on the left, and a track from there
+// to the lock button that wraps around it. The track fills with today's
+// tasks: half the line per task done, the whole line one short of done, and
+// the ring with the last, when the button turns green to unlock. While the
+// phone is open it shows the time left instead.
+private struct StatusPathHeader: View {
+    enum Phase: Equatable {
+        /// Locked for tasks: some of today's still to do.
+        case tasks(done: Int, total: Int)
+        /// Tasks are waiting for parent review; the button approves them.
+        case ready(timeLeft: String)
+        /// Open, with this much time left.
+        case open(timeLeft: String, fraction: Double)
+        /// Locked while some of today's earned time remains.
+        case paused(timeLeft: String)
+        /// The day's screen time is used up.
+        case timeUp
+        case downtime(until: String)
+    }
+
+    var phase: Phase
+    var childName: String
+    var action: () -> Void
+
+    // Counts taps, so the haptic answers the parent's own tap and never a
+    // change that arrived by sync.
+    @State private var taps = 0
+
+    private let buttonSize: CGFloat = 52
+    private let ringRadius: CGFloat = 30
+    private let lineWidth: CGFloat = 4.5
+    private static let trackGrey = Color(hex: "E5E5EA")
+
+    var body: some View {
+        GeometryReader { geo in
+            let center = CGPoint(x: geo.size.width - ringRadius - lineWidth / 2, y: ringRadius + lineWidth / 2)
+            let track = StatusTrack(center: center, radius: ringRadius, startX: lineWidth / 2)
+            let style = StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+            ZStack(alignment: .topLeading) {
+                if !isDowntime {
+                    track.stroke(Self.trackGrey, style: style)
+                    track.trim(from: 0, to: filled(lineLength: center.x - lineWidth / 2))
+                        .stroke(fillColor, style: style)
+                }
+                statusText
+                    .padding(.top, 14)
+                    .frame(maxWidth: center.x - ringRadius - 12, alignment: .leading)
+                lockButton
+                    .position(center)
+            }
+        }
+        .frame(height: ringRadius * 2 + lineWidth)
+        .animation(.spring(response: 0.6, dampingFraction: 0.9), value: phase)
+    }
+
+    private var isDowntime: Bool { if case .downtime = phase { return true } else { return false } }
+
+    // How much of the track is filled, as a share of its whole length.
+    private func filled(lineLength: CGFloat) -> CGFloat {
+        let ring = 2 * .pi * ringRadius
+        let whole = lineLength + ring
+        switch phase {
+        case let .tasks(done, total):
+            guard total > 1 else { return done >= 1 ? lineLength / whole : 0 }
+            return lineLength * CGFloat(min(done, total - 1)) / CGFloat(total - 1) / whole
+        case .ready(_): return 1
+        case let .open(_, fraction): return CGFloat(max(0, min(1, fraction)))
+        case .paused(_), .timeUp, .downtime: return 0
+        }
+    }
+
+    private var fillColor: Color { StatusCardStyle.green }
+
+    @ViewBuilder private var statusText: some View {
+        switch phase {
+        case let .tasks(done, total):
+            numberLine("\(done)", "of \(total) done", numberColor: done > 0 ? StatusCardStyle.green : EColor.onSurface)
+        case let .ready(timeLeft):
+            numberLine(timeLeft, "left", numberColor: StatusCardStyle.green)
+        case let .open(timeLeft, _):
+            numberLine(timeLeft, "left", numberColor: StatusCardStyle.green)
+        case let .paused(timeLeft):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(timeLeft)
+                    .font(Typography.font(28, weight: .semibold))
+                    .foregroundStyle(StatusCardStyle.secondaryLabel)
+                    .contentTransition(.numericText())
+                Text("left")
+                    .font(Typography.font(16, weight: .regular))
+                    .foregroundStyle(StatusCardStyle.secondaryLabel)
+                Circle()
+                    .fill(StatusCardStyle.tertiaryLabel)
+                    .frame(width: 3, height: 3)
+                    .padding(.horizontal, 2)
+                Text("Locked")
+                    .font(Typography.font(13, weight: .semibold))
+                    .foregroundStyle(StatusCardStyle.secondaryLabel)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .accessibilityElement(children: .combine)
+        case .timeUp:
+            // Out of time: the time left, nothing, greyed out.
+            numberLine("0m", nil, numberColor: StatusCardStyle.secondaryLabel)
+        case let .downtime(until):
+            numberLine("Until \(until)", nil, numberColor: downtimeIndigo)
+        }
+    }
+
+    private func numberLine(_ number: String, _ suffix: String?, numberColor: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(number)
+                .font(Typography.font(28, weight: .semibold))
+                .foregroundStyle(numberColor)
+                .contentTransition(.numericText())
+            if let suffix {
+                Text(suffix)
+                    .font(Typography.font(16, weight: .regular))
+                    .foregroundStyle(StatusCardStyle.secondaryLabel)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var lockButton: some View {
+        Button { taps += 1; action() } label: {
+            Group {
+                if isOpen {
+                    SemiUnlockGlyph()
+                        .foregroundStyle(iconColor)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(iconColor)
+                        // Calm: a quiet cross-fade between icons, no bounce.
+                        .contentTransition(.opacity)
+                }
+            }
+            .frame(width: buttonSize, height: buttonSize)
+            .background {
+                // Filled green over a green ring, the two only touched
+                // edge to edge and a hairline of white showed between
+                // them. Filled, the disc grows to cover the whole ring.
+                Circle().fill(buttonFill)
+                    .frame(width: discSize, height: discSize)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isDowntime)
+        .accessibilityLabel(isOpen ? "Lock \(childName)'s phone"
+                    : (isReady ? "Approve everything \(childName) sent in" : "Unlock \(childName)'s phone"))
+        .accessibilityValue(isOpen ? "Open" : (isDowntime ? "Downtime" : "Locked"))
+        .sensoryFeedback(.impact(weight: .medium), trigger: taps)
+    }
+
+    private var isOpen: Bool { if case .open = phase { return true } else { return false } }
+    private var isReady: Bool { if case .ready = phase { return true } else { return false } }
+
+    private var discSize: CGFloat {
+        if case .ready(_) = phase { return (ringRadius + lineWidth / 2) * 2 }
+        return buttonSize
+    }
+
+    private var icon: String {
+        switch phase {
+        case .ready(_): return "checkmark"
+        case .downtime: return "moon.fill"
+        default: return "lock.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch phase {
+        case .tasks, .paused(_), .timeUp: return StatusCardStyle.red
+        case .ready(_), .downtime: return .white
+        case .open: return StatusCardStyle.green
+        }
+    }
+
+    private var buttonFill: Color {
+        switch phase {
+        case .ready(_): return StatusCardStyle.green
+        case .downtime: return downtimeIndigo
+        default: return Color.white
+        }
+    }
+}
+
+// The track: a straight line from the left to the bottom of the ring around
+// the lock button, then once round the ring, so the fill runs along the line
+// and on into the circle without a break.
+private struct StatusTrack: Shape {
+    var center: CGPoint
+    var radius: CGFloat
+    var startX: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let bottom = CGPoint(x: center.x, y: center.y + radius)
+        path.move(to: CGPoint(x: startX, y: bottom.y))
+        path.addLine(to: bottom)
+        // Up the right side first, carrying on from the line's direction.
+        path.addArc(center: center, radius: radius, startAngle: .degrees(90), endAngle: .degrees(-270), clockwise: true)
+        return path
+    }
+}
+
+// One task row: a thin ring, the title, and a calm "day, time" line under
+// it. The ring says the state at a glance: the child's colour while to do,
+// red with "!" when late, amber when it's waiting on the parent,
+// filled with a tick when done. Dashed for tomorrow, which can't be opened
+// yet. Hairlines between rows come from the list (taskList), not the row.
+private struct HomeTaskRow: View {
+    var task: ChildTask
+    var color: Color
+    var isTomorrow: Bool
+    /// Ticked a moment ago: drawn done while the row waits to move.
+    var justChecked: Bool = false
+    /// Tapping the ring checks the task off, or un-checks it. Nil: the
+    /// ring is just a picture (tomorrow).
+    var onRingTap: (() -> Void)? = nil
+
+    private var isDone: Bool { justChecked || task.state == .done || task.state == .bypassed }
+    private var waitingOnParent: Bool { task.state == .review || task.state == .bypass }
+
+    private var ringColor: Color {
+        if task.state == .overdue { return HomeStyle.red }
+        if waitingOnParent { return HomeStyle.amber }
+        return color
+    }
+
+    // The line under the name, only when it adds something: the due time,
+    // "Overdue", or a skip. The Today/Tomorrow tab already says which day,
+    // and the section headings say done or to do, so a task with no time
+    // has no second line.
+    private var detail: String? {
+        switch task.state {
+        case .done: return nil
+        case .bypassed: return "Skipped"
+        case .bypass: return "Asked to skip"
+        case .pending, .overdue, .review:
+            if let label = task.dueLabel, !label.isEmpty { return label }
+            return task.state == .overdue ? "Overdue" : nil
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                if isDone {
+                    Circle().fill(color)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    Image(systemName: "checkmark").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                        .transition(.scale(scale: 0.3).combined(with: .opacity))
+                } else {
+                    Circle()
+                        .strokeBorder(ringColor.opacity(0.85), style: StrokeStyle(lineWidth: 2, dash: isTomorrow ? [4, 3] : []))
+                    if task.state == .overdue {
+                        Image(systemName: "exclamationmark").font(.system(size: 16, weight: .bold)).foregroundStyle(ringColor)
+                    }
+                }
+            }
+            .frame(width: 40, height: 40)
+            // A bigger target than the ring it draws, and a tap of its own:
+            // it wins over the row's tap, which opens the task.
+            .padding(6)
+            .contentShape(Circle())
+            .onTapGesture { onRingTap?() }
+            .allowsHitTesting(onRingTap != nil)
+            .accessibilityElement()
+            .accessibilityLabel(isDone ? "Done" : "Not done")
+            .accessibilityAddTraits(onRingTap == nil ? [] : .isButton)
+            .accessibilityHint(onRingTap == nil ? "" : (isDone ? "Sends it back to the kid" : "Checks it off"))
+            .padding(-6)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(task.title)
+                    .font(Typography.font(16.5, weight: .bold))
+                    .foregroundStyle(isDone ? HomeStyle.muted : EColor.onSurface)
+                    .strikethrough(isDone, color: HomeStyle.muted)
+                if let detail {
+                    Text(detail)
+                        .font(Typography.font(14.5, weight: .regular))
+                        .foregroundStyle(task.state == .overdue ? HomeStyle.red : HomeStyle.muted)
+                        .strikethrough(isDone, color: HomeStyle.muted)
+                }
+            }
+            Spacer(minLength: 0)
+            // Every row opens: today's to review, tomorrow's to edit.
+            Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(StatusCardStyle.tertiaryLabel)
+        }
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A modern semi-unlocked padlock matching Apple's `lock.fill` in
+/// proportions, weight, and continuous corner curvature, with the shackle
+/// lifted slightly and cleanly unhooked on the right.
+private struct SemiUnlockGlyph: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let bodyW: CGFloat = 16.5
+            let bodyH: CGFloat = 12.2
+            let bodyCorner: CGFloat = 3.3
+            let strokeW: CGFloat = 2.7
+            let shackleW: CGFloat = 8.8
+            let r = shackleW / 2
+
+            let centerX = size.width / 2
+            let bodyY = size.height / 2 - bodyH / 2 + 3.6
+            let bodyRect = CGRect(x: centerX - bodyW / 2, y: bodyY, width: bodyW, height: bodyH)
+
+            // Solid body matching lock.fill
+            ctx.fill(Path(roundedRect: bodyRect, cornerRadius: bodyCorner, style: .continuous), with: .foreground)
+
+            // Shackle: lifted slightly with right leg unhooked above the body
+            let leftX = centerX - r
+            let rightX = centerX + r
+            let archTop = bodyRect.minY - 9.6
+
+            var shackle = Path()
+            // Anchored into the lock body
+            shackle.move(to: CGPoint(x: leftX, y: bodyRect.minY + 2.5))
+            shackle.addLine(to: CGPoint(x: leftX, y: archTop + r))
+            shackle.addArc(center: CGPoint(x: centerX, y: archTop + r),
+                           radius: r,
+                           startAngle: .degrees(180),
+                           endAngle: .degrees(0),
+                           clockwise: false)
+            // Unhooked, cleanly suspended above the body
+            shackle.addLine(to: CGPoint(x: rightX, y: bodyRect.minY - 3.2))
+
+            ctx.stroke(shackle, with: .foreground, style: StrokeStyle(lineWidth: strokeW, lineCap: .round, lineJoin: .round))
+        }
+        .frame(width: 24, height: 26)
+    }
+}

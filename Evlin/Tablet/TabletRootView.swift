@@ -11,7 +11,6 @@ struct TabletRootView: View {
     // completing/redoing a task from either place needs to land in the
     // same source of truth rather than each tab keeping its own copy.
     @State private var selectedTask: KidTask?
-    @State private var kidSaveError: String?
 
     // Computed properties pulling live data from the session store
     private var activeChild: Child? {
@@ -45,7 +44,6 @@ struct TabletRootView: View {
     // parent Redo) so finishing everything again replays the payoff.
     @State private var celebrationStage: CelebrationStage?
     @State private var didCelebrateThisCompletion = false
-    @State private var openReflection: ApiReflection?
 
     // Gates the actual unlock — must only count a real parent decision
     // (approved/bypassed), never .review. task.done alone means "submitted
@@ -56,36 +54,25 @@ struct TabletRootView: View {
     // phone the moment every task was *submitted*, with zero parent
     // approval actually required.
     private var approvedCount: Int { tasks.filter(\.approved).count }
-    // What the kid sees as "X of Y done" — their own submission progress,
-    // not gated on approval, so it doesn't look like nothing happened
-    // right after they've turned everything in.
+    // Sent in or approved: once it's every task, the top bar says they're
+    // all turned in and waiting, instead of asking for more work.
     private var submittedCount: Int { tasks.filter(\.done).count }
     // Delegates to the one derived-state function rather than answering here.
     // Real enforcement reads that same function from a separate process, and
     // a View-local answer couldn't be shared with it — two implementations of
     // "is it locked" that can disagree is the worst outcome for a lock.
     //
-    // It also covers more than this line used to: an open reflection locks
-    // regardless of task status, and a manual lock counts too.
+    // It also covers more than this line used to: a manual lock counts too.
     private var locked: Bool {
         guard let childId = session.activeChildId else { return approvedCount < tasks.count }
         return LocalStore.shared.enforcementState(childId: childId).isLocked
     }
 
-    /// The reflection currently holding the gate closed, if any. Fetched
-    /// rather than read from the cache because the flow needs the full
-    /// record (prompt, review note, its course assignment), not just the
-    /// boolean the lock is computed from.
-    private func loadOpenReflection() async {
-        guard let childId = session.activeChildId else { return }
-        guard let open = try? await APIClient.shared.fetchReflections(childId: childId, status: "open") else { return }
-        withAnimation(.easeInOut(duration: 0.2)) { openReflection = open.first }
-    }
     private var minutesLeft: Int { max(0, limitMin - usedMin) }
     private var onBreak: Bool { if let until = onBreakUntil { return Date() < until } else { return false } }
 
-    /// Today's synced tasks -> the kid list, keeping any kid-only state
-    /// (bypass request, submitted evidence) already held for the same task.
+    /// Today's tasks from the phone's database -> the kid list, keeping the
+    /// kid-only extras (photo count, note) already held for the same task.
     private func loadTasksFromStore() {
         guard let childId = session.activeChildId else { return }
         let existing = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
@@ -105,6 +92,13 @@ struct TabletRootView: View {
                 k.bypassNote = k.bypassRequested ? t.note : nil
                 k.redoRequested = t.redoNote != nil
                 k.redoNote = t.redoNote
+                // Sent back: what was sent in is discarded, so the task
+                // starts over with no photos counted from before.
+                if k.redoRequested {
+                    k.submittedPhotoCount = 0
+                    k.submissionNote = nil
+                }
+                k.skipDeclinedNote = t.skipDeclinedNote
                 return k
             }
     }
@@ -113,7 +107,7 @@ struct TabletRootView: View {
         ZStack {
             VStack(spacing: 0) {
                 if tab == 0 {
-                    PlayTimeTopBar(minutesLeft: minutesLeft, minutesMax: limitMin, locked: locked, done: submittedCount, total: tasks.count, onBreak: onBreak)
+                    PlayTimeTopBar(minutesLeft: minutesLeft, minutesMax: limitMin, locked: locked, done: approvedCount, turnedIn: submittedCount, total: tasks.count, onBreak: onBreak)
                 }
                 // No Settings tab here — its only content was the Parent
                 // Controls request, so a whole bottom-nav slot represented a
@@ -126,15 +120,12 @@ struct TabletRootView: View {
                     ScreenTabletHome(tasks: $tasks, onSwitchMode: onSwitchMode, onSelectTask: { selectedTask = $0 })
                         .tabItem { Label("Task", systemImage: "checkmark.circle.fill") }
                         .tag(0)
+                    ScreenTabletLibrary()
+                        .tabItem { Label("Library", systemImage: "books.vertical.fill") }
+                        .tag(2)
                     ScreenTabletCalendar()
                         .tabItem { Label("Calendar", systemImage: "calendar") }
                         .tag(1)
-                    ScreenTabletMilestones()
-                        .tabItem { Label("Goals", systemImage: "target") }
-                        .tag(2)
-                    ScreenTabletLibrary()
-                        .tabItem { Label("Library", systemImage: "book.closed.fill") }
-                        .tag(3)
                 }
                 .tint(KidTheme.greenDeep)
                 // The native tab bar paints its own opaque system background
@@ -151,20 +142,6 @@ struct TabletRootView: View {
                     withAnimation(.easeOut(duration: 0.3)) { showDayIntro = false }
                 }
                 .transition(.opacity)
-            }
-
-            // A reflection locks the device, so its own flow has to be
-            // reachable while it's open — a gate with no door is just a
-            // broken tablet. Covers everything else on purpose: it's the
-            // highest-priority gate, and there's nothing else to do until
-            // it's handed in.
-            if let reflection = openReflection {
-                ReflectionFlowView(reflection: reflection) {
-                    await AppSync.shared.syncBackendData()
-                    await loadOpenReflection()
-                }
-                .transition(.opacity)
-                .zIndex(2)
             }
 
             if let stage = celebrationStage {
@@ -187,10 +164,13 @@ struct TabletRootView: View {
                 didCelebrateThisCompletion = false
             }
         }
-        .alert("Couldn't send", isPresented: Binding(get: { kidSaveError != nil }, set: { if !$0 { kidSaveError = nil } })) {
+        // A write the outbox couldn't deliver (the parent side shows the
+        // same message in ParentRootView).
+        .alert("Couldn't send", isPresented: Binding(get: { SyncState.shared.writeError != nil },
+                                                     set: { if !$0 { SyncState.shared.writeError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(kidSaveError ?? "")
+            Text(SyncState.shared.writeError ?? "")
         }
         // Same gap as the parent side's syncErrorBanner (ParentRootView) —
         // this used to be console-print-only, so this device could sit on
@@ -205,58 +185,35 @@ struct TabletRootView: View {
         // previously-synced data immediately instead of an empty screen —
         // it's a no-op once the real sync has already populated this child.
         .onAppear {
-            if let childId = session.activeChildId { LocalStore.shared.hydrateIfNeeded(childId: childId) }
+            LocalStore.shared.hydrateIfNeeded()
             loadTasksFromStore()
         }
-        .onChange(of: SyncState.shared.version) { _, _ in loadTasksFromStore() }
-        .task {
-            while !Task.isCancelled {
-                await AppSync.shared.syncBackendData()
-                await loadOpenReflection()
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
-            }
-        }
+        // Follows the database: the kid's own submit or skip, and every
+        // sync (LiveUpdates syncs the moment the backend says something
+        // changed; RootView on launch and on every return to the
+        // foreground).
+        .onChange(of: TaskStore.tasks(for: session.activeChildId ?? "")) { _, _ in loadTasksFromStore() }
         .fullScreenCover(item: $selectedTask) { task in
-            TaskDetailView(task: task, onComplete: { photoCount, note, hasVoiceNote in
-                Task {
-                    if let occId = task.occurrenceId {
-                        do {
-                            _ = try await APIClient.shared.submitTask(occurrenceId: occId, bypassNote: note)
-                            await AppSync.shared.syncBackendData()
-                        } catch {
-                            kidSaveError = "Your task wasn't sent. \(error.apiUserMessage)"
-                            await AppSync.shared.syncBackendData()
-                        }
-                    }
-                }
-                
+            TaskDetailView(task: task, onComplete: { photoCount, note in
                 if let i = tasks.firstIndex(where: { $0.id == task.id }) {
-                    tasks[i].done = true
                     tasks[i].submittedPhotoCount = photoCount
                     tasks[i].submissionNote = note
-                    tasks[i].submissionHasVoiceNote = hasVoiceNote
-                    // Submitting means "a parent hasn't looked at it yet,"
-                    // not "fully approved" — see KidTask.pendingApproval.
-                    // Clearing redoRequested too: a resubmission after a
-                    // redo ask puts the task right back into the review
-                    // queue instead of staying stuck showing the old note.
-                    tasks[i].pendingApproval = true
-                    tasks[i].approved = false
-                    tasks[i].redoRequested = false
                 }
-                selectedTask = nil
-            }, onRequestBypass: { reason, hasVoice in
-                if let occId = task.occurrenceId {
-                    Task {
-                        do { try await APIClient.shared.requestBypass(occurrenceId: occId, note: reason.isEmpty ? nil : reason) }
-                        catch { kidSaveError = "Your request wasn't sent. \(error.apiUserMessage)" }
-                        await AppSync.shared.syncBackendData()
-                    }
+                // Into the database (the list follows from it: sent in,
+                // waiting on a parent), then out through the outbox.
+                if let occId = task.occurrenceId, let childId = session.activeChildId {
+                    LocalStore.shared.mirrorOccurrence(id: occId, status: "submitted")
+                    Outbox.send(APIClient.Write.submitTask(occurrenceId: occId, bypassNote: note),
+                                occurrenceId: occId, taskId: task.id, childId: childId, label: "Your task")
                 }
-                if let i = tasks.firstIndex(where: { $0.id == task.id }) {
-                    tasks[i].bypassRequested = true
-                    tasks[i].bypassNote = reason.isEmpty ? nil : reason
-                    tasks[i].bypassHasVoiceNote = hasVoice
+                // The task screen stays open: it shows "Evidence submitted"
+                // next, and the kid leaves with "Back to today".
+            }, onRequestBypass: { reason in
+                if let occId = task.occurrenceId, let childId = session.activeChildId {
+                    let note = reason.isEmpty ? nil : reason
+                    LocalStore.shared.mirrorOccurrence(id: occId, bypassRequested: true, bypassNote: note)
+                    Outbox.send(APIClient.Write.requestBypass(occurrenceId: occId, note: note),
+                                occurrenceId: occId, taskId: task.id, childId: childId, label: "Your request")
                 }
             })
         }
@@ -470,7 +427,10 @@ private struct PlayTimeTopBar: View {
     var minutesLeft: Int
     var minutesMax: Int
     var locked: Bool
+    /// Approved, the parent's count.
     var done: Int
+    /// Sent in or approved.
+    var turnedIn: Int
     var total: Int
     var onBreak: Bool = false
 
@@ -511,11 +471,10 @@ private struct PlayTimeTopBar: View {
             .clipShape(RoundedRectangle(cornerRadius: 18))
 
             if locked {
-                // `done` here is submitted, not approved — still locked
-                // despite reading "N of N" is expected once a parent's
-                // review is the only thing left, so that state gets its
-                // own message instead of implying there's still work to do.
-                Text(done == total
+                // Everything sent in but not all checked: still locked, and
+                // the only thing left is the parent's review, so it says so
+                // instead of asking for more work.
+                Text(turnedIn == total
                      ? "All turned in! Waiting for your parent to check them."
                      : "\(done) of \(total) tasks done — finish them all to unlock!")
                     .font(Typography.font(12, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)

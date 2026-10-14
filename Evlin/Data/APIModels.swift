@@ -20,25 +20,27 @@ struct ApiTask: Codable {
     // see evlin-backend's TaskBase.
     let bonusMinutes: Int
     let createdBy: String
-    /// Set on a "special task": it's completed by finishing this course
-    /// rather than by photo/voice evidence (with submissionKind "course").
-    let courseAssignmentId: String?
-    /// Approving this task's occurrence ticks that milestone's progress.
-    let milestoneId: String?
 }
 
 struct ApiEvent: Codable {
     let id: String
-    let childId: String?   // nil = family-wide
+    // Every event is one child's: Evlin keeps the children's calendars only.
+    // Optional only so a server still holding an old parent or family-wide
+    // event (before the migration that removes them) can't fail the whole
+    // list; AppSync skips those.
+    let childId: String?
     let title: String
     let startAt: String
     let endAt: String
     let locationOrLink: String?
     let source: String
-    let isParentOnly: Bool
     let category: String?
     let note: String?
     let recurrence: String
+    // Optional so an older server (before kids' plans) still decodes.
+    let createdBy: String?
+    let status: String?
+    let reviewNote: String?
 }
 
 struct ApiOccurrence: Codable {
@@ -75,11 +77,6 @@ struct ApiCustomRule: Codable {
 struct ApiChildState: Codable {
     let manualLock: Bool
     let taskGateOverride: Bool
-    /// Server-computed, not a stored column: an unresolved reflection is
-    /// holding the gate closed. Independent of the task gate — a pending
-    /// reflection locks regardless of task status, and clearing it doesn't
-    /// satisfy outstanding tasks. Optional so an older backend still decodes.
-    let hasOpenReflection: Bool?
 }
 
 struct ApiChild: Codable {
@@ -87,6 +84,18 @@ struct ApiChild: Codable {
     let name: String
     let colorIndex: Int
     let isPaired: Bool
+    /// IANA zone this child's device last reported; nil until it has.
+    let timezone: String?
+}
+
+/// One app in Evlin's own catalog. Identified by Evlin's id, never a
+/// platform identifier — a block, a child's lockable list and the AI all
+/// refer to apps this way.
+struct ApiApp: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let aliases: [String]
+    let category: String?
 }
 
 struct ApiParent: Codable {
@@ -109,7 +118,7 @@ struct ApiTimeGrant: Codable {
     let id: String
     let childId: String
     let minutes: Int
-    let source: String        // "manual" | "task_bonus" | "milestone" | "ai_agent"
+    let source: String        // "manual" | "task_bonus" | "ai_agent"
     let reason: String?
     let createdBy: String     // "parent" | "ai_agent" | "system"
     let grantedByParentId: String?
@@ -135,14 +144,22 @@ struct ApiChatMessage: Codable {
     let conversationId: String?
     let role: String        // "user" | "assistant"
     let text: String
-    // "draft_task" | "open_block_picker" | "propose_reflection" |
-    // "generate_course" | "draft_special_task" | nil
+    // "draft_task" | "draft_event" | "ask_follow_up" | nil — the list lives
+    // in evlin-backend/tool_calls/. Older messages can carry tool names that
+    // no longer exist; those show as plain text with no card.
     let toolCall: String?
     // Always strings on the wire — the backend coerces numeric tool args
     // before storing precisely so this stays decodable (one raw JSON number
     // here would fail the whole message, and with it the transcript).
     let toolArgs: [String: String]?
+    /// "chat" | "youtube": which assistant in the thread wrote it. Nil from
+    /// a backend that predates the YouTube agent; treat as "chat".
+    let agent: String?
     let createdAt: String
+    /// Only on the reply to a sent message: the rest of that reply, in
+    /// order, when the parent asked for several things at once — one card
+    /// each. Nil from history, where every message is its own row.
+    var extraMessages: [ApiChatMessage]? = nil
 }
 
 /// One chat thread. The sidebar orders by `updatedAt`, so an active thread
@@ -185,176 +202,141 @@ struct ApiChatConversation: Codable, Identifiable {
     }
 }
 
-/// One thing the assistant has learned about a child and carries between
-/// conversations. Readable and deletable on purpose — a parent should be
-/// able to see exactly what it believes.
-struct ApiChildMemory: Codable, Identifiable {
-    let id: String
-    let childId: String
-    let fact: String
-    let category: String?
-    let createdAt: String
-}
-
-// MARK: - Courses
-//
-// Shared vetted content (ApiCourse/ApiCourseItem, no child) vs. one child's
-// progress through it (ApiCourseAssignment/ApiCourseItemProgress). Vetting
-// happens once; siblings get their own independent progress. See
-// evlin-backend/models.py's Course.
-
-/// Decoded leniently on purpose: these come from a jsonb column originally
-/// written by the model, and one malformed question would otherwise fail the
-/// whole course — taking the screen with it rather than just that question.
-struct ApiQuizQuestion: Codable, Hashable {
-    let question: String
-    let options: [String]
-    let correctIndex: Int
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        question = (try? c.decode(String.self, forKey: .question)) ?? ""
-        options = (try? c.decode([String].self, forKey: .options)) ?? []
-        correctIndex = (try? c.decode(Int.self, forKey: .correctIndex)) ?? 0
-    }
-
-    /// A question the kid can't actually answer isn't worth showing.
-    var isUsable: Bool { !question.isEmpty && options.count >= 2 }
-}
-
-struct ApiCourseItem: Codable {
-    let id: String
-    let orderIndex: Int
-    let videoId: String          // YouTube video id — the only source
-    let videoTitle: String?
-    let channelTitle: String?
-    let vettingNotes: String?    // why the agent picked it, shown to the parent
-    let quiz: [ApiQuizQuestion]
-}
-
-struct ApiCourse: Codable {
-    let id: String
-    let title: String
-    let topic: String?
-    let category: String?
-    let status: String           // "pending_review" | "published" | "archived"
-    let createdBy: String        // "parent" | "ai_agent"
-    let createdAt: String
-    let publishedAt: String?
-    let items: [ApiCourseItem]
-}
-
-struct ApiCourseItemProgress: Codable {
-    let id: String
-    let assignmentId: String
-    let courseItemId: String
-    let status: String           // "locked" | "available" | "completed"
-    let quizAnswers: [Int]?
-    let quizScore: Int?
-    let completedAt: String?
-}
-
-struct ApiCourseAssignment: Codable {
-    let id: String
-    let courseId: String
-    let childId: String
-    let status: String           // "active" | "completed"
-    let assignedBy: String
-    let createdAt: String
-    let completedAt: String?
-    let course: ApiCourse?
-    let progress: [ApiCourseItemProgress]
-
-    /// Progress rows in the course's own order — the order they unlock in.
-    var orderedProgress: [ApiCourseItemProgress] {
-        guard let items = course?.items else { return progress }
-        let position = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.orderIndex) })
-        return progress.sorted { (position[$0.courseItemId] ?? 0) < (position[$1.courseItemId] ?? 0) }
-    }
-
-    func item(for progress: ApiCourseItemProgress) -> ApiCourseItem? {
-        course?.items.first { $0.id == progress.courseItemId }
-    }
-}
-
-/// One YouTube search result, for the parent picking a single video.
-struct ApiVideoSearchResult: Codable, Identifiable {
-    let videoId: String
-    let title: String
-    let channelTitle: String?
-    let thumbnailUrl: String?
-    let duration: String?
-    let madeForKids: Bool?
-
-    var id: String { videoId }
-}
-
-// MARK: - Reflections
-
-struct ApiReflection: Codable {
-    let id: String
-    let childId: String
-    let courseAssignmentId: String
-    let writtenPrompt: String?
-    let writtenResponse: String?
-    // "pending" | "submitted" | "approved" | "needs_redo". Both "pending" and
-    // "submitted" hold the gate closed.
-    let status: String
-    let reviewNote: String?
-    let createdBy: String
-    let createdAt: String
-    let submittedAt: String?
-    let reviewedAt: String?
-    let assignment: ApiCourseAssignment?
-}
-
-// MARK: - Milestones
-
-struct ApiMilestone: Codable {
-    let id: String
-    let childId: String
-    let title: String
-    let description: String?
-    let kind: String             // "count" | "streak" | "course" | "custom"
-    let targetCount: Int?
-    let progressCount: Int
-    let courseAssignmentId: String?
-    let prizeText: String?
-    let prizeMinutes: Int
-    let status: String           // "active" | "achieved" | "expired"
-    let createdBy: String
-    let createdAt: String
-    let achievedAt: String?
-    /// Server-computed: whether what this asks for is actually done. Means
-    /// two different things by kind, so the client just reads the answer.
-    let achievable: Bool
-    let assignment: ApiCourseAssignment?
-}
-
-/// An AI-proposed milestone the parent edits before it's created. Not a
-/// milestone yet — nothing exists server-side until they confirm.
-struct ApiMilestoneDraft: Codable {
-    let title: String
-    let description: String?
-    let kind: String
-    let targetCount: Int?
-    let prizeText: String?
-    let prizeMinutes: Int?
-    let createdBy: String
-}
-
 // MARK: - App blocks
+
+/// The server's one answer to what this child's device should be doing now
+/// (evlin-backend/policy.py). "Today" and "now" are the child's own.
+struct ApiPolicy: Codable, Equatable {
+    struct AppRef: Codable, Equatable { let appId: String; let name: String }
+    struct BlockedNow: Codable, Equatable {
+        let blockId: String
+        let appId: String?
+        let appName: String
+        let kind: String
+        let description: String
+        let until: String?       // when it ends, if it has a known end
+    }
+    struct Scheduled: Codable, Equatable {
+        let blockId: String
+        let appId: String?
+        let appName: String
+        let days: String         // weekday codes the window starts on
+        let start: String        // "HH:MM", child-local
+        let end: String
+    }
+    let childId: String
+    let timezone: String
+    let localDate: String        // "YYYY-MM-DD" the answer was computed for
+    let locked: Bool
+    let lockReasons: [String]    // "unfinished_tasks" | "manual_lock"
+    let lockApps: [AppRef]
+    let blockedNow: [BlockedNow]
+    let scheduledBlocks: [Scheduled]
+    let dailyLimitEnabled: Bool
+    let allowanceMinutes: Int?   // nil when the limit is switched off
+    let etag: String
+}
 
 struct ApiAppBlock: Codable {
     let id: String
     let childId: String
+    /// Evlin's catalog app. nil only for a block written before the catalog
+    /// that didn't match any catalog name.
+    let appId: String?
     let appName: String
-    let appBundleId: String?
-    let blockType: String        // "duration" | "until_task"
+    let blockType: String        // "duration" | "until_task" | "indefinite" | "scheduled"
     let durationMinutes: Int?
+    let endsAt: String?
     let untilTaskId: String?
+    let scheduleDays: String?    // weekday codes the window starts on
+    let scheduleStart: String?   // "HH:MM", the child's local time
+    let scheduleEnd: String?
     let resolved: Bool
+    let resolvedReason: String?  // "task_approved" | "parent_lifted"
     let createdBy: String
     let createdAt: String
     let resolvedAt: String?
+    /// Computed server-side for "now" in the child's timezone:
+    /// "active" | "off_window" | "expired" | "lifted" | "done".
+    let state: String
+    /// "until 'Homework' is approved", "school nights 19:00–07:00".
+    let description: String
+}
+
+// MARK: - Today's videos
+
+/// One channel in a child's video settings. `id` is YouTube's channel id,
+/// which is what filtering matches; the title is for display.
+struct ApiVideoChannel: Codable, Hashable {
+    let id: String
+    let title: String
+}
+
+/// What a child's videos may be. A child with nothing saved gets the
+/// server's defaults (every category allowed).
+struct ApiVideoProfile: Codable {
+    let childId: String
+    var allowedCategories: [String]
+    var blockedKeywords: [String]
+    var allowedChannels: [ApiVideoChannel]
+    var blockedChannels: [ApiVideoChannel]
+    var dailyMinutes: Int
+    var maxVideoMinutes: Int
+    /// Every category there is, in display order — from the server so the
+    /// chips match what it filters by.
+    let allCategories: [String]
+}
+
+/// One video on a child's list for today. Only a parent's approval puts
+/// one here; the child's player plays nothing else.
+struct ApiVideoQueueItem: Codable, Identifiable, Hashable {
+    let id: String
+    let childId: String
+    let localDate: String
+    let position: Int
+    let videoId: String
+    let title: String
+    let channelId: String?
+    let channelTitle: String?
+    let thumbnailUrl: String?
+    let durationSeconds: Int
+    let category: String?
+    let watchedSeconds: Int
+    let completedAt: String?
+
+    var isDone: Bool { completedAt != nil }
+}
+
+/// Today's list plus how much of the daily allowance is left — computed by
+/// the server from what was watched, on every read.
+struct ApiVideoQueue: Codable {
+    let childId: String
+    let localDate: String
+    let dailyMinutes: Int
+    let watchedSeconds: Int
+    let remainingSeconds: Int
+    let items: [ApiVideoQueueItem]
+}
+
+/// One suggestion on the chat's video card, as the server found and
+/// filtered it. Arrives JSON-encoded in the message's `videos` tool arg,
+/// because every tool arg is a string on the wire.
+struct VideoSuggestion: Codable, Identifiable, Hashable {
+    let videoId: String
+    let title: String
+    let channelId: String
+    let channelTitle: String
+    let thumbnailUrl: String
+    let durationSeconds: Int
+    let category: String
+    let why: String
+
+    var id: String { videoId }
+
+    static func decodeList(_ raw: String?) -> [VideoSuggestion] {
+        guard let data = raw?.data(using: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return (try? decoder.decode([VideoSuggestion].self, from: data)) ?? []
+    }
 }

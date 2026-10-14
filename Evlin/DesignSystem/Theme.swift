@@ -11,6 +11,9 @@ enum Brand {
     static let green = Color(hex: "3FCE64")       // mascot green — primary brand color
     static let greenDeep = Color(hex: "25924A")   // button base / 3D lift / status text
     static let greenInk = Color(hex: "0D3318")
+    static let emerald = Color(hex: "3FCE64")     // primary button on the mode picker (mascot green)
+    static let emeraldInk = Color(hex: "182C20")  // text on mint (dark text)
+    static let mint = Color(hex: "D0F1C9")        // secondary button fill on the mode picker (soft mint)
 
     // Pops — warm accents, kid/teen home & earning screens ONLY. Never in parent mode.
     static let popRaspberry = Color(hex: "D91656") // "do this next"
@@ -20,6 +23,7 @@ enum Brand {
     // Neutrals
     static let surface = Color.white
     static let surfaceSoft = Color(hex: "FBFDFB")
+    static let cream = Color(hex: "F7F9F7")       // mode picker ground
     static let card = Color(hex: "F6F9F5")
     static let line = Color(hex: "E9EFE8")
     static let ink = Color(hex: "15231A")
@@ -55,7 +59,7 @@ enum KidTheme {
 }
 
 // A small rotating palette of bright, saturated hues for per-task color
-// variety in kid mode (icon chips, ring slices, comic tiles) — distinct from
+// variety in kid mode (icon chips, ring slices) — distinct from
 // the three reserved "pop" accents in `Brand` (raspberry/pink/yellow), which
 // the style guide keeps specifically for "do next" tags and reward moments,
 // not general decoration.
@@ -137,18 +141,4 @@ extension Color {
         let b = Double(rgb & 0x0000FF) / 255
         self.init(red: r, green: g, blue: b)
     }
-}
-
-// Gradient tokens for the Library's slide-lesson covers — distinct topical
-// colors, built from the same green family plus deep neutrals (matches the
-// web app's per-lesson gradients; these aren't part of the brand palette
-// itself, just themed cover art).
-enum EGradient {
-    static let anxiousGen = LinearGradient(colors: [Color(hex: "6D28D9"), Color(hex: "1E1B4B")], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let praise = LinearGradient(colors: [Brand.greenDeep, Brand.greenInk], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let tantrum = LinearGradient(colors: [Color(hex: "B45309"), Color(hex: "431407")], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let emotionalIntelligence = LinearGradient(colors: [Color(hex: "1A2B3C"), Color(hex: "041627")], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let digitalBoundaries = LinearGradient(colors: [Brand.greenDeep, Brand.greenInk], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let conflictResolution = LinearGradient(colors: [Color(hex: "6E3900"), Color(hex: "261000")], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let growthMindset = LinearGradient(colors: [Color(hex: "0B1D2D"), Color.black], startPoint: .topLeading, endPoint: .bottomTrailing)
 }

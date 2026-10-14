@@ -12,19 +12,21 @@ struct AddEventCard: View {
     @State private var start: Date
     @State private var end: Date
     @State private var recurrence: String
-    @State private var isFamily: Bool
     @State private var note: String
     @State private var submitted = false
 
-    init(draft: EventDraft, onCreate: @escaping (_ draft: EventDraft) -> Void) {
+    /// `done`: already added. Kept on the chat message, not only in this
+    /// view's state, because the chat list rebuilds rows as they scroll back
+    /// into view, and a rebuilt card would offer Add a second time.
+    init(draft: EventDraft, done: Bool = false, onCreate: @escaping (_ draft: EventDraft) -> Void) {
         self.draft = draft
         self.onCreate = onCreate
+        _submitted = State(initialValue: done)
         _title = State(initialValue: draft.title)
         _day = State(initialValue: draft.startDate)
         _start = State(initialValue: draft.startsAt)
         _end = State(initialValue: draft.endsAt)
         _recurrence = State(initialValue: draft.recurrence)
-        _isFamily = State(initialValue: draft.isFamily)
         _note = State(initialValue: draft.note)
     }
 
@@ -77,13 +79,6 @@ struct AddEventCard: View {
                 }
             }
 
-            Toggle(isOn: $isFamily) {
-                Label("Whole family", systemImage: "person.2")
-                    .font(Typography.font(14))
-                    .foregroundStyle(EColor.onSurface)
-            }
-            .frame(minHeight: 44)
-
             Button {
                 submitted = true
                 onCreate(currentDraft)
@@ -96,7 +91,7 @@ struct AddEventCard: View {
                     .background(canCreate ? Brand.greenDeep : EColor.outlineVariant)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressedSurfaceStyle())
             .disabled(!canCreate)
         }
         .padding(16)
@@ -105,6 +100,8 @@ struct AddEventCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(EColor.outlineVariant))
         .disabled(submitted)
+        // The app's "newly added" tap, once, at the parent's own press.
+        .sensoryFeedback(.impact(weight: .light), trigger: submitted) { old, new in new && !old }
     }
 
     @ViewBuilder
@@ -133,7 +130,6 @@ struct AddEventCard: View {
         // An end before the start would save an event the grid can't draw.
         if out.endMinutes <= out.startMinutes { out.endMinutes = out.startMinutes + 60 }
         out.recurrence = recurrence
-        out.isFamily = isFamily
         out.note = note
         return out
     }

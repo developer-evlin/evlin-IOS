@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.evlin.app.refresh</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
@@ -29,8 +33,6 @@
 	<string>1</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Evlin uses the microphone to record a voice note for a task or a request to a parent.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>PlusJakartaSans-Bold.ttf</string>
@@ -42,6 +44,10 @@
 		<string>Baloo2-Bold.ttf</string>
 		<string>Baloo2-SemiBold.ttf</string>
 		<string>Baloo2-Medium.ttf</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

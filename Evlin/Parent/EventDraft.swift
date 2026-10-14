@@ -10,21 +10,17 @@ struct EventDraft: Equatable {
     var startMinutes: Int = 9 * 60
     var endMinutes: Int = 10 * 60
     var recurrence: String = "none"
-    /// A whole-family entry rather than this child's own.
-    var isFamily: Bool = false
     var note: String = ""
 
     var isEmpty: Bool { title.trimmingCharacters(in: .whitespaces).isEmpty }
 
     init(title: String = "", startDate: Date = Date(), startMinutes: Int = 9 * 60,
-         endMinutes: Int = 10 * 60, recurrence: String = "none",
-         isFamily: Bool = false, note: String = "") {
+         endMinutes: Int = 10 * 60, recurrence: String = "none", note: String = "") {
         self.title = title
         self.startDate = startDate
         self.startMinutes = startMinutes
         self.endMinutes = endMinutes
         self.recurrence = recurrence
-        self.isFamily = isFamily
         self.note = note
     }
 
@@ -41,8 +37,6 @@ struct EventDraft: Equatable {
         let raw = (args["recurrence"] ?? "none").trimmingCharacters(in: .whitespaces).lowercased()
         recurrence = TaskDraft.isValidRecurrence(raw) ? raw : "none"
 
-        let family = (args["is_family"] ?? "").lowercased()
-        isFamily = family == "true" || family == "1"
         note = args["note"]?.trimmingCharacters(in: .whitespaces) ?? ""
     }
 

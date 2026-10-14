@@ -25,18 +25,6 @@ struct TaskDraft: Equatable {
 
     var isEmpty: Bool { title.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    init(title: String = "", instructions: String = "", dueDate: Date? = nil,
-         dueMinutes: Int? = nil, recurrence: String = "none",
-         gatesApps: Bool = true, bonusMinutes: Int = 0) {
-        self.title = title
-        self.instructions = instructions
-        self.dueDate = dueDate
-        self.dueMinutes = dueMinutes
-        self.recurrence = recurrence
-        self.gatesApps = gatesApps
-        self.bonusMinutes = bonusMinutes
-    }
-
     init(toolArgs: [String: String]?) {
         let args = toolArgs ?? [:]
         title = args["title"]?.trimmingCharacters(in: .whitespaces) ?? ""

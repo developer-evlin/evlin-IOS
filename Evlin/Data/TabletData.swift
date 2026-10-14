@@ -17,14 +17,12 @@ struct KidTask: Identifiable {
     // own row/detail styling, not the parent app's review queue.
     var bypassRequested: Bool = false
     var bypassNote: String? = nil
-    var bypassHasVoiceNote: Bool = false
     // What actually got submitted for a normal (non-bypass) completion —
     // lets a kid reopen an already-done task and see their own photos and
     // note again, instead of that evidence vanishing the moment
     // TaskDetailView's local capture state is thrown away on dismiss.
     var submittedPhotoCount: Int = 0
     var submissionNote: String? = nil
-    var submissionHasVoiceNote: Bool = false
     // Submitting sets done + pendingApproval together — `done` alone used
     // to mean "fully finished," but a parent still needs to look at it, the
     // same review beat the parent-side TaskStore tracks with
@@ -36,13 +34,14 @@ struct KidTask: Identifiable {
     var pendingApproval: Bool = false
     var approved: Bool = false
     // Mirrors the parent-side TaskReviewDeckView compose step's
-    // redoNote/redoHasVoiceNote — a parent asking for a redo instead of
+    // redoNote — a parent asking for a redo instead of
     // approving puts the task back in "to do" territory (not done, not
     // struck through) rather than leaving it looking finished, with a
     // small banner explaining why so the kid isn't just guessing.
     var redoRequested: Bool = false
     var redoNote: String? = nil
-    var redoHasVoiceNote: Bool = false
+    // A parent kept a task the kid asked to skip, and wrote why.
+    var skipDeclinedNote: String? = nil
 }
 
 extension KidTask {
@@ -59,14 +58,6 @@ extension KidTask {
         guard let dueToday = cal.date(bySettingHour: comps.hour ?? 0, minute: comps.minute ?? 0, second: 0, of: Date()) else { return false }
         return Date() > dueToday
     }
-}
-
-struct HowToGuide: Identifiable {
-    let id: String
-    var emoji: String
-    var title: String
-    var blurb: String
-    var count: Int
 }
 
 enum TabletData {
@@ -129,21 +120,4 @@ enum TabletData {
         return "star.fill"
     }
 
-    static let howToGuides: [HowToGuide] = [
-        HowToGuide(id: "boat", emoji: "⛵", title: "Origami Sailboat", blurb: "Fold a paper boat in 6 steps", count: 6),
-        HowToGuide(id: "crane", emoji: "🕊️", title: "Origami Paper Crane", blurb: "The classic lucky paper bird", count: 6),
-        HowToGuide(id: "airplane", emoji: "✈️", title: "Classic Paper Airplane", blurb: "A speedy dart that flies far", count: 6),
-    ]
-
-    // Asset names are Guide{OrigamiBoat|OrigamiCrane|PaperAirplane}Panel{1-6}.
-    static func guidePanelImage(_ guide: HowToGuide, step: Int) -> String {
-        let prefix: String
-        switch guide.id {
-        case "boat": prefix = "GuideOrigamiBoat"
-        case "crane": prefix = "GuideOrigamiCrane"
-        case "airplane": prefix = "GuidePaperAirplane"
-        default: prefix = "GuideOrigamiBoat"
-        }
-        return "\(prefix)Panel\(step + 1)"
-    }
 }

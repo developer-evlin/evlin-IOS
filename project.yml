@@ -35,7 +35,9 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLSchemes: [evlin]
         NSCameraUsageDescription: Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.
-        NSMicrophoneUsageDescription: Evlin uses the microphone to record a voice note for a task or a request to a parent.
+        # Background refresh: iOS wakes the app now and then to sync (BackgroundSync).
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.evlin.app.refresh]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UISupportedInterfaceOrientations~ipad:
@@ -56,3 +58,25 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         DEVELOPMENT_TEAM: D9FM36P37F
         CODE_SIGN_ENTITLEMENTS: Evlin/Evlin.entitlements
+  # Unit tests, run inside the app so they use its Keychain.
+  EvlinTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: EvlinTests
+    dependencies:
+      - target: Evlin
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.evlin.app.tests
+        DEVELOPMENT_TEAM: D9FM36P37F
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Evlin:
+    build:
+      targets:
+        Evlin: all
+        EvlinTests: [test]
+    test:
+      targets:
+        - EvlinTests

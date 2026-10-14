@@ -1,5 +1,8 @@
 import SwiftUI
-import PhotosUI
+
+// The parent's avatar colour in Settings. The parent has no calendar lane any
+// more, so this no longer comes from CalendarData.
+private let parentAvatarColor = Color(hex: "7C6FF7")
 
 // Structured to the "Settings — build spec" doc: account header (no card,
 // opens a sheet) → Plan (removed entirely on Pro) → Family (capped list,
@@ -19,9 +22,6 @@ struct ScreenSettings: View {
     // account sheet (parentProfilePage).
     private var profile: ParentProfile { ParentProfile.shared }
     private var parentName: String { profile.displayName }
-    @State private var parentAvatar: UIImage?
-    @State private var showChangeParentPicture = false
-    @State private var parentLibraryItem: PhotosPickerItem?
 
     // Family list — capped at 5 rows with a "Show all N" / "Show fewer"
     // toggle, and the child a tap should open the Child sheet for.
@@ -69,7 +69,8 @@ struct ScreenSettings: View {
             ScrollView {
                 settingsRootContent
             }
-            .background(Color.white)
+            // Home's page colour, so the tabs read as one app.
+            .background(EColor.surface)
             // Custom header (see settingsHeader) replaces the system nav
             // bar on this root screen — every destination below now opens
             // as its own sheet instead of pushing, so this stack never
@@ -77,7 +78,10 @@ struct ScreenSettings: View {
             .toolbar(.hidden, for: .navigationBar)
         }
         .sheet(item: $settingsChild) { child in
+            Group {
             ChildSettingsSheet(child: child, onRemoved: { familyRefreshTick += 1 })
+        }
+            .presentationDragIndicator(.visible)
         }
         // Straight into pairing the moment "Add a child" is tapped — see
         // addChildCard's action. The child this holds is only ever in
@@ -87,19 +91,32 @@ struct ScreenSettings: View {
         // flow either way; naming/colouring happens later from the child's
         // own row, whenever the parent gets to it.
         .sheet(item: $newlyAddedChild) { child in
+            Group {
             PairingSheet(child: child, isNewChild: true, onPaired: {
                 // The backend created the real child when it issued the
                 // code; the sync inside PairingSheet has already loaded it.
                 familyRefreshTick += 1
             })
         }
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showParentProfile) {
+            Group {
             // The name field edits live; persist it when the sheet closes.
             parentProfilePage.onDisappear { profile.saveIfChanged() }
         }
-        .sheet(isPresented: $showBilling) { NavigationStack { billingPage } }
-        .sheet(isPresented: $showPrivacyTerms) { NavigationStack { privacyTermsPage } }
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showBilling) {
+            Group { NavigationStack { billingPage } }
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showPrivacyTerms) {
+            Group { NavigationStack { privacyTermsPage } }
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showCancelPlanConfirm) {
+            Group {
             DestructiveConfirmSheet(
                 title: "Cancel Evlin Plus?",
                 consequences: [
@@ -114,6 +131,8 @@ struct ScreenSettings: View {
                 onCancel: { showCancelPlanConfirm = false }
             )
         }
+            .presentationDragIndicator(.visible)
+        }
         .preferredColorScheme(.light)
     }
 
@@ -126,13 +145,13 @@ struct ScreenSettings: View {
     // Instagram-style, not Form's own insetGrouped card styling.
 
     // Custom title row (system nav bar is hidden on this screen — see
-    // body) rather than .navigationTitle, so the title can sit at an exact
-    // 28pt/bold the system large-title mechanism doesn't give direct
-    // control over. No trailing button — it had nothing to open.
+    // body) rather than .navigationTitle, so the title can match Home's
+    // "Hi, …" exactly: the app's font, 32pt heavy. No trailing button — it
+    // had nothing to open.
     private var settingsHeader: some View {
         Text("Settings")
-            .font(.system(size: 28, weight: .bold))
-            .foregroundStyle(Color.black)
+            .font(Typography.font(32, weight: .heavy))
+            .foregroundStyle(EColor.onSurface)
             .padding(.bottom, 6)
     }
 
@@ -208,7 +227,8 @@ struct ScreenSettings: View {
                 Card(padded: false) {
                     VStack(spacing: 0) {
                         settingsCompactRow(icon: "bell", title: "Push notifications", showChevron: false) {
-                            Toggle("", isOn: $pushOn).labelsHidden().tint(EColor.secondary)
+                            EToggle(on: $pushOn, color: StatusCardStyle.green)
+                                .accessibilityLabel("Push notifications")
                         }
 
                         // "Billing and receipts" used to sit here — removed
@@ -259,7 +279,7 @@ struct ScreenSettings: View {
     // separates identity from the plan row — same facet-card pattern as
     // Alerts/Support, not two cards for one subject.
     private var settingsAccountCard: some View {
-        let personColor = CalendarData.person("family").color
+        let personColor = parentAvatarColor
         return Card(padded: false) {
             VStack(spacing: 0) {
                 Button { showParentProfile = true } label: {
@@ -344,13 +364,8 @@ struct ScreenSettings: View {
         Button { settingsChild = child } label: {
             Card(padded: false) {
                 HStack(spacing: 12) {
-                    if let avatar = child.avatar {
-                        Image(uiImage: avatar).resizable().scaledToFill()
-                            .frame(width: 40, height: 40).clipShape(Circle())
-                    } else {
-                        Circle().fill(child.color).frame(width: 40, height: 40)
-                            .overlay(Text(String(child.name.prefix(1))).font(Typography.font(15, weight: .bold)).foregroundStyle(.white))
-                    }
+                    Circle().fill(child.color).frame(width: 40, height: 40)
+                        .overlay(Text(String(child.name.prefix(1))).font(Typography.font(15, weight: .bold)).foregroundStyle(.white))
                     Text(child.name).font(Typography.font(16, weight: .semibold)).foregroundStyle(Color.black)
                     Spacer(minLength: 10)
                     Text(child.devices.isEmpty ? "not paired" : "\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
@@ -476,12 +491,13 @@ struct ScreenSettings: View {
         @ViewBuilder trailing: () -> Trailing = { EmptyView() }
     ) -> some View {
         HStack(spacing: 12) {
-            // Regular weight, plain black — clean line-art rather than a
-            // colored badge behind a heavier glyph.
+            // A plain glyph in one neutral colour: the rows are a short
+            // list, and per-row colours on tinted circles added noise
+            // without helping anyone find a row.
             Image(systemName: icon)
-                .font(.system(size: 17, weight: .regular))
-                .foregroundStyle(Color.black)
-                .frame(width: 22)
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(EColor.onSurfaceVariant)
+                .frame(width: 30, height: 30)
             Text(title).font(Typography.font(15.5, weight: .regular)).foregroundStyle(Color.black)
             Spacer(minLength: 10)
             if let value {
@@ -510,7 +526,6 @@ struct ScreenSettings: View {
         "Unlimited custom rules & app-time limits",
         "AI-powered de-escalation strategies in chat",
         "Weekly behavior insights & trend reports",
-        "Reflection review & approval tools",
         "Priority support",
     ]
 
@@ -709,9 +724,6 @@ struct ScreenSettings: View {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(spacing: 10) {
                         parentAvatarView
-                        Button("Change picture") { showChangeParentPicture = true }
-                            .font(Typography.font(14, weight: .semibold))
-                            .foregroundStyle(FormGreen.accent)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 4)
@@ -754,16 +766,6 @@ struct ScreenSettings: View {
             .padding(.bottom, 4)
         }
         .background(Color.white)
-        .photosPicker(isPresented: $showChangeParentPicture, selection: $parentLibraryItem, matching: .images)
-        .onChange(of: parentLibraryItem) { _, item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self),
-                   let img = UIImage(data: data) {
-                    await MainActor.run { parentAvatar = downsampledAvatar(img) }
-                }
-            }
-        }
         // Declared here, not on the Settings root — a second .sheet on the
         // presenting view doesn't stack on top of this already-presented
         // one, it replaces it, which read as "the Sign Out button and its
@@ -771,6 +773,7 @@ struct ScreenSettings: View {
         // sheet's own view instead is what makes it appear on top of
         // Profile, the same way ChildSettingsSheet's own confirm sheets do.
         .sheet(isPresented: $showSignOutConfirm) {
+            Group {
             DestructiveConfirmSheet(
                 title: "Sign out of this parent phone?",
                 consequences: [
@@ -788,7 +791,10 @@ struct ScreenSettings: View {
                 onCancel: { showSignOutConfirm = false }
             )
         }
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showDeleteAccountConfirm) {
+            Group {
             DestructiveConfirmSheet(
                 title: "Delete your account?",
                 consequences: [
@@ -818,24 +824,20 @@ struct ScreenSettings: View {
                 onCancel: { showDeleteAccountConfirm = false }
             )
         }
+            .presentationDragIndicator(.visible)
+        }
     }
 
     // Plain filled circle in the account's own colour (the same one the
-    // Settings list's avatar uses, via CalendarData.person("family")) with
+    // Settings list's avatar uses, parentAvatarColor) with
     // a single initial — no gradient ring, no separate "accent colour,"
     // matching how every other avatar in Settings (the Family list, the
     // Child sheet) is drawn.
+    // Evlin doesn't collect profile photos; everyone is an initial.
     private var parentAvatarView: some View {
-        Group {
-            if let parentAvatar {
-                Image(uiImage: parentAvatar).resizable().scaledToFill()
-            } else {
-                Circle().fill(CalendarData.person("family").color)
-                    .overlay(Text(String(parentName.prefix(1))).font(Typography.font(38, weight: .bold)).foregroundStyle(.white))
-            }
-        }
-        .frame(width: 104, height: 104)
-        .clipShape(Circle())
+        Circle().fill(parentAvatarColor)
+            .overlay(Text(String(parentName.prefix(1))).font(Typography.font(38, weight: .bold)).foregroundStyle(.white))
+            .frame(width: 104, height: 104)
     }
 
     // MARK: - Privacy & Terms
@@ -1033,23 +1035,14 @@ private struct ChildSettingsSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var libraryItem: PhotosPickerItem?
-    @State private var showChangePicture = false
     @State private var showUnpairConfirm = false
     @State private var showRemoveConfirm = false
     @State private var showPairing = false
     @State private var nameOnOpen = ""
-    // Screen time — moved here from the child's task-list profile (used to
-    // be a generic "Active Rules" accordion, downtime shown as just another
-    // row inside it). This is that child's actual settings/profile page,
-    // so screen-time control belongs here, presented as what it is (a
-    // limit and a schedule) rather than a generic rule list.
-    @State private var editingRule: ChildRule?
-    @State private var editingScreenTimeLimit = false
-    // Turning off the daily limit removes a core protection entirely (not
-    // just pausing a parent-authored rule), so it gets a confirm step the
-    // other toggle below doesn't.
-    @State private var showScreenTimeOffConfirm = false
+    // Screen time (the limit, downtime, custom rules) isn't here: it lives
+    // on ChildScreenTimeSheet, opened from the child's card on Home, next to
+    // the time left. This page is the child's identity and device: name,
+    // picture, Unpair, and Remove.
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1081,9 +1074,6 @@ private struct ChildSettingsSheet: View {
                 Text(child.name)
                     .font(Typography.font(28, weight: .heavy))
                     .foregroundStyle(FormGreen.title)
-                Button("Change picture") { showChangePicture = true }
-                    .font(Typography.font(14, weight: .semibold))
-                    .foregroundStyle(FormGreen.accent)
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 32)
@@ -1098,16 +1088,6 @@ private struct ChildSettingsSheet: View {
                     FormField(label: "Device") {
                         deviceRow
                     }
-
-                    FormField(label: "Screen Time") {
-                        screenTimeSection
-                    }
-
-                    if !customRules.isEmpty {
-                        FormField(label: "Custom Rules") {
-                            customRulesSection
-                        }
-                    }
                 }
                 .padding(.horizontal, 20)
             }
@@ -1115,61 +1095,8 @@ private struct ChildSettingsSheet: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .background(Color.white)
-        .overlay {
-            if showScreenTimeOffConfirm {
-                ScreenTimeOffConfirmCard(
-                    childName: child.name,
-                    onTurnOff: {
-                        if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
-                            child.rules[i].on = false
-                            child.pushRules()
-                        }
-                        withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = false }
-                    },
-                    onCancel: { withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = false } }
-                )
-            }
-        }
-        .sheet(item: $editingRule) { rule in
-            EditRuleSheet(rule: rule, onSave: { updated in
-                if let i = child.rules.firstIndex(where: { $0.id == updated.id }) { child.rules[i] = updated }
-                child.pushRules()
-                editingRule = nil
-            }, onCancel: { editingRule = nil }, onDelete: {
-                child.rules.removeAll { $0.id == rule.id }
-                editingRule = nil
-                if rule.kind == .downtime { exitDowntimeIfActive() }
-                child.pushRules()
-            })
-            .interactiveDismissDisabled()
-        }
-        .sheet(isPresented: $editingScreenTimeLimit) {
-            EditDailyScreenTimeLimitSheet(
-                childName: child.name,
-                current: child.dailyLimitMin,
-                onSave: { limit in
-                    child.dailyLimitMin = limit
-                    if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
-                        child.rules[i].detail = "\(formatMinutes(limit)) per day"
-                    }
-                    child.pushRules()
-                    editingScreenTimeLimit = false
-                },
-                onCancel: { editingScreenTimeLimit = false }
-            )
-            .interactiveDismissDisabled()
-        }
-        .photosPicker(isPresented: $showChangePicture, selection: $libraryItem, matching: .images)
-        .onChange(of: libraryItem) { _, item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self),
-                   let img = UIImage(data: data) {
-                    await MainActor.run { child.avatar = downsampledAvatar(img) }
-                }
-            }
-        }
         .sheet(isPresented: $showUnpairConfirm) {
+            Group {
             DestructiveConfirmSheet(
                 title: "Unpair \(child.name)'s device?",
                 consequences: [
@@ -1182,10 +1109,13 @@ private struct ChildSettingsSheet: View {
                     if let id = child.devices.first?.id {
                         FamilyStore.removeDevice(id, from: child.id)
                     }
+                    Outbox.send(APIClient.Write.unpairDevice(childId: child.id), label: "Unpairing the device")
                     showUnpairConfirm = false
                 },
                 onCancel: { showUnpairConfirm = false }
             )
+        }
+            .presentationDragIndicator(.visible)
         }
         .onAppear { nameOnOpen = child.name }
         .onDisappear {
@@ -1195,10 +1125,10 @@ private struct ChildSettingsSheet: View {
             let newName = child.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard newName != nameOnOpen, !newName.isEmpty,
                   FamilyStore.children.contains(where: { $0.id == child.id }) else { return }
-            let id = child.id
-            BackendWrite.run("The new name") { try await APIClient.shared.updateChild(childId: id, name: newName) }
+            Outbox.send(APIClient.Write.updateChild(childId: child.id, name: newName), childId: child.id, label: "The new name")
         }
         .sheet(isPresented: $showRemoveConfirm) {
+            Group {
             DestructiveConfirmSheet(
                 title: "Remove \(child.name)'s profile?",
                 consequences: [
@@ -1210,9 +1140,9 @@ private struct ChildSettingsSheet: View {
                 onConfirm: {
                     let removedId = child.id
                     FamilyStore.removeChild(removedId)
-                    // If the backend delete fails the next sync brings the
+                    // If the backend refuses, the sync after it brings the
                     // child back, which is the honest outcome.
-                    BackendWrite.run("Removing the profile") { try await APIClient.shared.deleteChild(childId: removedId) }
+                    Outbox.send(APIClient.Write.deleteChild(childId: removedId), label: "Removing the profile")
                     showRemoveConfirm = false
                     dismiss()
                     onRemoved()
@@ -1220,22 +1150,20 @@ private struct ChildSettingsSheet: View {
                 onCancel: { showRemoveConfirm = false }
             )
         }
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showPairing) {
+            Group {
             PairingSheet(child: child)
+        }
+            .presentationDragIndicator(.visible)
         }
     }
 
     private var childAvatar: some View {
-        Group {
-            if let avatar = child.avatar {
-                Image(uiImage: avatar).resizable().scaledToFill()
-            } else {
-                Circle().fill(child.color)
-                    .overlay(Text(String(child.name.prefix(1))).font(Typography.font(38, weight: .bold)).foregroundStyle(.white))
-            }
-        }
-        .frame(width: 104, height: 104)
-        .clipShape(Circle())
+        Circle().fill(child.color)
+            .overlay(Text(String(child.name.prefix(1))).font(Typography.font(38, weight: .bold)).foregroundStyle(.white))
+            .frame(width: 104, height: 104)
     }
 
     // Switches on device state — paired shows the device and a red
@@ -1301,6 +1229,109 @@ private struct ChildSettingsSheet: View {
             .frame(width: 34, height: 34)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(FormGreen.accentBg))
     }
+}
+
+// MARK: - Child screen time
+
+// The child's screen time controls: the daily limit, downtime, and custom
+// rules. Opened from the child's card on Home, where the time left is
+// shown, rather than buried in Settings. The rows, toggles and edit sheets
+// are the ones that used to sit on the child's Settings page, unchanged.
+struct ChildScreenTimeSheet: View {
+    @ObservedObject var child: Child
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var editingRule: ChildRule?
+    @State private var editingScreenTimeLimit = false
+
+    var body: some View {
+        // The blocked apps list reads the sync cache; this redraws it on each sync.
+        let _ = SyncState.shared.version
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button("Done") { dismiss() }
+                    .buttonStyle(.plain)
+                    .font(Typography.font(17, weight: .semibold))
+                    .foregroundStyle(FormGreen.accent)
+                    .frame(minHeight: 48, alignment: .leading)
+                    .contentShape(Rectangle())
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+
+            Text("\(child.name)'s screen time")
+                .font(Typography.font(26, weight: .heavy))
+                .foregroundStyle(FormGreen.title)
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    FormField(label: "Screen Time") {
+                        screenTimeSection
+                    }
+
+                    FormField(label: "Downtime") {
+                        downtimeSection
+                    }
+
+                    if !customRules.isEmpty {
+                        FormField(label: "Custom Rules") {
+                            customRulesSection
+                        }
+                    }
+
+                    if !blocksInForce.isEmpty {
+                        FormField(label: "Blocked apps") {
+                            blockedAppsSection
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+        .background(Color.white)
+        .sheet(item: $editingRule) { rule in
+            Group {
+            EditRuleSheet(rule: rule, onSave: { updated in
+                if let i = child.rules.firstIndex(where: { $0.id == updated.id }) {
+                    child.rules[i] = updated
+                } else {
+                    child.rules.append(updated)   // a downtime set up just now
+                }
+                child.pushRules()
+                editingRule = nil
+            }, onCancel: { editingRule = nil }, onDelete: {
+                child.rules.removeAll { $0.id == rule.id }
+                editingRule = nil
+                if rule.kind == .downtime { exitDowntimeIfActive() }
+                child.pushRules()
+            })
+        }
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $editingScreenTimeLimit) {
+            Group {
+            EditDailyScreenTimeLimitSheet(
+                childName: child.name,
+                current: child.dailyLimitMin,
+                onSave: { limit in
+                    child.dailyLimitMin = limit
+                    if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
+                        child.rules[i].detail = "\(formatMinutes(limit)) per day"
+                    }
+                    child.pushRules()
+                    editingScreenTimeLimit = false
+                },
+                onCancel: { editingScreenTimeLimit = false }
+            )
+        }
+            .presentationDragIndicator(.visible)
+        }
+    }
 
     // MARK: - Screen time
 
@@ -1314,9 +1345,43 @@ private struct ChildSettingsSheet: View {
     private var screenTimeSection: some View {
         VStack(spacing: 0) {
             if let rule = dailyLimitRule { screenTimeRow(rule, isBuiltIn: true) }
+        }
+        .background(FormGreen.fieldBg)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // Downtime has its own section, always there: the schedule with its
+    // switch once it's set, and a row to set it up before then.
+    private var downtimeSection: some View {
+        VStack(spacing: 0) {
             if let rule = downtimeRule {
-                Divider().padding(.leading, 16)
                 screenTimeRow(rule, isBuiltIn: false)
+            } else {
+                Button {
+                    var rule = ChildRule(id: "downtime", kind: .downtime, icon: "dark_mode",
+                                         title: "Downtime", detail: "", on: true)
+                    rule.detail = "\(ChildRule.fmtClock(rule.downtimeFrom)) – \(ChildRule.fmtClock(rule.downtimeTo))"
+                    editingRule = rule
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "moon.fill")
+                            .frame(width: 36, height: 36)
+                            .background(EColor.primaryContainer)
+                            .clipShape(RoundedRectangle(cornerRadius: 11))
+                            .foregroundStyle(EColor.primary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Set downtime").font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
+                            Text("A daily break from the screen").font(Typography.font(12, weight: .semibold)).foregroundStyle(EColor.onSurfaceVariant)
+                        }
+                        Spacer(minLength: 12)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                    .padding(16)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
         .background(FormGreen.fieldBg)
@@ -1356,23 +1421,20 @@ private struct ChildSettingsSheet: View {
             }
             .buttonStyle(.plain)
             Spacer(minLength: 12)
-            EToggle(on: Binding(
-                get: { rule.on },
-                set: { newValue in
-                    guard let i = child.rules.firstIndex(where: { $0.id == rule.id }) else { return }
-                    // Screen Time Limit is the one built-in protection here —
-                    // switching it off removes the daily cap entirely, not
-                    // just pausing a rule, so it needs a beat to confirm
-                    // rather than flipping instantly like the others.
-                    if rule.kind == .screenTimeLimit && !newValue {
-                        withAnimation(.easeOut(duration: 0.2)) { showScreenTimeOffConfirm = true }
-                        return
+            // The daily limit is always on: only its amount can change. More
+            // time on a given day is an extra-time grant, not switching the
+            // limit off.
+            if rule.kind != .screenTimeLimit {
+                EToggle(on: Binding(
+                    get: { rule.on },
+                    set: { newValue in
+                        guard let i = child.rules.firstIndex(where: { $0.id == rule.id }) else { return }
+                        child.rules[i].on = newValue
+                        if rule.kind == .downtime && !newValue { exitDowntimeIfActive() }
+                        child.pushRules()
                     }
-                    child.rules[i].on = newValue
-                    if rule.kind == .downtime && !newValue { exitDowntimeIfActive() }
-                    child.pushRules()
-                }
-            ))
+                ))
+            }
             Button(action: tap) {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 15))
@@ -1396,91 +1458,56 @@ private struct ChildSettingsSheet: View {
         child.timeLeft = formatMinutes(child.dailyLimitMin)
         child.timePct = 100
         child.downtimeUntil = nil
-        let id = child.id
-        BackendWrite.run("Unlocking the phone") {
-            _ = try await APIClient.shared.updateChildState(childId: id, manualLock: false, taskGateOverride: true)
-        }
+        child.saveState(label: "Unlocking the phone")
     }
 }
 
-// MARK: - Screen Time edit sheets (moved here from ScreenProfile.swift —
-// this child's settings/profile sheet is now where screen time is actually
-// controlled, not the task-list profile)
+// Blocked apps: moved here from Home, so the status card's "View blocked
+// apps & screen time limit" row leads to both.
+extension ChildScreenTimeSheet {
+    /// Blocks still in force for this child — blocking now, or scheduled
+    /// and waiting for their hours — each with Lift. From the sync cache.
+    var blocksInForce: [CachedAppBlock] {
+        LocalStore.shared.cachedAppBlocks(childId: child.id).filter { block in
+            guard !block.resolved else { return false }
+            if block.blockType == "duration", let endsAt = block.endsAt { return Date() < endsAt }
+            return block.state == nil || block.state == "active" || block.state == "off_window"
+        }
+        .sorted { $0.appName < $1.appName }
+    }
 
-// Screen Time Limit is the one built-in protection here — flipping it off
-// removes the daily cap entirely (unlimited access until turned back on),
-// unlike pausing a custom rule, so it gets its own confirm step instead of
-// toggling instantly.
-private struct ScreenTimeOffConfirmCard: View {
-    var childName: String
-    var onTurnOff: () -> Void
-    var onCancel: () -> Void
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.32)
-                .ignoresSafeArea()
-                .onTapGesture { onCancel() }
-                .transition(.opacity)
-
-            VStack(spacing: 0) {
-                Spacer()
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "hourglass")
-                            .font(.system(size: 17))
-                            .foregroundStyle(EColor.danger)
-                        Text("Turn off Screen Time Limit?")
-                            .font(Typography.font(18, weight: .heavy))
-                            .foregroundStyle(EColor.onSurface)
+    var blockedAppsSection: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(blocksInForce.enumerated()), id: \.element.id) { index, block in
+                if index > 0 { Divider().padding(.leading, 16) }
+                HStack(spacing: 12) {
+                    AppIconView(appName: block.appName, size: 34)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(block.appName).font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
+                        Text(block.state == "off_window"
+                             ? "\(block.summary ?? "") · not right now"
+                             : (block.summary ?? ""))
+                            .font(Typography.font(12, weight: .semibold))
+                            .foregroundStyle(EColor.onSurfaceVariant)
                     }
-
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(EColor.danger)
-                        Text("\(childName) will have unlimited screen time for the rest of today — the daily allowance won't apply at all. The Screen Time Limit rule turns back on by itself tomorrow.")
-                            .font(Typography.font(14, weight: .regular))
-                            .foregroundStyle(EColor.onSurface)
-                            .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Lift") {
+                        LocalStore.shared.mirrorBlockLifted(id: block.id)
+                        Outbox.send(APIClient.Write.liftAppBlock(blockId: block.id), childId: child.id, label: "Lifting that block")
                     }
-                    .padding(14)
-                    .background(EColor.danger.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                    VStack(spacing: 10) {
-                        cardButton("Turn off anyway", tint: EColor.danger, action: onTurnOff)
-                        cardButton("Keep it on", tint: EColor.onSurfaceVariant, action: onCancel)
-                    }
-                    .padding(.top, 4)
+                    .font(Typography.font(13, weight: .bold))
+                    .foregroundStyle(Brand.greenDeep)
+                    .buttonStyle(.plain)
                 }
-                .padding(20)
-                .background(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .shadow(color: .black.opacity(0.18), radius: 28, y: 10)
-                // Wider than the card's own 24pt corner radius — at 20pt
-                // the margin was tighter than the curve itself, so each
-                // rounded corner read as cramped against the screen's
-                // square edge instead of floating clear of it.
-                .padding(.horizontal, 28)
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                Spacer()
+                .padding(16)
             }
         }
-    }
-
-    private func cardButton(_ label: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(Typography.font(15, weight: .bold))
-                .foregroundStyle(tint)
-                .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .background(.white)
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(EColor.outlineVariant, lineWidth: 1.5))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
+        .background(FormGreen.fieldBg)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
+
+// MARK: - Screen Time edit sheets (used by ChildScreenTimeSheet above)
 
 // Mirrors RULE_TYPES in index.html:2157 — each kind has one fixed icon and
 // builds its own detail string from typed fields.
@@ -1496,7 +1523,7 @@ private enum RuleTypeMeta {
         switch kind {
         case .downtime: return "A daily break from the screen — only phone calls and apps you allow will work."
         case .custom: return ""
-        case .screenTimeLimit: return "The daily screen time allowance — a core protection you can pause but not edit or remove here."
+        case .screenTimeLimit: return "The daily screen time allowance. It's always on; change the amount, or give extra time on a given day."
         }
     }
 }

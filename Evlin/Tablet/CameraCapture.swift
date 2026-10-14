@@ -42,15 +42,18 @@ struct CameraCapture: UIViewControllerRepresentable {
 enum PhotoCompression {
     /// Downsamples to a reasonable max dimension and re-encodes as JPEG — a
     /// full-resolution photo (10+MB on a modern phone) is wasted upload time
-    /// and R2 storage for evidence a parent just glances at. Mirrors
-    /// downsampledAvatar's approach (see FamilyData.swift) at a size that
-    /// still reads clearly as a photo of homework/a chore.
+    /// and R2 storage for evidence a parent just glances at. 1600px still
+    /// reads clearly as a photo of homework/a chore.
     static func compress(_ image: UIImage, maxDimension: CGFloat = 1600, quality: CGFloat = 0.6) -> Data? {
         let size = image.size
         let longer = max(size.width, size.height)
         let scale = longer > maxDimension ? maxDimension / longer : 1
         let target = CGSize(width: size.width * scale, height: size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: target)
+        // Scale 1: `target` is in pixels. The renderer's default is the
+        // screen's scale, which made a "1600px" photo 4800px on a 3x phone.
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: target, format: format)
         let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
         return resized.jpegData(compressionQuality: quality)
     }

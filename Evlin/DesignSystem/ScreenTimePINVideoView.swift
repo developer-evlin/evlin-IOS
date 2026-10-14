@@ -28,6 +28,13 @@ private struct LoopingVideoView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PlayerContainerView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: PlayerContainerView, coordinator: Coordinator) {
+        uiView.playerLayer.player?.pause()
+        uiView.playerLayer.player = nil
+        coordinator.looper = nil
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {

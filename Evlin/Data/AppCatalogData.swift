@@ -1,33 +1,37 @@
 import SwiftUI
 import UIKit
 
-// Small stand-in catalog since there's no real installed-app inventory to
-// query — bundle IDs are shown because that's specifically what was asked
-// for, matching how Evlin-iOS's own disambiguation cards (AppControlCard's
-// app_store_disambiguation) label each candidate. Shared (not private to
-// one screen) because both ScreenChat's one-off "Block an app" card and
-// ScreenProfile's standing "Blocked Apps" rule pick from the same catalog —
-// the same app list should look identical wherever a parent picks from it.
-struct MockApp: Identifiable {
-    let id = UUID()
-    var name: String
-    var bundleID: String
+/// Evlin's app catalog, from the backend (GET /apps) — the same rows the AI
+/// resolves names against and blocks point at, so the picker can never offer
+/// an app the rest of the system doesn't know. Shared because every place a
+/// parent picks an app should show the identical list.
+@MainActor @Observable
+final class AppCatalog {
+    static let shared = AppCatalog()
+    private(set) var apps: [ApiApp] = []
+    private var loading: Task<Void, Never>?
+
+    /// Loads once per launch; concurrent callers share the one request. A
+    /// failure leaves the list empty so the next caller tries again.
+    func load() async {
+        if !apps.isEmpty { return }
+        if let loading { return await loading.value }
+        let task = Task {
+            if let fetched = try? await APIClient.shared.fetchAppCatalog() { apps = fetched }
+        }
+        loading = task
+        await task.value
+        loading = nil
+    }
+
+    func app(id: String) -> ApiApp? { apps.first { $0.id == id } }
 }
 
-let mockAppCatalog: [MockApp] = [
-    MockApp(name: "TikTok", bundleID: "com.zhiliaoapp.musically"),
-    MockApp(name: "Instagram", bundleID: "com.burbn.instagram"),
-    MockApp(name: "YouTube", bundleID: "com.google.ios.youtube"),
-    MockApp(name: "Roblox", bundleID: "com.roblox.robloxmobile"),
-    MockApp(name: "Snapchat", bundleID: "com.toyopagroup.picaboo"),
-    MockApp(name: "Discord", bundleID: "com.hammerandchisel.discord"),
-    MockApp(name: "Messages", bundleID: "com.apple.MobileSMS"),
-    MockApp(name: "Safari", bundleID: "com.apple.mobilesafari"),
-]
-
-// The App Store's own lookup endpoint — public, unauthenticated, just the
-// bundle ID as a query param — used to pull each app's real icon artwork
-// for the block-an-app picker. This is the one bit of networking anywhere
+// The App Store's public search endpoint, queried by the catalog app's name,
+// used to pull each app's real icon artwork for the block-an-app picker. A
+// name search can return other apps, so only a result whose own name is
+// that app (or starts with it: "Spotify - Music and Podcasts") is accepted;
+// built-ins that aren't on the store (Messages, Safari) simply get no icon. This is the one bit of networking anywhere
 // in this otherwise fully offline/mock-data prototype, so there's no
 // generic-icon fallback to fall back to — a failed lookup (offline, rate
 // limited, unrecognized bundle ID) leaves that row's icon area empty
@@ -46,6 +50,7 @@ enum ITunesLookup {
     private struct Response: Decodable {
         var results: [Result]
         struct Result: Decodable {
+            var trackName: String?
             var artworkUrl512: String?
             var artworkUrl100: String?
         }
@@ -65,47 +70,65 @@ enum ITunesLookup {
     // with an already-known icon before its first render, so re-showing a
     // row (search cleared, tab switched back) shows the real icon
     // immediately instead of flashing the fallback tile again.
-    static func cachedIconURL(bundleID: String) -> URL? { cache[bundleID] }
+    static func cachedIconURL(appName: String) -> URL? { cache[appName] }
 
-    static func iconURL(bundleID: String) async -> URL? {
-        if let cached = cache[bundleID] { return cached }
-        if let pending = inFlight[bundleID] { return await pending.value }
+    static func iconURL(appName: String) async -> URL? {
+        if let cached = cache[appName] { return cached }
+        if let pending = inFlight[appName] { return await pending.value }
 
         let task = Task<URL?, Never> {
-            var comps = URLComponents(string: "https://itunes.apple.com/lookup")
-            comps?.queryItems = [URLQueryItem(name: "bundleId", value: bundleID)]
+            var comps = URLComponents(string: "https://itunes.apple.com/search")
+            comps?.queryItems = [
+                URLQueryItem(name: "term", value: appName),
+                URLQueryItem(name: "entity", value: "software"),
+                URLQueryItem(name: "limit", value: "10"),
+            ]
             guard let url = comps?.url else { return nil }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 let decoded = try JSONDecoder().decode(Response.self, from: data)
-                guard let artwork = decoded.results.first?.artworkUrl512 ?? decoded.results.first?.artworkUrl100,
+                let wanted = normalized(appName)
+                let match = decoded.results.first { result in
+                    guard let name = result.trackName.map(normalized) else { return false }
+                    return name == wanted || name.hasPrefix(wanted + " ")
+                }
+                guard let artwork = match?.artworkUrl512 ?? match?.artworkUrl100,
                       let resolvedURL = URL(string: artwork) else { return nil }
                 return resolvedURL
             } catch {
-                // Offline, rate-limited, or an unrecognized bundle ID —
-                // any of these just means "no icon" to the caller.
+                // Offline or rate-limited — just "no icon" to the caller.
                 return nil
             }
         }
-        inFlight[bundleID] = task
+        inFlight[appName] = task
         let result = await task.value
-        inFlight[bundleID] = nil
-        if let result { cache[bundleID] = result }
+        inFlight[appName] = nil
+        if let result { cache[appName] = result }
         return result
     }
 
+    /// Case, accents and punctuation don't make a different app: "Pokémon
+    /// GO" is "pokemon go", "Disney+" is "disney plus".
+    private static func normalized(_ s: String) -> String {
+        s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .replacingOccurrences(of: "+", with: " plus ")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
     // Warms every bundle ID's icon up front — the catalog is small enough
-    // (8 apps) that this is cheap, and it means the picker's default list
+    // (a few dozen apps) that this is cheap, and it means the picker's default list
     // and every possible search result are already resolved before a
     // parent so much as taps into the search field, instead of each new
     // row racing its own request into view. Warms the actual image bytes
     // too (IconImageCache), not just the URL — resolving the URL alone
     // still left the first render of every row to pay for its own image
     // download.
-    static func prefetchAll(bundleIDs: [String]) {
-        for id in bundleIDs where cache[id] == nil && inFlight[id] == nil {
+    static func prefetchAll(appNames: [String]) {
+        for name in appNames where cache[name] == nil && inFlight[name] == nil {
             Task {
-                guard let url = await iconURL(bundleID: id) else { return }
+                guard let url = await iconURL(appName: name) else { return }
                 _ = await IconImageCache.image(for: url)
             }
         }
@@ -126,13 +149,15 @@ enum ITunesLookup {
 // matter how many times a row for it gets created.
 @MainActor
 enum IconImageCache {
-    private static var cache: [URL: UIImage] = [:]
+    // NSCache evicts entries automatically under memory pressure,
+    // preventing the unbounded growth of the old [URL: UIImage] dict.
+    private static let cache = NSCache<NSURL, UIImage>()
     private static var inFlight: [URL: Task<UIImage?, Never>] = [:]
 
-    static func cachedImage(for url: URL) -> UIImage? { cache[url] }
+    static func cachedImage(for url: URL) -> UIImage? { cache.object(forKey: url as NSURL) }
 
     static func image(for url: URL) async -> UIImage? {
-        if let cached = cache[url] { return cached }
+        if let cached = cache.object(forKey: url as NSURL) { return cached }
         if let pending = inFlight[url] { return await pending.value }
 
         let task = Task<UIImage?, Never> {
@@ -146,7 +171,7 @@ enum IconImageCache {
         inFlight[url] = task
         let result = await task.value
         inFlight[url] = nil
-        if let result { cache[url] = result }
+        if let result { cache.setObject(result, forKey: url as NSURL) }
         return result
     }
 }
@@ -157,7 +182,7 @@ enum IconImageCache {
 // render; while genuinely unresolved (still in flight, or the lookup
 // failed) the tile is just an empty outline, not a wrong-shaped stand-in.
 struct AppIconView: View {
-    var bundleID: String
+    var appName: String
     var size: CGFloat = 44
 
     @State private var iconURL: URL?
@@ -169,10 +194,10 @@ struct AppIconView: View {
     // regardless of how many times this view gets torn down and recreated
     // (e.g. filtered out of search results and back in).
     @MainActor
-    init(bundleID: String, size: CGFloat = 44) {
-        self.bundleID = bundleID
+    init(appName: String, size: CGFloat = 44) {
+        self.appName = appName
         self.size = size
-        let seededURL = ITunesLookup.cachedIconURL(bundleID: bundleID)
+        let seededURL = ITunesLookup.cachedIconURL(appName: appName)
         _iconURL = State(initialValue: seededURL)
         _image = State(initialValue: seededURL.flatMap { IconImageCache.cachedImage(for: $0) })
     }
@@ -187,13 +212,13 @@ struct AppIconView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.25, style: .continuous))
-        .task(id: bundleID) {
+        .task(id: appName) {
             // No-op when already seeded from cache — skip outright so a
             // row that's already showing its real icon never has any
             // reason to re-render because of this.
             guard image == nil else { return }
             let resolvedURL: URL?
-            if let iconURL { resolvedURL = iconURL } else { resolvedURL = await ITunesLookup.iconURL(bundleID: bundleID) }
+            if let iconURL { resolvedURL = iconURL } else { resolvedURL = await ITunesLookup.iconURL(appName: appName) }
             guard let resolvedURL else { return }
             iconURL = resolvedURL
             image = await IconImageCache.image(for: resolvedURL)

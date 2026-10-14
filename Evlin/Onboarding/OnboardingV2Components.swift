@@ -1,4 +1,3 @@
-import PhotosUI
 import SwiftUI
 import CoreImage.CIFilterBuiltins
 import UIKit
@@ -32,6 +31,8 @@ struct OnboardingV2EditableField: View {
     var placeholder: String = ""
     var keyboardType: UIKeyboardType = .default
     var isSecure: Bool = false
+    /// Lets iOS autofill, e.g. `.oneTimeCode` offers a code from Mail.
+    var contentType: UITextContentType? = nil
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var isRegular: Bool { hSizeClass == .regular }
 
@@ -47,6 +48,7 @@ struct OnboardingV2EditableField: View {
                         .textInputAutocapitalization(keyboardType == .emailAddress ? .never : .sentences)
                 }
             }
+            .textContentType(contentType)
             .font(Evlin.Typography.font(isRegular ? 19 : 16, weight: .semibold))
             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
             .tint(OnboardingV2Theme.Palette.primary)
@@ -488,75 +490,3 @@ struct OnboardingV2QRImage: View {
     }
 }
 
-// MARK: - Photo avatar picker (library only — no camera capture, so no new
-// Info.plist usage-description strings are needed for this prototype).
-
-struct OnboardingV2InitialsAvatar: View {
-    let name: String
-    var size: CGFloat = 66
-    var accent: Color = OnboardingV2Theme.Palette.primary
-
-    private var initial: String {
-        String(name.trimmingCharacters(in: .whitespacesAndNewlines).first ?? "?").uppercased()
-    }
-
-    var body: some View {
-        Circle()
-            .fill(accent.opacity(0.12))
-            .frame(width: size, height: size)
-            .overlay(
-                Text(initial)
-                    .font(Evlin.Typography.font(size * 0.4, weight: .bold))
-                    .foregroundStyle(accent)
-            )
-    }
-}
-
-struct OnboardingV2PhotoAvatarPicker: View {
-    let name: String
-    @Binding var pickedImage: UIImage?
-    // nil (the default every call site but ChildProfileStep uses) means
-    // "pick the size for me" — explicit overrides still win, but leaving
-    // this at its default now automatically scales up on iPad instead of
-    // every call site needing to know about horizontalSizeClass itself.
-    var size: CGFloat? = nil
-    var accent: Color = OnboardingV2Theme.Palette.primary
-    @Environment(\.horizontalSizeClass) private var hSizeClass
-    private var effectiveSize: CGFloat { size ?? (hSizeClass == .regular ? 92 : 66) }
-
-    @State private var showDialog = false
-    @State private var libraryItem: PhotosPickerItem?
-
-    var body: some View {
-        Button { showDialog = true } label: {
-            ZStack(alignment: .bottomTrailing) {
-                if let pickedImage {
-                    Image(uiImage: pickedImage)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: effectiveSize, height: effectiveSize)
-                        .clipShape(Circle())
-                } else {
-                    OnboardingV2InitialsAvatar(name: name, size: effectiveSize, accent: accent)
-                }
-                Image(systemName: "plus")
-                    .font(.system(size: effectiveSize * 0.18, weight: .bold))
-                    .foregroundStyle(OnboardingV2Theme.Palette.onPrimary)
-                    .frame(width: effectiveSize * 0.36, height: effectiveSize * 0.36)
-                    .background(Circle().fill(accent))
-                    .overlay(Circle().stroke(OnboardingV2Theme.Palette.surface, lineWidth: 2))
-            }
-        }
-        .buttonStyle(.plain)
-        .photosPicker(isPresented: $showDialog, selection: $libraryItem, matching: .images)
-        .onChange(of: libraryItem) { _, item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self),
-                   let img = UIImage(data: data) {
-                    await MainActor.run { pickedImage = img }
-                }
-            }
-        }
-    }
-}

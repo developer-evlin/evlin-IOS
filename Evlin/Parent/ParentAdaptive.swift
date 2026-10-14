@@ -2,7 +2,7 @@ import SwiftUI
 
 // Parent-side counterpart to Tablet/KidAdaptive.swift — same shape, kept as
 // its own type rather than reused directly since the parent tabs (Home,
-// Profile, Calendar, Chat, Library, Settings) hadn't picked up any iPad
+// Profile, Calendar, Chat, Settings) hadn't picked up any iPad
 // adaptation yet and needed their own drop-in rather than borrowing a
 // kid-themed helper by name. Driven by horizontalSizeClass, not device
 // idiom, so iPad Split View/Slide Over (compact) and iPhone landscape

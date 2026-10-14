@@ -20,3 +20,6 @@ evlin-backend/__pycache__/
 evlin-backend/routers/__pycache__/
 evlin-backend/tests/__pycache__/
 *.pyc
+
+# scripts/test_child.py: which test children it added (local, per machine)
+evlin-backend/scripts/test-children.json

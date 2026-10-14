@@ -9,7 +9,7 @@ struct FamilyPerson: Identifiable {
 
 enum CalTaskState { case pending, submitted, done }
 
-struct CalEvent: Identifiable {
+struct CalEvent: Identifiable, Equatable {
     // Backend rows reuse their own UUID so a re-sync keeps the same identity
     // (open sheets and selections don't reset under the user).
     var id = UUID()
@@ -27,6 +27,14 @@ struct CalEvent: Identifiable {
     var taskState: CalTaskState = .pending
     var gatesUnlock: Bool = false
     var linkedTaskId: String? = nil
+    // A kid's own plan, and where it stands with the parent.
+    var isKidPlan: Bool = false
+    var planStatus: PlanStatus = .approved
+    var reviewNote: String? = nil
+}
+
+enum PlanStatus: String {
+    case approved, proposed, declined
 }
 
 struct CalDayEvent: Identifiable {
@@ -38,47 +46,26 @@ struct CalDayEvent: Identifiable {
 }
 
 enum CalendarData {
-    static let parentColor = Color(hex: "7C6FF7")
-    static let parentBg = Color(hex: "EDE9FE")
-
-    /// The parent's own calendar lane — a fixed id ("family"), a live name.
-    /// MainActor because it reads ParentProfile/FamilyStore, both
-    /// MainActor-isolated UI-facing stores; everything else in this enum is
-    /// plain data parsing/formatting with no such dependency, so only this
-    /// and `people`/`person(_:)` below carry the isolation, not the whole
-    /// type.
-    @MainActor static var parentPerson: FamilyPerson {
-        FamilyPerson(id: "family", name: ParentProfile.shared.displayName, color: parentColor, bg: parentBg)
-    }
-
-    /// The parent plus every real child, live — used to build calendar
-    /// lanes and the task/event "For" picker. Used to be two hardcoded
-    /// entries (a fake "Parent" and a single fake "Child" with the literal
-    /// id "child") that never matched any real child's actual id, which is
-    /// what silently misfiled every real child's tasks under the parent's
-    /// own lane wherever `person(_:)` had to fall back — see its own
-    /// comment below.
+    /// Every real child, live: the calendar's lanes and the task/event "For"
+    /// picker. Evlin keeps the children's calendars only, so there's no
+    /// parent lane and no family-wide one. MainActor because it reads
+    /// FamilyStore.
     @MainActor static var people: [FamilyPerson] {
-        [parentPerson] + FamilyStore.children.map {
+        FamilyStore.children.map {
             FamilyPerson(id: $0.id, name: $0.name, color: $0.color, bg: $0.color.opacity(0.15))
         }
     }
 
-    static let everyone = FamilyPerson(id: "everyone", name: "Family", color: Color(hex: "7C6FF7"), bg: Color(hex: "EDE9FE"))
-
-    // The calendar used to model a single fixed month (the day-of-month Int
-    // was its only date key, always the month the app happened to launch
-    // in). dataYear/dataMonth are now the *displayed* month, which
-    // AppSync.loadCalendarMonth can move — todayYear/todayMonth/dataDay stay
-    // fixed to the real current date so "is this actually today" checks
-    // don't break once the displayed month can differ from it.
-    private static let today = Date()
+    // dataYear/dataMonth are the *displayed* month, which
+    // AppSync.loadCalendarMonth moves. todayYear/todayMonth/dataDay are the
+    // real date, read from the clock every time: an app left open past
+    // midnight moves on to the new day (DayClock moves the calendar too).
     private static let gregorian = Calendar(identifier: .gregorian)
-    static let todayYear = gregorian.component(.year, from: today)
-    static let todayMonth = gregorian.component(.month, from: today)
-    static let dataDay = gregorian.component(.day, from: today)
-    static var dataYear = todayYear
-    static var dataMonth = todayMonth
+    static var todayYear: Int { gregorian.component(.year, from: Date()) }
+    static var todayMonth: Int { gregorian.component(.month, from: Date()) }
+    static var dataDay: Int { gregorian.component(.day, from: Date()) }
+    static var dataYear = gregorian.component(.year, from: Date())
+    static var dataMonth = gregorian.component(.month, from: Date())
     static var daysInDataMonth: Int {
         var c = DateComponents(); c.year = dataYear; c.month = dataMonth; c.day = 1
         guard let firstOfMonth = gregorian.date(from: c) else { return 30 }
@@ -90,38 +77,39 @@ enum CalendarData {
     /// dataDay is just some other month's same-numbered day.
     static var isDisplayingCurrentMonth: Bool { dataYear == todayYear && dataMonth == todayMonth }
 
-    /// Whether `day` in the displayed month is genuinely today.
-    static func isToday(day: Int) -> Bool { isDisplayingCurrentMonth && day == dataDay }
-
-    /// The linked ChildTask ids visible on one day for one person, in the
-    /// order they're shown.
-    ///
-    /// Opening the review deck from a calendar day should page through that
-    /// day and nothing else. Derived from the events the day already
-    /// rendered rather than re-deciding which tasks fall on a date, so it
-    /// can't disagree with what's on screen.
-    static func linkedTaskIDs(in dayEvents: [CalDayEvent], personId: String) -> [String] {
-        dayEvents
-            .filter { $0.event.personId == personId }
-            .compactMap { $0.event.linkedTaskId }
+    /// The day a calendar should show once the date moves from `old` to
+    /// `new`: the new today if it was on the old one, or if the month
+    /// moved on under it; otherwise where it was.
+    static func followingToday(_ selected: Int, from old: Date, to new: Date) -> Int {
+        guard isDisplayingCurrentMonth else { return selected }
+        let monthMoved = !gregorian.isDate(old, equalTo: new, toGranularity: .month)
+        let wasOnToday = selected == gregorian.component(.day, from: old)
+        return monthMoved || wasOnToday ? dataDay : selected
     }
 
     static func date(day: Int, minutes: Int = 0) -> Date {
         var c = DateComponents(); c.year = dataYear; c.month = dataMonth; c.day = day
         c.hour = minutes / 60; c.minute = minutes % 60
-        return gregorian.date(from: c) ?? today
+        return gregorian.date(from: c) ?? Date()
     }
 
     /// Short weekday name ("Sun"…"Sat") for each day of the displayed month.
     /// Computed (not a stored `let`) since dataYear/dataMonth can now change.
     static var dayNames: [Int: String] {
+        let key = monthKey(dataYear, dataMonth)
+        if let cached = dayNamesCache, cached.key == key { return cached.names }
         let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
         var out: [Int: String] = [:]
         for d in 1...daysInDataMonth {
             out[d] = names[gregorian.component(.weekday, from: date(day: d)) - 1]
         }
+        dayNamesCache = (key, out)
         return out
     }
+    // Worked out once per displayed month: the calendar looks names up
+    // inside loops over every day and every item, and building the month
+    // afresh on each lookup made a rebuild of the screens take tens of ms.
+    private static var dayNamesCache: (key: String, names: [Int: String])?
     static let fullDayNames: [String: String] = [
         "Sun": "Sunday", "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday",
         "Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday",
@@ -131,23 +119,32 @@ enum CalendarData {
     static let allDayCodes = "sun,mon,tue,wed,thu,fri,sat"
     static let weekdayCodes = "mon,tue,wed,thu,fri"
 
-    /// Filled by AppSync from the backend (events + tasks); the calendar
-    /// reads it instead of owning a local-only copy.
-    static var eventsByDay: [Int: [CalEvent]] = [:]
+    /// The displayed month, from the phone's database (TaskStore.calendar).
+    @MainActor static var eventsByDay: [Int: [CalEvent]] { TaskStore.shared.calendar }
 
-    static let allDayByDay: [Int: [(personId: String, title: String)]] = [:]
+    /// Which children have something on each day, per month ("2026-10"),
+    /// kept from every month that has been loaded, so the month picker can
+    /// show dots for a month other than the one loaded now.
+    static var monthDots: [String: [Int: [String]]] = [:]
 
-    // Used to fall back to people[0] (a hardcoded "Parent") for any id it
-    // didn't recognize — since every real child's id is a backend UUID that
-    // never matched the two fake entries this array used to hold, that
-    // fallback fired on every real child event/task, silently relabeling
-    // it as the parent's own (wrong color, wrong name, wrong lane — see the
-    // "Anytime tasks, Parent" bug this caused). A genuinely unknown id
-    // (e.g. a removed child's leftover event) now reads as unknown instead
-    // of impersonating someone real.
+    static func monthKey(_ year: Int, _ month: Int) -> String { "\(year)-\(month)" }
+
+    /// Records the loaded month's dots (call after eventsByDay changes).
+    @MainActor static func rememberMonthDots() {
+        var dots: [Int: [String]] = [:]
+        for day in 1...daysInDataMonth {
+            var ids: [String] = []
+            for de in expandedEvents(for: day, in: eventsByDay) where !ids.contains(de.event.personId) {
+                ids.append(de.event.personId)
+            }
+            if !ids.isEmpty { dots[day] = ids }
+        }
+        monthDots[monthKey(dataYear, dataMonth)] = dots
+    }
+
+    // The child with this id, or "Unknown" (say, a removed child's
+    // leftover event), never someone else.
     @MainActor static func person(_ id: String) -> FamilyPerson {
-        if id == everyone.id { return everyone }
-        if id == "family" { return parentPerson }
         if let match = people.first(where: { $0.id == id }) { return match }
         return FamilyPerson(id: id, name: "Unknown", color: EColor.onSurfaceVariant, bg: EColor.surfaceContainerLowest)
     }

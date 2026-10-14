@@ -583,8 +583,10 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(dark ? Color.white : OnboardingV2Theme.Palette.onSurfaceVariant)
                 // Icon reads small on purpose; the frame is the real
-                // hit target so it's still comfortable to tap.
+                // hit target so it's still comfortable to tap. The plain
+                // style only counts drawn pixels, so the shape says so.
                 .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -599,16 +601,24 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
     // column, sized for iPad (wider cap, same bigger type/buttons from the
     // scale-up pass) instead of trying to either split the screen or hold
     // it to an iPhone's own width.
-    private var screenBody: some View {
-        VStack(alignment: .leading, spacing: Spacing.xl) {
-            // Top Progress Bar
-            ProgressView(value: Double(min(stepIndex, stepTotal)), total: Double(max(1, stepTotal)))
-                .progressViewStyle(LinearProgressViewStyle(tint: role.accent))
-                .padding(.bottom, Spacing.xs)
+    private var screenBody: some View { screenBody(pinned: false) }
 
-            if onBack != nil {
-                backButton().padding(.bottom, Spacing.xs)
-            }
+    /// The progress bar and Back button.
+    @ViewBuilder private var topChrome: some View {
+        ProgressView(value: Double(min(stepIndex, stepTotal)), total: Double(max(1, stepTotal)))
+            .progressViewStyle(LinearProgressViewStyle(tint: role.accent))
+            .padding(.bottom, Spacing.xs)
+
+        if onBack != nil {
+            backButton().padding(.bottom, Spacing.xs)
+        }
+    }
+
+    /// `pinned`: the top chrome and the footer are drawn by the caller, fixed
+    /// above and below a scrolling middle (iPhone, see `body`).
+    private func screenBody(pinned: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.xl) {
+            if !pinned { topChrome }
 
             // Centered headline + body, matching the reference flow's
             // icon-then-bold-statement-then-detail pattern. PARENT ONLY —
@@ -676,14 +686,16 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
 
                 Spacer(minLength: Spacing.lg)
 
-                VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
-                    footer()
+                if !pinned {
+                    VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
+                        footer()
+                    }
                 }
             }
         }
-        .padding(.top, OnboardingV2Theme.Metrics.screenBodyPaddingTop)
+        .padding(.top, pinned ? 0 : OnboardingV2Theme.Metrics.screenBodyPaddingTop)
         .padding(.horizontal, isRegular ? 8 : OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
-        .padding(.bottom, OnboardingV2Theme.Metrics.screenBodyPaddingBottom)
+        .padding(.bottom, pinned ? 0 : OnboardingV2Theme.Metrics.screenBodyPaddingBottom)
         .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isRegular ? .center : .top)
         .background(dark ? OnboardingV2Theme.Palette.darkScreen
@@ -709,8 +721,42 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
                             .stroke(OnboardingV2Theme.Palette.deviceRing,
                                     lineWidth: OnboardingV2Theme.Metrics.deviceRingWidth)
                     )
-            } else {
+            } else if isRegular {
                 screenBody
+            } else {
+                // On iPhone the keyboard takes about 40% of the screen, and a
+                // step with a field (the kid's name, an email) is taller than
+                // what's left: the top went under the status bar and Continue
+                // under the keyboard, so there was no way on. The footer is
+                // pinned to the bottom edge, which rises with the keyboard, so
+                // Continue stays in reach; the rest scrolls above it. At least
+                // the visible height, so with the keyboard down the Spacers
+                // lay the screen out exactly as before. Back is pinned too:
+                // inside a scroll view a button answers late and a slight
+                // drag cancels the tap.
+                GeometryReader { proxy in
+                    ScrollView {
+                        screenBody(pinned: true).frame(minHeight: proxy.size.height)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollDismissesKeyboard(.interactively)
+                }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: Spacing.xl) { topChrome }
+                        .padding(.horizontal, OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
+                        .padding(.top, OnboardingV2Theme.Metrics.screenBodyPaddingTop)
+                        .padding(.bottom, Spacing.xl)
+                        .background(dark ? OnboardingV2Theme.Palette.darkScreen : OnboardingV2Theme.Palette.surface)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
+                        footer()
+                    }
+                    .padding(.horizontal, OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
+                    .padding(.top, Spacing.sm)
+                    .padding(.bottom, OnboardingV2Theme.Metrics.screenBodyPaddingBottom)
+                    .background(dark ? OnboardingV2Theme.Palette.darkScreen : OnboardingV2Theme.Palette.surface)
+                }
             }
         }
         // Shared by every onboarding step (this is the one container all of

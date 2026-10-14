@@ -60,6 +60,7 @@ struct ScreenTabletSettings: View {
             }
         }
         .sheet(isPresented: $showApprovalWait) {
+            Group {
             ParentApprovalWaitingView(
                 child: childProfile,
                 onApproved: {
@@ -72,6 +73,8 @@ struct ScreenTabletSettings: View {
                     showApprovalWait = false
                 }
             )
+        }
+            .presentationDragIndicator(.visible)
         }
     }
 

@@ -4,7 +4,7 @@ enum TaskState: String {
     case done, review, pending, overdue, bypass, bypassed
 }
 
-struct ChildTask: Identifiable {
+struct ChildTask: Identifiable, Equatable {
     var id: String
     var occurrenceId: String? // Added to support bi-directional API sync
     var title: String
@@ -34,39 +34,43 @@ struct ChildTask: Identifiable {
     // (mock/local-only tasks that never reach the backend).
     var photoURLs: [String] = []
     var repeats: String = "none"
-    // Whether the kid attached a voice note with `note` (e.g. a bypass
-    // request explained by voice instead of/along with typing) — mirrors
-    // the "Record a voice note" option in TaskDetailView's bypass compose.
-    var hasVoiceNote: Bool = false
-    // The real download URL behind hasVoiceNote — nil until it's actually
-    // synced (see AppSync, which fetches it the same way as photoURLs),
-    // even when hasVoiceNote is already true.
-    var voiceURL: String? = nil
     // What the parent sent back on a Redo, from TaskReviewDeckView's compose
     // step — distinct from `note`, which is the kid's own note about their
     // submission.
     var redoNote: String? = nil
-    var redoHasVoiceNote: Bool = false
+    // A parent said no to the kid's ask to skip, with a note: the task is
+    // back on for today, and this is what they wrote.
+    var skipDeclinedNote: String? = nil
+    /// When the task was made, for the newest-first order.
+    var createdAt: Date? = nil
 }
 
 extension Array where Element == ChildTask {
-    /// Tasks a parent actually needs to act on (submitted, awaiting review)
-    /// bubble to the top; everything else follows in due-time order, with
-    /// no-due-time ("Anytime") tasks sorted after any task with a real
-    /// time. Applied once at the source (AppSync) so the task list and the
-    /// review deck — which walks this same array by raw index — agree on
-    /// one order instead of an arbitrary backend-return order.
+    /// Today's order, everywhere today's tasks are listed (Home, the review
+    /// deck): ones waiting on the parent first, then the list order below.
     func sortedForReview() -> [ChildTask] {
         sorted { a, b in
             let aReview = a.state == .review, bReview = b.state == .review
             if aReview != bReview { return aReview }
-            switch (a.dueDate, b.dueDate) {
-            case let (da?, db?): return da < db
-            case (nil, nil): return false
-            case (nil, _): return false
-            case (_, nil): return true
-            }
+            return ChildTask.listOrder(a, b)
         }
+    }
+
+    /// Tomorrow's order: the same list order.
+    func sortedForTomorrow() -> [ChildTask] { sorted(by: ChildTask.listOrder) }
+}
+
+extension ChildTask {
+    /// Tasks without a deadline first, newest first, so a task just added
+    /// lands at the top and stays there; then deadlines in time order.
+    /// Ties fall back to the name, so the order never shuffles.
+    static func listOrder(_ a: ChildTask, _ b: ChildTask) -> Bool {
+        let aTimed = a.dueLabel != nil, bTimed = b.dueLabel != nil
+        if aTimed != bTimed { return !aTimed }
+        if aTimed, let da = a.dueDate, let db = b.dueDate, da != db { return da < db }
+        let ca = a.createdAt ?? .distantPast, cb = b.createdAt ?? .distantPast
+        if ca != cb { return ca > cb }
+        return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
     }
 }
 
@@ -74,7 +78,7 @@ extension Array where Element == ChildTask {
 // icon and builds its own detail line from typed fields.
 enum RuleKind: String { case downtime, custom, screenTimeLimit }
 
-struct ChildRule: Identifiable {
+struct ChildRule: Identifiable, Equatable {
     let id: String
     var kind: RuleKind
     var icon: String
@@ -84,46 +88,121 @@ struct ChildRule: Identifiable {
     var downtimeFrom: Date = Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date()) ?? Date()
     var downtimeTo: Date = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
 
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+    }()
     static func fmtClock(_ date: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f.string(from: date)
+        clockFormatter.string(from: date)
     }
 }
 
-// Per-child task lists, ported from screen-profile.jsx's hardcoded set
-// (originally only your child's — mirrored across kids so every profile has content).
-enum TaskStore {
-    // Generated once per child, then cached — ScreenProfile and a direct
-    // notification-tap-to-TaskReviewDeckView route (see ScreenHome) both
-    // need to land on the *same* live task list so an approval made from
-    // one path is still there if the other path opens afterward. Without
-    // this, each fresh call to the old plain generator handed back a brand
-    // new array and any edit made through one route silently vanished the
-    // moment the other route read `tasks(for:)` again.
-    private static var cache: [String: [ChildTask]] = [:]
+extension ChildTask {
+    /// On today's list. A task with no date counts as today; one due on
+    /// another day doesn't. The one rule for "today" on the parent side,
+    /// so the profile's list and the chat's progress card can't disagree.
+    var isDueToday: Bool {
+        guard let dueDate else { return true }
+        return Calendar.current.isDateInToday(dueDate)
+    }
+}
 
-    static func tasks(for childId: String) -> [ChildTask] {
-        if let cached = cache[childId] { return cached }
-        let generated = generate(for: childId)
-        cache[childId] = generated
-        return generated
+/// What the screens show for tasks and the calendar, read from the phone's
+/// database (LocalStore) and nowhere else.
+///
+/// Nothing writes here. Every change, from a tap or from a sync, is written
+/// to the database, and each database save rebuilds this from it
+/// (`reload`). It's observed, so a screen showing a task redraws the moment
+/// that task's row changes: an approval shows on Home at once, not when the
+/// next sync lands. SwiftData's `@Query` does the same inside a view; this
+/// is that, shared, so code outside views (a child's lock status, the
+/// review deck's grouping) reads the same thing.
+@MainActor @Observable
+final class TaskStore {
+    static let shared = TaskStore()
+
+    /// Per child: one entry per task, with today's state.
+    private(set) var today: [String: [ChildTask]] = [:]
+    /// Per child: every task that applies tomorrow (CalendarSync.applies).
+    /// Kept apart from `today`: a daily task belongs to both days.
+    private(set) var tomorrow: [String: [ChildTask]] = [:]
+    /// The displayed month's calendar (CalendarData.dataYear/dataMonth).
+    private(set) var calendar: [Int: [CalEvent]] = [:]
+
+    /// Rebuilds from the database. Only assigns what changed, so a save that
+    /// changed nothing on screen redraws nothing.
+    func reload() {
+        let store = LocalStore.shared
+        let todayKey = CalendarSync.isoDay(Date())
+        let tasksByChild = store.cachedTasksByChild()
+        let occurrences = store.occurrenceRows(dueDate: todayKey)
+
+        var newToday: [String: [ChildTask]] = [:]
+        var newTomorrow: [String: [ChildTask]] = [:]
+        for (childId, apiTasks) in tasksByChild {
+            let rows = occurrences.filter { $0.childId == childId }
+            let photos = Dictionary(rows.map { ($0.id, $0.photoURLs) }, uniquingKeysWith: { a, _ in a })
+            newToday[childId] = AppSync.makeTasks(apiTasks, occurrences: rows.map(\.apiShape), photos: photos)
+            newTomorrow[childId] = CalendarSync.tomorrowTasks(from: apiTasks)
+        }
+        if newToday != today { today = newToday }
+        if newTomorrow != tomorrow { tomorrow = newTomorrow }
+
+        scheduleCalendarRebuild()
     }
 
-    // A real, always-up-to-date Binding into the cache — lets any view read
-    // and write the same live array without needing to own a @State copy
-    // of its own (which is what used to make ScreenProfile the only place
-    // that could ever see or make task edits).
-    static func binding(for childId: String) -> Binding<[ChildTask]> {
-        Binding(
-            get: { tasks(for: childId) },
-            set: { cache[childId] = $0 }
-        )
+    private var calendarRebuildPending = false
+
+    /// The month's calendar is rebuilt just after, not in the same instant:
+    /// a tap on Home (a tick, an approval) starts its animation in that
+    /// instant, and the calendar isn't on screen there. Several saves in a
+    /// row make one rebuild.
+    private func scheduleCalendarRebuild() {
+        guard !calendarRebuildPending else { return }
+        calendarRebuildPending = true
+        DispatchQueue.main.async { [self] in
+            calendarRebuildPending = false
+            rebuildCalendar()
+        }
     }
 
-    // Every real child (from onboarding, or Settings' "Add a child") starts
-    // with no tasks — the old per-id demo branches here (one hand-authored
-    // task list per status being showcased) are preserved in git history
-    // rather than left as unreachable dead code now that no such ids exist.
-    private static func generate(for childId: String) -> [ChildTask] { [] }
+    /// The calendar now, for when it must be current straight away (the
+    /// displayed month changed).
+    func rebuildCalendar() {
+        let store = LocalStore.shared
+        let newCalendar = AppSync.buildCalendar(events: store.allCachedEvents(), tasks: store.cachedTasksByChild(), today: today)
+        if newCalendar != calendar {
+            calendar = newCalendar
+            CalendarData.rememberMonthDots()
+        }
+    }
+
+    static func tasks(for childId: String) -> [ChildTask] { shared.today[childId] ?? [] }
+
+    static func tomorrowTasks(for childId: String) -> [ChildTask] { shared.tomorrow[childId] ?? [] }
+
+    /// A fixed set of a child's tasks, in the given order. Home's review
+    /// deck pages through this. The set is fixed when the deck opens, not
+    /// re-filtered by state, so approving a task doesn't make it vanish
+    /// from under the deck mid-swipe; a deleted one drops out.
+    static func tasks(for childId: String, ids: [String]) -> [ChildTask] {
+        let all = tasks(for: childId)
+        return ids.compactMap { id in all.first { $0.id == id } }
+    }
+
+    /// Which of today's tasks a review deck opened on `taskId` swipes
+    /// through: the completed ones if it's completed; otherwise the ones
+    /// still needing something (late, waiting on the parent, to do), in the
+    /// order Home lists them. Empty if the task isn't today's.
+    static func reviewGroup(for childId: String, startingAt taskId: String) -> [String] {
+        let today = tasks(for: childId).filter(\.isDueToday)
+        guard let tapped = today.first(where: { $0.id == taskId }) else { return [] }
+        let done: (ChildTask) -> Bool = { $0.state == .done || $0.state == .bypassed }
+        if done(tapped) { return today.filter(done).map(\.id) }
+        let late = today.filter { $0.state == .overdue }
+        let waiting = today.filter { $0.state == .review || $0.state == .bypass }
+        let toDo = today.filter { $0.state == .pending }
+        return (late + waiting + toDo).map(\.id)
+    }
 
     // Takes the raw minutes rather than a whole Child — Child seeds its own
     // `rules` from this in its init, before `self` is fully constructed, so
@@ -158,36 +237,3 @@ func repeatDisplayLabel(_ repeats: String) -> String {
     return weekDayCodes.filter { days.contains($0) }.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: ", ")
 }
 
-enum ReflectionStep: String, CaseIterable {
-    case video, quiz, write
-
-    var stepNumber: Int { switch self { case .video: 1; case .quiz: 2; case .write: 3 } }
-    var title: String { switch self {
-        case .video: "Watch a short video"
-        case .quiz: "Take the quiz"
-        case .write: "Write a reflection"
-    } }
-    var subtitle: String { switch self {
-        case .video: "2 min · Why rest time matters"
-        case .quiz: "5 questions · need 4 of 5 to pass"
-        case .write: "3+ sentences in their own words"
-    } }
-    var icon: String { switch self {
-        case .video: "play_circle"
-        case .quiz: "quiz"
-        case .write: "edit_note"
-    } }
-}
-
-struct QuizQuestion { var q: String; var options: [String]; var correct: Int }
-
-enum ReflectionContent {
-    static let videoTitle = "Why rest time matters for your brain"
-    static let videoDuration = "2:00"
-    static let prompt = "You kept scrolling after time was up. What could you do differently tomorrow?"
-    static let quiz: [QuizQuestion] = [
-        QuizQuestion(q: "Why does your body need rest time away from screens?", options: ["So your eyes and brain can recover and focus better", "Because screens run out of battery", "So adults can use the TV", "It doesn't really matter"], correct: 0),
-        QuizQuestion(q: "What is a healthy thing to do when your screen time ends?", options: ["Hide another device under the bed", "Find something fun offline — draw, read, go outside", "Argue until you get more time", "Wait quietly doing nothing"], correct: 1),
-        QuizQuestion(q: "How does not sticking to limits make others feel?", options: ["Proud of you", "Nothing at all", "Worried, because agreements matter", "Happy you broke the rule"], correct: 2),
-    ]
-}

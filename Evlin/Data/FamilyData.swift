@@ -30,12 +30,6 @@ struct RegisteredDevice: Identifiable {
     var lastActive: String
 }
 
-struct ChildReflection {
-    var minutes: Int
-    var writtenText: String
-    var review: String // "pending" | "approved" | "redo"
-}
-
 @MainActor
 final class Child: Identifiable, ObservableObject {
     let id: String
@@ -64,7 +58,6 @@ final class Child: Identifiable, ObservableObject {
         return .unlocked
     }
     @Published var subtitle: String
-    @Published var reflection: ChildReflection?
     /// Set only when status == .downtime — the schedule's end time, e.g.
     /// "7:00 AM". timeLeft/timePct still track the *unused daily allowance*
     /// while downtime is active; they're unrelated to when downtime ends.
@@ -82,10 +75,6 @@ final class Child: Identifiable, ObservableObject {
     // Screen Time/Family Sharing detection exists in this prototype, so
     // this is set by hand on one mock child rather than computed.
     @Published var needsProtectionSetup: Bool
-    // Editable from Settings > Children & Devices (EditChildProfileSheet) —
-    // nil falls back to a colored initials circle wherever a child's
-    // avatar is shown.
-    @Published var avatar: UIImage?
     // Owned by the Child itself (not re-seeded per ScreenProfile instance
     // any more) so a rule survives navigating away and back, and so
     // anything else holding this same Child — chat's block-an-app flow,
@@ -93,15 +82,14 @@ final class Child: Identifiable, ObservableObject {
     // profile instead of only existing in that one screen's local state.
     @Published var rules: [ChildRule]
 
-    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, manualLock: Bool = false, taskGateOverride: Bool = false, timeLeft: String, timePct: Int, usageTodayMin: Int, subtitle: String, reflection: ChildReflection? = nil, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false, avatar: UIImage? = nil, rules: [ChildRule] = []) {
+    init(id: String, name: String, age: Int, dailyLimitMin: Int, color: Color, manualLock: Bool = false, taskGateOverride: Bool = false, timeLeft: String, timePct: Int, usageTodayMin: Int, subtitle: String, downtimeUntil: String? = nil, parentApprovalStatus: ParentApprovalStatus = .none, devices: [RegisteredDevice] = [], trialExhausted: Bool = false, needsProtectionSetup: Bool = false, rules: [ChildRule] = []) {
         self.id = id; self.name = name; self.age = age; self.dailyLimitMin = dailyLimitMin
         self.color = color; self.manualLock = manualLock; self.taskGateOverride = taskGateOverride; self.timeLeft = timeLeft; self.timePct = timePct
         self.usageTodayMin = usageTodayMin;
-        self.subtitle = subtitle; self.reflection = reflection; self.downtimeUntil = downtimeUntil
+        self.subtitle = subtitle; self.downtimeUntil = downtimeUntil
         self.parentApprovalStatus = parentApprovalStatus
         self.trialExhausted = trialExhausted
         self.needsProtectionSetup = needsProtectionSetup
-        self.avatar = avatar
         self.rules = rules.isEmpty ? TaskStore.rules(dailyLimitMin: dailyLimitMin) : rules
         // No auto-synthesized device: an empty array is the honest "not
         // paired yet" state Settings' Family list and Child sheet need to
@@ -171,10 +159,11 @@ enum FamilyStore {
         child(childId).devices.removeAll { $0.id == deviceId }
     }
 
-    // Not private any more — Settings' Child sheet needs the same palette
-    // for its colour-swatch row (current colour ringed, tap to change).
+    // Indexed by the child's color_index (the backend gives the first child
+    // 0, the next 1, …), so the first entry is every family's first child:
+    // Evlin green.
     static let childColorPalette: [Color] = [
-        Color(hex: "2563EB"), Color(hex: "3DAA5C"), Color(hex: "F97316"), Color(hex: "7C3AED"),
+        Color(hex: "3DAA5C"), Color(hex: "2563EB"), Color(hex: "F97316"), Color(hex: "7C3AED"),
         Color(hex: "0EA5E9"), Color(hex: "EC4899"), Color(hex: "0891B2"), Color(hex: "6366F1"),
     ]
 
@@ -189,17 +178,4 @@ func formatMinutes(_ min: Int) -> String {
     if h == 0 { return "\(m)m" }
     if m == 0 { return "\(h)h" }
     return "\(h)h \(m)m"
-}
-
-/// Downsample an image to a maximum pixel dimension, preventing multi-MB
-/// photos from living in memory at full resolution just to display a
-/// 104-pt avatar circle.
-func downsampledAvatar(_ image: UIImage, maxPixels: CGFloat = 312) -> UIImage {
-    let size = image.size
-    let longer = max(size.width, size.height)
-    guard longer > maxPixels else { return image }
-    let scale = maxPixels / longer
-    let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-    let renderer = UIGraphicsImageRenderer(size: newSize)
-    return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
 }

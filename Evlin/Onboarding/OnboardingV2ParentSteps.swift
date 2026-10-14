@@ -1,6 +1,102 @@
 import SwiftUI
 import AuthenticationServices
+import CryptoKit
 import UserNotifications
+
+/// Shows Apple's native Sign in with Apple sheet. The request carries the
+/// SHA-256 of a fresh random nonce; the raw nonce goes to our server, which
+/// checks Apple's token carries its hash, so a token can't be replayed from
+/// another sign-in.
+final class AppleSignInCoordinator: NSObject, ASAuthorizationControllerDelegate,
+                                    ASAuthorizationControllerPresentationContextProviding {
+    struct Result {
+        let identityToken: String
+        let authorizationCode: String?
+        let rawNonce: String
+        let fullName: String?
+    }
+
+    private var continuation: CheckedContinuation<Result, Error>?
+    private var rawNonce = ""
+    /// Holds this object alive while the sheet is up; the controller's
+    /// delegate reference is weak.
+    private var retainedSelf: AppleSignInCoordinator?
+
+    @MainActor
+    func signIn() async throws -> Result {
+        rawNonce = Self.randomNonce()
+        let request = ASAuthorizationAppleIDProvider().createRequest()
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = Self.sha256Hex(rawNonce)
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        controller.delegate = self
+        controller.presentationContextProvider = self
+        retainedSelf = self
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            controller.performRequests()
+        }
+    }
+
+    func authorizationController(controller: ASAuthorizationController,
+                                 didCompleteWithAuthorization authorization: ASAuthorization) {
+        defer { retainedSelf = nil }
+        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+              let tokenData = credential.identityToken,
+              let token = String(data: tokenData, encoding: .utf8) else {
+            continuation?.resume(throwing: NSError(domain: "AppleSignIn", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Apple didn't return a sign-in token. Try again."]))
+            continuation = nil
+            return
+        }
+        let code = credential.authorizationCode.flatMap { String(data: $0, encoding: .utf8) }
+        let name = credential.fullName.map {
+            PersonNameComponentsFormatter.localizedString(from: $0, style: .default)
+        }
+        continuation?.resume(returning: Result(identityToken: token, authorizationCode: code,
+                                               rawNonce: rawNonce, fullName: name))
+        continuation = nil
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        defer { retainedSelf = nil }
+        continuation?.resume(throwing: error)
+        continuation = nil
+    }
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+    }
+
+    private static func randomNonce() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(status == errSecSuccess, "No secure random bytes for the Apple nonce")
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func sha256Hex(_ input: String) -> String {
+        SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+extension Error {
+    /// The server's own words for a sign-in failure ("That code is wrong or
+    /// has expired", "Wait 40 seconds…"), which the generic `apiUserMessage`
+    /// would turn into "session expired" for a 401 or a raw status for the rest.
+    var signInMessage: String {
+        if let f = self as? APIFailure, (400..<500).contains(f.status) {
+            if f.status == 422 { return "Check the email and password. Passwords need at least 8 characters." }
+            if let detail = f.detail, !detail.isEmpty {
+                return detail == "Invalid login credentials" ? "Incorrect email or password." : detail
+            }
+        }
+        return apiUserMessage
+    }
+}
 
 class OAuthManager: NSObject, ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -85,7 +181,7 @@ struct ParentSignInStep: View {
     let onSignedIn: (Bool) -> Void
     var onBack: (() -> Void)? = nil
 
-    private enum Phase { case providers, emailAddress, password }
+    private enum Phase { case providers, emailAddress, password, code }
     private enum AuthMode { case signUp, signIn }
 
     @Environment(\.horizontalSizeClass) private var hSizeClass
@@ -97,13 +193,17 @@ struct ParentSignInStep: View {
     @State private var password = ""
     @State private var busy = false
     @State private var providersError: String?
+    @State private var code = ""
+    @State private var codeError: String?
+    @State private var resendAvailableAt = Date.distantPast
 
     private var isValidEmail: Bool {
         guard let at = email.firstIndex(of: "@") else { return false }
         let domain = email[email.index(after: at)...]
         return at != email.startIndex && domain.contains(".") && !domain.hasPrefix(".") && !domain.hasSuffix(".")
     }
-    private var canSubmitPassword: Bool { password.count >= 6 && !busy }
+    private var canSubmitPassword: Bool { password.count >= 8 && !busy }
+    private var canSubmitCode: Bool { code.filter(\.isNumber).count == 6 && !busy }
 
     private var title: String { "" }
     private var subtitle: String { "" }
@@ -117,6 +217,7 @@ struct ParentSignInStep: View {
         case .providers: return onBack
         case .emailAddress: return { phase = .providers }
         case .password: return { phase = .emailAddress }
+        case .code: return { phase = .password }
         }
     }
 
@@ -136,6 +237,7 @@ struct ParentSignInStep: View {
                 case .providers: providersContent
                 case .emailAddress: emailAddressContent
                 case .password: passwordContent
+                case .code: codeContent
                 }
             },
             footer: { EmptyView() }
@@ -158,7 +260,7 @@ struct ParentSignInStep: View {
                 "Continue with Apple",
                 systemImage: "apple.logo",
                 fill: .black,
-                action: { Task { await signInWithProvider() } }
+                action: { Task { await signInWithApple() } }
             )
             .disabled(busy)
 
@@ -253,7 +355,7 @@ struct ParentSignInStep: View {
             OnboardingV2EditableField(
                 label: authMode == .signUp ? "CREATE PASSWORD" : "PASSWORD",
                 text: $password,
-                placeholder: "At least 6 characters",
+                placeholder: "At least 8 characters",
                 isSecure: true
             )
             .onChange(of: password) { _, _ in passwordError = nil }
@@ -266,7 +368,7 @@ struct ParentSignInStep: View {
             }
 
             OnboardingV2PrimaryButton(
-                busy ? (authMode == .signUp ? "Creating account…" : "Signing in…")
+                busy ? (authMode == .signUp ? "Sending code…" : "Signing in…")
                      : (authMode == .signUp ? "Create account" : "Sign in"),
                 role: .parent,
                 action: { Task { await submitEmailAuth() } }
@@ -283,32 +385,117 @@ struct ParentSignInStep: View {
         }
     }
 
-    private func submitEmailAuth() async {
-        busy = true
-        let success: Bool
+    // MARK: - Phase 4: the emailed code (sign-up only)
 
-        var actualError: String? = nil
+    private var codeContent: some View {
+        VStack(spacing: 11) {
+            Text("We sent a 6-digit code to \(email). Enter it to finish creating your account.")
+                .onboardingV2BodyXS()
+                .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            OnboardingV2EditableField(
+                label: "CODE",
+                text: $code,
+                placeholder: "123456",
+                keyboardType: .numberPad,
+                contentType: .oneTimeCode
+            )
+            .onChange(of: code) { _, new in
+                codeError = nil
+                let digits = String(new.filter(\.isNumber).prefix(6))
+                if digits != new { code = digits }
+            }
+
+            if let codeError {
+                Text(codeError)
+                    .onboardingV2BodyXS()
+                    .foregroundStyle(OnboardingV2Theme.Palette.error)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            OnboardingV2PrimaryButton(busy ? "Checking…" : "Verify and continue", role: .parent) {
+                Task { await submitCode() }
+            }
+            .disabled(!canSubmitCode)
+            .padding(.top, Spacing.xs)
+
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let wait = Int(resendAvailableAt.timeIntervalSince(context.date).rounded(.up))
+                Button(wait > 0 ? "Resend code in \(wait)s" : "Resend code") {
+                    Task { await sendCode() }
+                }
+                .disabled(wait > 0 || busy)
+                .font(OnboardingV2Theme.Typography.bodyStrong(false))
+                .foregroundStyle(OnboardingV2Theme.Palette.primary)
+            }
+            .padding(.top, Spacing.md)
+        }
+    }
+
+    private func submitEmailAuth() async {
+        if authMode == .signUp {
+            if await sendCode() { phase = .code }
+            return
+        }
+        busy = true
         do {
-            if authMode == .signUp {
-                success = try await APIClient.shared.register(email: email, password: password)
+            let success = try await APIClient.shared.login(email: email, password: password)
+            busy = false
+            if success {
+                await finishSignIn()
             } else {
-                success = try await APIClient.shared.login(email: email, password: password)
+                passwordError = "Incorrect email or password."
             }
         } catch {
-            success = false
-            actualError = error.apiUserMessage
+            busy = false
+            passwordError = error.signInMessage
         }
+    }
 
-        busy = false
-        
-        if success {
-            if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let local = email.split(separator: "@").first.map(String.init) ?? "Morgan"
-                parentName = local.capitalized
+    /// Asks the server to email a code. Returns whether one went out.
+    @discardableResult
+    private func sendCode() async -> Bool {
+        busy = true
+        defer { busy = false }
+        do {
+            let wait = try await APIClient.shared.startSignup(email: email)
+            resendAvailableAt = Date().addingTimeInterval(TimeInterval(wait))
+            code = ""
+            codeError = nil
+            return true
+        } catch {
+            if let f = error as? APIFailure, f.status == 429 {
+                // A code is already on its way; let them enter it.
+                if phase != .code { phase = .code }
+                codeError = error.signInMessage
+                return false
             }
-            if let error = await checkBackendAndProceed() { passwordError = error }
-        } else {
-            passwordError = actualError ?? (authMode == .signUp ? "Failed to create account." : "Incorrect email or password.")
+            if phase == .code { codeError = error.signInMessage } else { passwordError = error.signInMessage }
+            return false
+        }
+    }
+
+    private func submitCode() async {
+        busy = true
+        do {
+            let success = try await APIClient.shared.verifySignup(email: email, password: password,
+                                                                  code: code.filter(\.isNumber))
+            busy = false
+            if success { await finishSignIn() } else { codeError = "Couldn't finish signing up. Try again." }
+        } catch {
+            busy = false
+            codeError = error.signInMessage
+        }
+    }
+
+    private func finishSignIn() async {
+        if parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let local = email.split(separator: "@").first.map(String.init) ?? "Morgan"
+            parentName = local.capitalized
+        }
+        if let error = await checkBackendAndProceed() {
+            if phase == .code { codeError = error } else { passwordError = error }
         }
     }
 
@@ -334,18 +521,49 @@ struct ParentSignInStep: View {
         }
     }
 
+    private func signInWithApple() async {
+        busy = true
+        providersError = nil
+        defer { busy = false }
+        do {
+            let result = try await AppleSignInCoordinator().signIn()
+            let success = try await APIClient.shared.signInWithApple(
+                identityToken: result.identityToken, nonce: result.rawNonce,
+                authorizationCode: result.authorizationCode, fullName: result.fullName)
+            guard success else {
+                providersError = "Couldn't finish signing in with Apple. Try again."
+                return
+            }
+            if let name = result.fullName, !name.isEmpty,
+               parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parentName = name
+            }
+            if let error = await checkBackendAndProceed() { providersError = error }
+        } catch let error as ASAuthorizationError where error.code == .canceled {
+            providersError = nil
+        } catch {
+            providersError = error.signInMessage
+        }
+    }
+
     private func signInWithProvider() async {
         busy = true
         providersError = nil
         do {
             let manager = OAuthManager()
             let token = try await manager.signInWithGoogle()
-            let success = try await APIClient.shared.verifyParent(token: token)
+            // Without a refresh token the session would end with the access
+            // token, about an hour later. Better to fail now than then.
+            guard let refreshToken = OAuthManager.lastRefreshToken, !refreshToken.isEmpty else {
+                providersError = "Couldn't finish signing in with Google. Try again."
+                busy = false
+                return
+            }
+            let success = try await APIClient.shared.verifyParent(token: token, refreshToken: refreshToken)
             if success {
-                SessionManager.shared.parentRefreshToken = OAuthManager.lastRefreshToken
                 if let error = await checkBackendAndProceed() { providersError = error }
             } else {
-                providersError = "Failed to sync Google login with backend."
+                providersError = "Couldn't finish signing in with Google. Try again."
             }
         } catch let error as NSError {
             // ASWebAuthenticationSessionErrorCode.canceledLogin is error code 1
@@ -364,7 +582,6 @@ struct ParentSignInStep: View {
 
 struct ParentProfileStep: View {
     @Binding var name: String
-    @Binding var pickedAvatar: UIImage?
     let onSaved: () -> Void
     var onBack: (() -> Void)? = nil
 
@@ -395,9 +612,6 @@ struct ParentProfileStep: View {
                     .padding(.vertical, Spacing.section)
                 } else {
                     VStack(alignment: .leading, spacing: Spacing.lg) {
-                        OnboardingV2PhotoAvatarPicker(name: name, pickedImage: $pickedAvatar)
-                            .frame(maxWidth: .infinity)
-
                         OnboardingV2EditableField(label: "NAME", text: $name)
 
                         if let errorText {
@@ -493,10 +707,16 @@ struct ParentBetaAgreementStep: View {
             }
         )
         .sheet(isPresented: $showTermsSheet) {
+            Group {
             AgreementDocSheet(title: "Terms of Use", sections: BetaAgreementContent.termsSections)
         }
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showPrivacySheet) {
+            Group {
             AgreementDocSheet(title: "Privacy Policy", sections: BetaAgreementContent.privacySections)
+        }
+            .presentationDragIndicator(.visible)
         }
     }
 }

@@ -1,159 +1,105 @@
 import SwiftUI
 
+/// The kid's Library tab: their three bundles, one lesson from each a day.
+/// Watching today's lesson to the end marks that bundle done for today and
+/// moves it on. No locks or exercises yet — this is the layout, running on
+/// LibrarySamples until the Library Agent exists.
 struct ScreenTabletLibrary: View {
-    @State private var activeGuide: HowToGuide?
-
-    // A browse list, not a canvas like the calendar, so the whole page
-    // still caps to KidAdaptive's content column rather than spreading
-    // edge to edge.
+    @Environment(SessionManager.self) private var session
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
+
+    @State private var playing: PlayingLesson?
+    private var store: LibraryStore { LibraryStore.shared }
+
+    private struct PlayingLesson: Identifiable {
+        let bundle: LibraryBundle
+        let lesson: LibraryLesson
+        var id: String { lesson.id }
+    }
+
+    private var childId: String { session.activeChildId ?? "" }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Library").font(Typography.display(kid.of(26, 30), weight: .heavy)).foregroundStyle(KidTheme.ink)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Library")
+                        .font(Typography.display(kid.of(30, 36), weight: .heavy))
+                        .foregroundStyle(KidTheme.ink)
+                    Text("Pick a bundle and start today's lesson.")
+                        .font(Typography.font(kid.of(14, 16), weight: .semibold))
+                        .foregroundStyle(KidTheme.inkSoft)
 
-                    Text("How-to guides").font(Typography.display(kid.of(18, 21), weight: .heavy)).foregroundStyle(KidTheme.ink).padding(.top, 10)
-
-                    VStack(spacing: 10) {
-                        ForEach(TabletData.howToGuides) { guide in
-                            Button { activeGuide = guide } label: {
-                                HStack(spacing: 12) {
-                                    Text(guide.emoji).font(.system(size: kid.of(28, 32)))
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(guide.title).font(Typography.font(kid.of(15, 17), weight: .heavy)).foregroundStyle(KidTheme.ink)
-                                        Text(guide.blurb).font(Typography.font(kid.of(12.5, 14), weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
-                                    }
-                                    Spacer()
-                                    Label("\(guide.count)", systemImage: "book.closed.fill").font(Typography.font(kid.of(11.5, 13), weight: .bold)).foregroundStyle(KidTheme.greenDeep)
-                                }
-                                .padding(kid.of(14, 18))
-                                .background(Color(hex: "F0F4FF"))
-                                .clipShape(RoundedRectangle(cornerRadius: 18))
-                            }
-                            .buttonStyle(.plain)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: kid.of(14, 20), alignment: .top),
+                                             count: kid.isRegular ? 2 : 1),
+                              spacing: kid.of(16, 22)) {
+                        ForEach(store.shelf(childId)) { bundle in
+                            card(bundle)
                         }
                     }
+                    .padding(.top, 18)
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 22)
                 .padding(.top, 4)
                 .padding(.bottom, 100)
-                .kidContentColumn(kid.contentMaxWidth)
+                .kidContentColumn(kid.isRegular ? 900 : nil)
             }
             .background(KidTheme.background)
         }
-        .fullScreenCover(item: $activeGuide) { guide in
-            HowToGuideViewer(guide: guide)
-        }
-    }
-}
-
-// Full-screen step-by-step viewer, one panel at a time with progress dots.
-struct HowToGuideViewer: View {
-    let guide: HowToGuide
-    @Environment(\.dismiss) private var dismiss
-    @State private var step = 0
-    @Environment(\.horizontalSizeClass) private var hSizeClass
-    private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
-
-    private var isLast: Bool { step == guide.count - 1 }
-
-    var body: some View {
-        ZStack {
-            LinearGradient(colors: [KidTheme.cream, Color(hex: "FDE7B0")], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                HStack(spacing: 14) {
-                    circleButton(icon: "xmark") { dismiss() }
-                    Text(guide.title).font(Typography.display(22, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                        .frame(maxWidth: .infinity).multilineTextAlignment(.center)
-                    circleButton(icon: "speaker.wave.2.fill") {}
-                }
-                .padding(.horizontal, 20).padding(.top, 8)
-
-                HStack(spacing: 6) {
-                    ForEach(0..<guide.count, id: \.self) { i in
-                        Capsule().fill(i <= step ? KidTheme.green : Color(hex: "E6DCB0"))
-                            .frame(width: i == step ? 22 : 8, height: 8)
-                    }
-                }
-                .padding(.vertical, 10)
-
-                Spacer(minLength: 0)
-
-                VStack(spacing: 10) {
-                    Text("STEP \(step + 1) OF \(guide.count)")
-                        .font(Typography.font(14, weight: .heavy)).tracking(0.6)
-                        .foregroundStyle(KidTheme.greenDeep)
-                    Image(TabletData.guidePanelImage(guide, step: step))
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(KidTheme.ink, lineWidth: 2.5))
-                        .padding(.horizontal, 20)
-                        .kidContentColumn(kid.contentMaxWidth)
-                }
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 12) {
-                    if step > 0 {
-                        Button("Back") { step -= 1 }
-                            .font(Typography.display(16, weight: .heavy))
-                            .foregroundStyle(KidTheme.ink)
-                            .padding(.horizontal, 20).frame(height: 56)
-                            .background(.white)
-                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(KidTheme.ink, lineWidth: 2.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
-                    }
-                    Button(isLast ? "I made it! 🎉" : "Next step") {
-                        if isLast { dismiss() } else { step += 1 }
-                    }
-                    .font(Typography.display(18, weight: .heavy))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).frame(height: 56)
-                    .background(
-                        // A solid offset duplicate behind the face, not a
-                        // `.shadow()` — that would shadow the label text
-                        // too, ghosting a second copy of it below.
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 18).fill(KidTheme.greenDeep).offset(y: 4)
-                            RoundedRectangle(cornerRadius: 18).fill(KidTheme.green)
-                        }
-                        // Flattened into one layer first so any future
-                        // press/disabled dimming can't split the two
-                        // rectangles apart into a smeared double edge.
-                        .compositingGroup()
-                    )
-                    // Missing here (every other button in this file has it)
-                    // meant this fell back to the system default button
-                    // style, which dims the whole label on touch-down — the
-                    // face and its offset base rectangle faded together,
-                    // exposing the seam between them as a smeared double
-                    // edge for as long as it was held down.
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 4)
-                }
-                .padding(.horizontal, 20).padding(.bottom, 20)
-                .kidContentColumn(kid.contentMaxWidth)
+        .fullScreenCover(item: $playing) { p in
+            LibraryPlayerView(lesson: p.lesson, subtitle: p.bundle.name) {
+                store.finishToday(childId, p.bundle)
             }
         }
-        .statusBarHidden()
     }
 
-    private func circleButton(icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(KidTheme.ink)
-                .frame(width: 42, height: 42)
-                .background(.white)
-                .clipShape(Circle())
-                .overlay(Circle().strokeBorder(KidTheme.ink, lineWidth: 2.5))
+    private func card(_ bundle: LibraryBundle) -> some View {
+        let today = store.todayLesson(childId, bundle)
+        let finished = store.isFinished(childId, bundle)
+        let doneToday = store.isDoneToday(childId, bundle)
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(bundle.name)
+                    .font(Typography.display(kid.of(20, 24), weight: .heavy))
+                    .foregroundStyle(KidTheme.ink)
+                Text("Lesson \(min(store.finishedCount(childId, bundle) + 1, bundle.lessons.count)) of \(bundle.lessons.count)")
+                    .font(Typography.font(kid.of(13, 15), weight: .semibold))
+                    .foregroundStyle(KidTheme.inkSoft)
+            }
+            LibraryBundleCover(bundle: bundle, lesson: today, cornerRadius: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(finished ? "You finished this bundle!" : "Today: \(today.title)")
+                    .font(Typography.font(kid.of(16, 18), weight: .bold))
+                    .foregroundStyle(KidTheme.ink)
+                Text("\(today.channel) on YouTube")
+                    .font(Typography.font(kid.of(13, 14), weight: .semibold))
+                    .foregroundStyle(KidTheme.inkSoft)
+            }
+
+            if finished {
+                cta("Bundle finished!", icon: "star.fill", enabled: false)
+            } else if doneToday {
+                cta("Done for today", icon: "checkmark", enabled: false)
+            } else {
+                Button { playing = PlayingLesson(bundle: bundle, lesson: today) } label: {
+                    cta("Start today's lesson", icon: "play.fill", enabled: true)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(kid.of(14, 18))
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(KidTheme.cream))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(KidTheme.line))
+    }
+
+    private func cta(_ title: String, icon: String, enabled: Bool) -> some View {
+        Label(title, systemImage: icon)
+            .font(Typography.font(kid.of(16, 18), weight: .heavy))
+            .foregroundStyle(enabled ? .white : KidTheme.greenDeep)
+            .frame(maxWidth: .infinity)
+            .frame(height: kid.of(52, 60))
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(enabled ? KidTheme.greenDeep : KidTheme.greenTint))
     }
 }

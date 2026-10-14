@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct ParentRootView: View {
-    @Environment(SessionManager.self) private var session
-
     var onSwitchMode: () -> Void
     var onSignOut: (() -> Void)? = nil
     @State private var tab = 0
@@ -10,20 +8,20 @@ struct ParentRootView: View {
     var body: some View {
         TabView(selection: $tab) {
             ScreenHome()
-                .tabItem { Label("Home", systemImage: "house.fill") }
+                .tabItem { Image(systemName: "house.fill").accessibilityLabel("Home") }
                 .tag(0)
             ScreenCalendar(isActive: tab == 1)
-                .tabItem { Label("Calendar", systemImage: "calendar") }
+                .tabItem { Image(systemName: "calendar").accessibilityLabel("Calendar") }
                 .tag(1)
             ScreenChat()
-                .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
+                .tabItem { Image(systemName: "bubble.left.fill").accessibilityLabel("Chat") }
                 .tag(2)
             ScreenLibrary()
-                .tabItem { Label("Library", systemImage: "book.pages") }
-                .tag(3)
-            ScreenSettings(onSwitchMode: onSwitchMode, onSignOut: onSignOut)
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tabItem { Image(systemName: "books.vertical.fill").accessibilityLabel("Library") }
                 .tag(4)
+            ScreenSettings(onSwitchMode: onSwitchMode, onSignOut: onSignOut)
+                .tabItem { Image(systemName: "gearshape.fill").accessibilityLabel("Settings") }
+                .tag(3)
         }
         .tint(EColor.primary)
         // Any background save that failed (approve, lock, rule edit, …).

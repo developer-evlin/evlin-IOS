@@ -18,24 +18,22 @@ struct EnforcementState: Equatable {
     var isLocked: Bool { !lockReasons.isEmpty }
 
     /// Every reason the device is currently locked. More than one can apply
-    /// at once, and each has to clear on its own: finishing a reflection
-    /// doesn't satisfy outstanding tasks, and vice versa.
+    /// at once, and each has to clear on its own: a parent lifting a manual
+    /// lock doesn't satisfy outstanding tasks, and vice versa.
     var lockReasons: [LockReason]
 
     /// Minutes available today: the day's base allowance plus every
-    /// grant/deduction credited to today, floored at zero.
-    var minutesToday: Int
+    /// grant/deduction credited to today, floored at zero. nil when the
+    /// parent has switched the daily limit off — no limit, not zero.
+    var minutesToday: Int?
 
-    /// Apps blocked by an unresolved block. These are shielded individually
+    /// Catalog app ids blocked right now. These are blocked individually
     /// rather than by the whole-device lock, so they stay blocked even when
     /// `isLocked` is false — "no YouTube until homework is done" is not the
     /// same statement as "the phone is locked".
-    var blockedAppBundleIDs: [String]
+    var blockedAppIDs: [String]
 
     enum LockReason: String, Equatable {
-        /// Priority 0: an assigned reflection hasn't been finished and
-        /// approved. Holds regardless of task status.
-        case openReflection
         /// At least one task that gates apps isn't approved yet.
         case unfinishedTasks
         /// A parent locked it by hand.
@@ -89,28 +87,65 @@ enum EnforcementCalculator {
     }
 }
 
+/// One app blocked right now, with the server's own wording for why.
+struct BlockedApp: Equatable, Identifiable {
+    let id: String          // the block's id
+    let appId: String?
+    let name: String
+    let detail: String      // "until 'Homework' is approved"
+}
+
+extension EnforcementState.LockReason {
+    /// The policy's names for the same reasons.
+    init?(policyName: String) {
+        switch policyName {
+        case "unfinished_tasks": self = .unfinishedTasks
+        case "manual_lock": self = .manualLock
+        default: return nil
+        }
+    }
+}
+
 extension LocalStore {
     /// Reads the cache and answers both questions at once.
+    ///
+    /// Today's policy from the server is the answer when it's cached — the
+    /// same computation the parent's side sees, rather than a second copy
+    /// of the rules. With none for today (a new day while offline), it's
+    /// worked out here from the cached rows, as before.
     ///
     /// `dueDate`/`creditedDate` are the child's own local day, not the
     /// server's — the same string format the rest of the cache is keyed by.
     func enforcementState(childId: String, day: Date = Date()) -> EnforcementState {
         let dayKey = CalendarSync.isoDay(day)
+        let blocked = Array(Set(blockedNow(childId: childId, at: day).compactMap(\.appId)))
+
+        if let policy = cachedPolicy(childId: childId), policy.localDate == dayKey {
+            return EnforcementState(
+                lockReasons: policy.lockReasons.compactMap(EnforcementState.LockReason.init(policyName:)),
+                minutesToday: policy.allowanceMinutes,
+                blockedAppIDs: blocked
+            )
+        }
+
         let state = cachedChildState(childId: childId)
 
         var reasons: [EnforcementState.LockReason] = []
 
-        if cachedReflections(childId: childId).contains(where: { $0.isOpen }) {
-            reasons.append(.openReflection)
-        }
-
-        // Only tasks that gate apps count — a task marked "doesn't gate" is
-        // deliberately not a reason to lock anything.
+        // Today's tasks come from the saved task rules (repeat days, start
+        // date), the way the server decides them (CalendarSync.applies), not
+        // only from today's saved occurrences: on a new day with no
+        // connection and the app not opened, there are none yet, and the
+        // phone would have unlocked. An occurrence, where there is one, says
+        // how far the task has got. Only tasks that gate apps count. Reads
+        // only, so a separate process (a Screen Time extension) can use it.
         let occurrences = cachedOccurrences(childId: childId, dueDate: dayKey)
-        let tasksByID = Dictionary(uniqueKeysWithValues: cachedTasks(childId: childId).map { ($0.id, $0) })
-        let gatingUnfinished = occurrences.contains { occ in
-            guard occ.status != "approved" else { return false }
-            return tasksByID[occ.taskId]?.gatesApps ?? true
+        let occurrenceByTask = Dictionary(occurrences.map { ($0.taskId, $0) }, uniquingKeysWith: { a, _ in a })
+        let gatingUnfinished = cachedTasks(childId: childId).contains { task in
+            guard task.gatesApps else { return false }
+            let occurrence = occurrenceByTask[task.id]
+            guard occurrence != nil || CalendarSync.applies(task, on: day) else { return false }
+            return occurrence?.status != "approved"
         }
         if gatingUnfinished && !(state?.taskGateOverride ?? false) {
             reasons.append(.unfinishedTasks)
@@ -129,10 +164,54 @@ extension LocalStore {
             on: day
         )
 
-        let blocked = cachedAppBlocks(childId: childId)
-            .filter { !$0.resolved }
-            .compactMap { $0.appBundleId }
+        return EnforcementState(lockReasons: reasons, minutesToday: minutes, blockedAppIDs: blocked)
+    }
 
-        return EnforcementState(lockReasons: reasons, minutesToday: minutes, blockedAppBundleIDs: blocked)
+    /// What's blocked at `now`, from the cached policy where there is one.
+    ///
+    /// Time moves between syncs, so this doesn't just replay the server's
+    /// list: a block past its end drops off, and scheduled windows are
+    /// evaluated here, in the child's zone, so "no games after 7" starts at
+    /// 7 whether or not the device synced at 7.
+    func blockedNow(childId: String, at now: Date = Date()) -> [BlockedApp] {
+        guard let policy = cachedPolicy(childId: childId) else {
+            return cachedAppBlocks(childId: childId).filter { $0.isActive(at: now) }.map {
+                BlockedApp(id: $0.id, appId: $0.appId, name: $0.appName, detail: $0.summary ?? "")
+            }
+        }
+        let zone = TimeZone(identifier: policy.timezone) ?? .current
+        var result: [BlockedApp] = policy.blockedNow.filter { $0.kind != "scheduled" }.compactMap { b in
+            if let until = b.until.flatMap(CalendarSync.parseISO), until <= now { return nil }
+            return BlockedApp(id: b.blockId, appId: b.appId, name: b.appName, detail: b.description)
+        }
+        for s in policy.scheduledBlocks {
+            guard let end = Self.windowEnd(days: s.days, start: s.start, end: s.end, at: now, zone: zone) else { continue }
+            let f = DateFormatter(); f.timeZone = zone; f.dateFormat = "HH:mm"
+            result.append(BlockedApp(id: s.blockId, appId: s.appId, name: s.appName, detail: "until \(f.string(from: end))"))
+        }
+        return result
+    }
+
+    /// If `now` is inside the weekly window, when that window ends. A
+    /// window belongs to the day it starts on, so an overnight one is still
+    /// running after midnight — the same rule as the server's blocks.py.
+    static func windowEnd(days: String, start: String, end: String, at now: Date, zone: TimeZone) -> Date? {
+        guard let s = BlockDraft.clock(start), let e = BlockDraft.clock(end), s != e else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = zone
+        let codes = Set(days.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
+        let mondayFirst = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        func code(_ d: Date) -> String { mondayFirst[(cal.component(.weekday, from: d) + 5) % 7] }
+        func at(_ day: Date, _ minutes: Int) -> Date {
+            cal.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: day) ?? day
+        }
+        let today = cal.startOfDay(for: now)
+        for back in 0...1 {
+            guard let day = cal.date(byAdding: .day, value: -back, to: today), codes.contains(code(day)) else { continue }
+            let startAt = at(day, s)
+            let endAt = e > s ? at(day, e) : at(cal.date(byAdding: .day, value: 1, to: day) ?? day, e)
+            if startAt <= now && now < endAt { return endAt }
+        }
+        return nil
     }
 }

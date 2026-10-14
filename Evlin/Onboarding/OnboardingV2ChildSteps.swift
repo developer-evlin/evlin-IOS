@@ -21,7 +21,6 @@ struct ChildProfileStep: View {
     @Binding var name: String
     @Binding var ageRange: String?
     @Binding var gender: String?
-    @Binding var pickedAvatar: UIImage?
     let onContinue: () -> Void
     var onBack: (() -> Void)? = nil
 
@@ -55,9 +54,6 @@ struct ChildProfileStep: View {
             onBack: onBack,
             content: {
                 VStack(spacing: 13) {
-                    OnboardingV2PhotoAvatarPicker(name: name, pickedImage: $pickedAvatar, accent: kidGreen)
-                        .padding(.bottom, 1)
-
                     VStack(alignment: .leading, spacing: 6) {
                         Text("NAME").onboardingV2FieldLabel()
                         OnboardingV2FieldBox {
@@ -67,6 +63,10 @@ struct ChildProfileStep: View {
                                 .tint(kidGreen)
                                 .textInputAutocapitalization(.words)
                                 .autocorrectionDisabled()
+                                // Return goes on, so the keyboard never
+                                // stands between the kid and the next step.
+                                .submitLabel(.continue)
+                                .onSubmit { if canContinue { onContinue() } }
                         }
                     }
                     VStack(alignment: .leading, spacing: 6) {
@@ -119,11 +119,11 @@ struct ChildShowCodeStep: View {
             content: {
                 VStack(spacing: 22) {
                     VStack(spacing: 8) {
-                        Text("Link to Parent")
+                        Text("Parents: Connect This Device")
                             .onboardingV2TitleL()
                             .fontWeight(.bold)
                             .multilineTextAlignment(.center)
-                        Text("On your parent's phone, open Evlin, then scan this QR code or type the code below.")
+                        Text("Parents: Open Evlin on your phone, then scan this QR code or enter the 6-digit code below.")
                             .onboardingV2Body()
                             .multilineTextAlignment(.center)
                     }
@@ -136,7 +136,7 @@ struct ChildShowCodeStep: View {
                             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Waiting for your parent…")
+                            Text("Waiting for parent to connect…")
                                 .onboardingV2BodyXS()
                         }
                     } else if errorText == nil {
@@ -434,9 +434,13 @@ struct ChildNotificationsStep: View {
 // MARK: - 12 · Choose what to lock
 
 struct ChildLockableHubStep: View {
-    // Moved back to local @State to prevent the Coordinator from instantiating it
-    // too early and causing an unsafeForcedSync XPC deadlock on launch.
-    @State private var selection = FamilyActivitySelection()
+    // Lazy: created on first picker open, not during view construction.
+    // FamilyActivitySelection() triggers a synchronous XPC call to the
+    // FamilyControls daemon — on a first install the daemon is cold and
+    // that call can block the main thread for tens of seconds, freezing
+    // the entire app. Keeping it nil until the user taps "Choose Apps"
+    // defers that cost to a moment where a brief spinner is expected.
+    @State private var selection: FamilyActivitySelection?
     let onContinue: () -> Void
     var onBack: (() -> Void)? = nil
 
@@ -453,9 +457,10 @@ struct ChildLockableHubStep: View {
     @State private var pickerOpenedOnce = false
 
     private var totalSelected: Int {
-        selection.applicationTokens.count
-        + selection.categoryTokens.count
-        + selection.webDomainTokens.count
+        guard let selection else { return 0 }
+        return selection.applicationTokens.count
+            + selection.categoryTokens.count
+            + selection.webDomainTokens.count
     }
 
     private var canContinue: Bool { totalSelected > 0 || pickerOpenedOnce }
@@ -505,7 +510,7 @@ struct ChildLockableHubStep: View {
                                     .font(Evlin.Typography.font(14, weight: .semibold))
                                     .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
                                 Spacer()
-                                Button("Change") { showPicker = true; pickerOpenedOnce = true }
+                                Button("Change") { if selection == nil { selection = FamilyActivitySelection() }; showPicker = true; pickerOpenedOnce = true }
                                     .font(OnboardingV2Theme.Typography.bodyXS)
                                     .foregroundStyle(kidGreen)
                             }
@@ -514,6 +519,7 @@ struct ChildLockableHubStep: View {
 
                     if totalSelected == 0 {
                         OnboardingV2PrimaryButton("Choose Apps & Categories", role: .child) {
+                            if selection == nil { selection = FamilyActivitySelection() }
                             showPicker = true
                             pickerOpenedOnce = true
                         }
@@ -530,7 +536,10 @@ struct ChildLockableHubStep: View {
             headerText: "Select apps your parent can manage",
             footerText: "You can change these later.",
             isPresented: $showPicker,
-            selection: $selection
+            selection: Binding(
+                get: { selection ?? FamilyActivitySelection() },
+                set: { selection = $0 }
+            )
         )
     }
 }
@@ -559,6 +568,106 @@ struct ChildFamilySharingAskStep: View {
                 VStack(spacing: 10) {
                     OnboardingV2PrimaryButton("Yes, we use Family Sharing", role: .child, action: onYes)
                     OnboardingV2SecondaryButton("No, set up without it", action: onNo)
+                }
+            }
+        )
+    }
+}
+
+// MARK: - 12c · Lock choice (no Family Sharing yet)
+
+// Families without Family Sharing pick how Evlin gets locked in. The PIN is
+// the fast path, but it's only as safe as the four digits — a kid who sees
+// or guesses it can switch Evlin off or delete it. Family Sharing puts the
+// approval on the parent's own phone, so it's offered first.
+struct ChildLockChoiceStep: View {
+    let kidName: String
+    let onFamilySharing: () -> Void
+    let onPIN: () -> Void
+    var onBack: (() -> Void)? = nil
+
+    private var kid: String {
+        let trimmed = kidName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "your kid" : trimmed
+    }
+
+    var body: some View {
+        OnboardingV2ScreenContainer(
+            embeddedRole: .child,
+            phase: "5 · Safety",
+            stepIndex: 10,
+            stepTotal: childTotal,
+            title: "How should we lock Evlin in?",
+            subtitle: "Something has to stop \(kid) from turning Evlin off. Pick one.",
+            onBack: onBack,
+            content: {
+                VStack(alignment: .leading, spacing: Spacing.lg) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        OnboardingV2Badge("More reliable", style: .success)
+                        OnboardingV2ChoiceCard(
+                            emoji: "👨‍👩‍👧",
+                            title: "Set up Family Sharing",
+                            subtitle: "Changes need your approval from your own iPhone. Takes about 10 minutes.",
+                            selected: false,
+                            role: .child,
+                            action: onFamilySharing
+                        )
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        OnboardingV2Badge("Quick, but risky", style: .warn)
+                        OnboardingV2ChoiceCard(
+                            emoji: "🔢",
+                            title: "Screen Time PIN",
+                            subtitle: "Done in a minute. But if \(kid) sees or guesses the PIN, they can turn Evlin off or delete it.",
+                            selected: false,
+                            role: .child,
+                            action: onPIN
+                        )
+                    }
+                }
+            },
+            footer: { EmptyView() }
+        )
+    }
+}
+
+// MARK: - 12d · Family Sharing setup
+
+// Only instructions: there's no API to check Family Sharing membership, so
+// "I've set it up" is taken on trust, same as the PIN step. The PIN stays
+// reachable from here for a parent who gets halfway and gives up.
+struct ChildFamilySharingSetupStep: View {
+    let kidName: String
+    let onDone: () -> Void
+    let onUsePIN: () -> Void
+    var onBack: (() -> Void)? = nil
+
+    private var kid: String {
+        let trimmed = kidName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "your kid" : trimmed
+    }
+
+    var body: some View {
+        OnboardingV2ScreenContainer(
+            embeddedRole: .child,
+            phase: "5 · Safety",
+            stepIndex: 10,
+            stepTotal: childTotal,
+            title: "Set up Family Sharing",
+            subtitle: "Do this on your own iPhone, then come back here.",
+            onBack: onBack,
+            content: {
+                VStack(alignment: .leading, spacing: Spacing.lg) {
+                    OnboardingV2NumberedStep(number: 1, text: "On your iPhone, open Settings → your name → Family")
+                    OnboardingV2NumberedStep(number: 2, text: "Tap Add Member and add \(kid) (create a child account if they don't have one)")
+                    OnboardingV2NumberedStep(number: 3, text: "Make sure this device is signed in with \(kid)'s Apple Account")
+                    OnboardingV2NumberedStep(number: 4, text: "In Family, tap \(kid) → Screen Time and turn it on")
+                }
+            },
+            footer: {
+                VStack(spacing: 10) {
+                    OnboardingV2PrimaryButton("I've set it up", role: .child, action: onDone)
+                    OnboardingV2SecondaryButton("Use a PIN instead", action: onUsePIN)
                 }
             }
         )

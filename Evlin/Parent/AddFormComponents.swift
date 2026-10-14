@@ -9,7 +9,7 @@ private let formBottomAnchorID = "form-bottom-anchor"
 private let formTopAnchorID = "form-top-anchor"
 
 // Lets a field buried inside FormShell's content (MoreOptions expanding,
-// TaskWhenField revealing its date/time pickers, a multi-line Notes/"What
+// TaskDeadlineField revealing its time picker, a multi-line Notes/"What
 // to do" field growing another line) ask the sheet to re-run its
 // keyboard-avoidance scroll after growing taller. Without this, the
 // scroll-to-bottom only ever fires once, on keyboardWillShowNotification —
@@ -55,6 +55,18 @@ extension EnvironmentValues {
     }
 }
 
+// The form's first field (the name) reports when it has focus, so the
+// keyboard keeps it in view instead of scrolling down to the last field.
+private struct FormTopFieldFocusKey: EnvironmentKey {
+    static let defaultValue: (Bool) -> Void = { _ in }
+}
+extension EnvironmentValues {
+    var formTopFieldFocused: (Bool) -> Void {
+        get { self[FormTopFieldFocusKey.self] }
+        set { self[FormTopFieldFocusKey.self] = newValue }
+    }
+}
+
 enum FormGreen {
     static let fieldBg = Color(hex: "F5FAF7")
     static let title = Color(hex: "0F2115")
@@ -89,6 +101,7 @@ struct FormShell<Content: View>: View {
     // that edge case — the scroll-to-bottom mechanism below still brings it
     // into view along with whatever's actively being typed.
     @State private var keyboardVisible = false
+    @State private var topFieldFocused = false
 
     var body: some View {
         // No drag handle here on purpose: these sheets disable interactive
@@ -98,20 +111,19 @@ struct FormShell<Content: View>: View {
         // dodge and "Cancel" can sit right at the top.
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(.plain)
-                    .font(Typography.font(17, weight: .semibold))
-                    .foregroundStyle(FormGreen.accent)
-                    // Bigger than Apple's bare 44pt minimum — the text-only link
-                    // read as small/easy-to-miss even at the minimum tap size,
-                    // so both the font and the hit area are sized up a bit past
-                    // the floor rather than exactly to it. minWidth matters just
-                    // as much as minHeight here: without it the tappable area
-                    // was only as wide as the word "Cancel" itself, so a tap a
-                    // few points to its right (still well inside this row's
-                    // empty-looking leading corner) missed entirely.
-                    .frame(minWidth: 72, minHeight: 48, alignment: .leading)
-                    .contentShape(Rectangle())
+                // A close button in the iOS sheet style: a small x on a soft
+                // circle, with a full 48pt tap area around it.
+                Button(action: onCancel) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                        .frame(width: 34, height: 34)
+                        .background(EColor.surfaceContainerHigh, in: Circle())
+                        .frame(width: 48, height: 48, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cancel")
 
                 Spacer(minLength: 12)
 
@@ -167,8 +179,14 @@ struct FormShell<Content: View>: View {
                     guard visible != keyboardVisible else { return }
                     keyboardVisible = visible
                     if visible {
+                        // Typing the name: keep the top in view. Any later
+                        // field: bring the bottom of the form above the keys.
                         withAnimation(.easeOut(duration: 0.25)) {
-                            proxy.scrollTo(formBottomAnchorID, anchor: .bottom)
+                            if topFieldFocused {
+                                proxy.scrollTo(formTopAnchorID, anchor: .top)
+                            } else {
+                                proxy.scrollTo(formBottomAnchorID, anchor: .bottom)
+                            }
                         }
                     }
                 }
@@ -177,6 +195,7 @@ struct FormShell<Content: View>: View {
                         proxy.scrollTo(formBottomAnchorID, anchor: .bottom)
                     }
                 })
+                .environment(\.formTopFieldFocused) { topFieldFocused = $0 }
                 .environment(\.scrollFormToTop, {
                     withAnimation(.easeOut(duration: 0.25)) {
                         proxy.scrollTo(formTopAnchorID, anchor: .top)
@@ -250,6 +269,7 @@ struct FormTextField: View {
     var scrollToTopOnFocus: Bool = false
     @FocusState private var focused: Bool
     @Environment(\.scrollFormToTop) private var scrollFormToTop
+    @Environment(\.formTopFieldFocused) private var formTopFieldFocused
 
     var body: some View {
         TextField(placeholder, text: $text)
@@ -261,9 +281,11 @@ struct FormTextField: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .focused($focused)
             .onChange(of: focused) { _, isFocused in
-                guard scrollToTopOnFocus, isFocused else { return }
-                scrollFormToTop()
+                guard scrollToTopOnFocus else { return }
+                formTopFieldFocused(isFocused)
+                if isFocused { scrollFormToTop() }
             }
+
     }
 }
 
@@ -334,118 +356,80 @@ struct FlowLayout: Layout {
     }
 }
 
-// Mint-boxed date/time fields, side by side (mirrors the native
-// <input type="date"> + <input type="time"> pairing).
-struct FormDateTimeRow: View {
-    @Binding var date: Date
-    @Binding var hasDate: Bool
-    // Any date from here onward — a parent can schedule a task for
-    // whenever it's actually needed, not just today or tomorrow. Defaults
-    // to real "today," but Calendar's own Add Task (whose day numbering
-    // is the mock day being viewed, not necessarily today's real date)
-    // widens this so that day is always pickable.
-    var minDate: Date = Calendar.current.startOfDay(for: Date())
-
-    private var dateRange: PartialRangeFrom<Date> { minDate... }
-
-    var body: some View {
-        // Already functionally optional (canSave only requires a title —
-        // leaving these pickers untouched just leaves hasDate false), but
-        // the label didn't say so, and two always-visible, pre-filled-to-
-        // today date/time boxes read as required at a glance.
-        FormField(label: "When (optional)") {
-            HStack(spacing: 8) {
-                dateBox
-                timeBox
-            }
-        }
-    }
-
-    private var dateBox: some View {
-        HStack {
-            DatePicker("", selection: $date, in: dateRange, displayedComponents: .date)
-                .labelsHidden()
-                .onChange(of: date) { _, _ in hasDate = true }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
-        .frame(maxWidth: .infinity)
-        .background(FormGreen.fieldBg)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private var timeBox: some View {
-        HStack {
-            DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .onChange(of: date) { _, _ in hasDate = true }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
-        .frame(maxWidth: .infinity)
-        .background(FormGreen.fieldBg)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-}
-
-// The shared "When" field for the Add Task mechanism — Calendar's own Add
-// Task and a profile's Add Task use this exact same field now, not two
-// different ideas of what "when" means (one used to offer a same-day
-// Anytime/set-time toggle, the other a real date picker). A task either
-// has no due date at all, or a real date + time picked from
-// FormDateTimeRow — nothing collapsed under More Options is hidden until
-// a parent actually taps in, so an empty form never reads as "already
-// scheduled."
-struct TaskWhenField: View {
-    @Binding var hasDueDate: Bool
-    @Binding var dueDate: Date
-    // What "Add a date & time" seeds the picker with, and the earliest
-    // date the picker itself allows — both default to real "now," which
-    // is right for a profile's own Add Task (a real due date). Calendar's
-    // Add Task overrides both to the mock day actually being viewed,
-    // since that day's number has nothing to do with the real calendar.
-    var defaultDate: Date = Date()
-    var minDate: Date = Calendar.current.startOfDay(for: Date())
+// A task's deadline, as a time of day only. Every task form uses it: the
+// day is always decided elsewhere (Home's Today / Tomorrow tab, the day
+// open on the calendar, or the task's own day when editing), so it never
+// asks for a date. "Add a deadline" reveals a time picker; ✕ removes it,
+// leaving the task with no set time that day.
+struct TaskDeadlineField: View {
+    @Binding var hasDeadline: Bool
+    @Binding var time: Date
+    // The task's day: where the picker starts depends on it.
+    var day: Date
     @Environment(\.scrollFormToBottom) private var scrollFormToBottom
 
+    // Where the picker starts when a deadline is added: the next whole
+    // hour if that's still on the task's day, else 6 PM that day.
+    static func defaultTime(on day: Date) -> Date {
+        let cal = Calendar.current
+        let nextHour = cal.date(byAdding: .hour, value: 1, to: Date()).flatMap {
+            cal.date(bySetting: .minute, value: 0, of: $0)
+        } ?? Date()
+        if cal.isDate(nextHour, inSameDayAs: day) { return nextHour }
+        return cal.date(bySettingHour: 18, minute: 0, second: 0, of: day) ?? day
+    }
+
+    // The picked time on the task's day: the moment the task is due.
+    static func moment(_ time: Date, on day: Date) -> Date {
+        let cal = Calendar.current
+        let c = cal.dateComponents([.hour, .minute], from: time)
+        return cal.date(bySettingHour: c.hour ?? 0, minute: c.minute ?? 0, second: 0, of: day) ?? day
+    }
+
     var body: some View {
-        if hasDueDate {
-            VStack(alignment: .leading, spacing: 10) {
-                FormDateTimeRow(date: $dueDate, hasDate: $hasDueDate, minDate: minDate)
-                Button("Remove date") { hasDueDate = false }
-                    .buttonStyle(.plain)
-                    .font(Typography.font(14, weight: .bold))
-                    .foregroundStyle(EColor.danger)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+        FormField(label: "Deadline") {
+            if hasDeadline {
+                HStack(spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(FormGreen.accent)
+                        Text("Due by")
+                            .font(Typography.font(14, weight: .semibold))
+                            .foregroundStyle(EColor.onSurface)
+                        Spacer(minLength: 4)
+                        DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                    }
+                    .padding(.leading, 14).padding(.trailing, 8)
+                    .frame(height: 48)
                     .background(FormGreen.fieldBg)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-        } else {
-            FormField(label: "When") {
-                Button {
-                    dueDate = defaultDate
-                    hasDueDate = true
-                    // Combining this with the state change in one
-                    // withAnimation block was tried (scrollTo, called
-                    // inside an active animation, is *supposed* to resolve
-                    // against the transaction's post-layout geometry) —
-                    // measured against a real device, it undershot just
-                    // like calling it with no delay at all: TaskWhenField
-                    // is nested several views below the ScrollView, and by
-                    // the time scrollTo actually runs, that layout hasn't
-                    // propagated up to the ScrollView's own content size
-                    // yet. This delay is empirically the fix that's
-                    // actually been verified to work — don't remove it
-                    // without re-verifying on a real device, not just a
-                    // pre-expanded-from-launch simulator screenshot.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        scrollFormToBottom()
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) { hasDeadline = false }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                            .frame(width: 48, height: 48)
+                            .background(FormGreen.fieldBg)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Remove deadline")
+                }
+            } else {
+                Button {
+                    time = Self.defaultTime(on: day)
+                    withAnimation(.easeInOut(duration: 0.16)) { hasDeadline = true }
+                    // The added row needs a beat to reach the ScrollView's
+                    // content size before the form can scroll to it.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { scrollFormToBottom() }
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "plus.circle.fill").font(.system(size: 16))
-                        Text("Add a date & time").font(Typography.font(14, weight: .semibold))
+                        Text("Add a deadline").font(Typography.font(14, weight: .semibold))
                     }
                     .foregroundStyle(FormGreen.accent)
                     .padding(.horizontal, 14)
@@ -585,7 +569,11 @@ struct MoreOptions<Content: View>: View {
                         .rotationEffect(.degrees(open ? 90 : 0))
                 }
                 .padding(.vertical, 14)
-                .overlay(Divider(), alignment: .top)
+                // A Rectangle, not Divider: in an HStack's overlay a
+                // Divider draws vertical, down the middle of the row.
+                .overlay(alignment: .top) {
+                    Rectangle().fill(EColor.outlineVariant).frame(height: 0.5)
+                }
             }
             .buttonStyle(.plain)
 
@@ -597,15 +585,12 @@ struct MoreOptions<Content: View>: View {
     }
 }
 
-// MARK: - Shared "Add Task" mechanism — Calendar's own Add Task and a
-// child's profile Add Task are the exact same form (title, an optional
-// For picker, Repeats, More options, What to do), not two copies that
-// happen to look alike and can quietly drift apart. Only two things are
-// legitimately different per caller: whether a child still needs picking
-// (a profile's add-task is already scoped to one child; the calendar's
-// isn't), and what "due" even means there (see `when`) — everything else,
-// including the FormShell chrome itself, lives here once.
-struct AddTaskFormFields<When: View>: View {
+// MARK: - Add Task form
+
+// The one Add Task form, used by Home and the calendar: name, which child
+// (only when not already fixed), Repeats, and under More options a
+// deadline time and instructions. The day comes from the caller.
+struct AddTaskFormFields: View {
     var title: String
     var saveLabel: String
     // nil shows the For picker (Calendar's case); a real child hides it
@@ -615,10 +600,13 @@ struct AddTaskFormFields<When: View>: View {
     @Binding var personId: String
     @Binding var whatToDo: String
     @Binding var repeatDays: Set<String>
+    @Binding var hasDeadline: Bool
+    @Binding var deadline: Date
+    // The day the task lands on.
+    var day: Date
     var canSave: Bool
     var onCancel: () -> Void
     var onSave: () -> Void
-    @ViewBuilder var when: () -> When
     @Environment(\.scrollFormToBottom) private var scrollFormToBottom
 
     var body: some View {
@@ -627,16 +615,11 @@ struct AddTaskFormFields<When: View>: View {
                 FormTextField(placeholder: "e.g. Make your bed", text: $taskTitle, scrollToTopOnFocus: true)
             }
             if fixedChild == nil {
-                // Children only — a Task, unlike an Event, structurally
-                // belongs to a child in the backend (submission/approval,
-                // a non-nullable child_id) and there's no one to review a
-                // parent's own task. This form is used only for creating
-                // Tasks (the calendar's own event picker is separate and
-                // does include the parent — see AddCalendarEventForm), so
-                // that's the one place "assign to myself" is meant to work.
+                // Which child. Evlin manages the children only, so the
+                // choices are the children (CalendarData.people).
                 FormField(label: "For") {
                     FlowChips {
-                        ForEach(CalendarData.people.filter { $0.id != "family" }) { p in
+                        ForEach(CalendarData.people) { p in
                             DotChip(label: p.name, color: p.color, selected: personId == p.id) { personId = p.id }
                         }
                     }
@@ -644,7 +627,7 @@ struct AddTaskFormFields<When: View>: View {
             }
             RepeatPicker(selectedDays: $repeatDays)
             MoreOptions {
-                when()
+                TaskDeadlineField(hasDeadline: $hasDeadline, time: $deadline, day: day)
                 FormField(label: "What to do") {
                     TextField("Instructions…", text: $whatToDo, axis: .vertical)
                         .font(Typography.font(15, weight: .regular))
@@ -669,7 +652,7 @@ struct AddTaskFormFields<When: View>: View {
 
 // MARK: - Block target picker
 
-// Search + rows, picking from the shared mockAppCatalog (AppCatalogData.swift).
+// Search + rows, picking from Evlin's app catalog (AppCatalog, loaded from the backend).
 // Used both by chat's one-off "Block an app" card and ScreenProfile's
 // standing "Blocked Apps" rule, so a parent picks from the identical list
 // either way. Only the top 3 ever show without a query — search is the only
@@ -684,7 +667,8 @@ struct AddTaskFormFields<When: View>: View {
 // offer what this picker can actually show a real icon for.
 struct BlockTargetPicker: View {
     @Binding var query: String
-    @Binding var selectedApps: Set<UUID>
+    /// Catalog app ids.
+    @Binding var selectedApps: Set<String>
     var accent: Color = EColor.danger
 
     @Environment(\.isEnabled) private var isEnabled
@@ -693,12 +677,18 @@ struct BlockTargetPicker: View {
 
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    private var filteredApps: [MockApp] {
-        guard isSearching else { return mockAppCatalog }
-        return mockAppCatalog.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    private var catalog: [ApiApp] { AppCatalog.shared.apps }
+
+    /// Aliases count too: searching "yt" finds YouTube.
+    private var filteredApps: [ApiApp] {
+        guard isSearching else { return catalog }
+        return catalog.filter { app in
+            app.name.localizedCaseInsensitiveContains(query)
+                || app.aliases.contains { $0.localizedCaseInsensitiveContains(query) }
+        }
     }
 
-    private var visibleApps: [MockApp] {
+    private var visibleApps: [ApiApp] {
         isSearching ? filteredApps : Array(filteredApps.prefix(topCount))
     }
 
@@ -715,21 +705,24 @@ struct BlockTargetPicker: View {
 
             VStack(spacing: 6) {
                 ForEach(visibleApps) { app in
-                    targetRow(title: app.name, bundleID: app.bundleID, selected: selectedApps.contains(app.id)) { toggleApp(app) }
+                    targetRow(title: app.name, selected: selectedApps.contains(app.id)) { toggleApp(app) }
                 }
                 if !isSearching, filteredApps.count > topCount {
                     searchHint(noun: "app")
                 }
             }
         }
-        // Warms every app's icon the moment this picker appears — the
-        // catalog is only 8 apps, so this is cheap, and it means typing
-        // into search never has to wait on a fresh lookup for anything
-        // that could possibly match. See ITunesLookup.prefetchAll.
-        .task { ITunesLookup.prefetchAll(bundleIDs: mockAppCatalog.map(\.bundleID)) }
+        // Loads the catalog, then warms every app's icon — a few dozen
+        // apps, so this is cheap, and typing into search never waits on a
+        // fresh lookup for anything that could match. See
+        // ITunesLookup.prefetchAll.
+        .task {
+            await AppCatalog.shared.load()
+            ITunesLookup.prefetchAll(appNames: AppCatalog.shared.apps.map(\.name))
+        }
     }
 
-    private func toggleApp(_ app: MockApp) {
+    private func toggleApp(_ app: ApiApp) {
         guard isEnabled else { return }
         withAnimation(.easeOut(duration: 0.12)) {
             if selectedApps.contains(app.id) { selectedApps.remove(app.id) } else { selectedApps.insert(app.id) }
@@ -745,10 +738,10 @@ struct BlockTargetPicker: View {
     // was standing in for (telling two similarly-named apps apart), and
     // a raw identifier like "com.zhiliaoapp.musically" routinely wrapped to
     // two lines and crowded the row below it.
-    private func targetRow(title: String, bundleID: String, selected: Bool, onTap: @escaping () -> Void) -> some View {
+    private func targetRow(title: String, selected: Bool, onTap: @escaping () -> Void) -> some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                AppIconView(bundleID: bundleID)
+                AppIconView(appName: title)
                 Text(title).font(Typography.font(15, weight: .semibold)).foregroundStyle(EColor.onSurface)
                 Spacer(minLength: 8)
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")

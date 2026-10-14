@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import AVFoundation
 
 private let taskDetailBottomAnchorID = "task-detail-bottom-anchor"
 
@@ -30,20 +29,12 @@ private struct CapturedPhoto: Identifiable, Equatable {
 
 struct TaskDetailView: View {
     let task: KidTask
-    var onComplete: (_ photoCount: Int, _ note: String?, _ hasVoiceNote: Bool) -> Void
-    var onRequestBypass: (String, Bool) -> Void = { _, _ in }
+    var onComplete: (_ photoCount: Int, _ note: String?) -> Void
+    var onRequestBypass: (String) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var photos: [CapturedPhoto] = []
     @State private var showCamera = false
     @State private var note = ""
-    // The recorded file for a fresh recording made this session — nil
-    // otherwise. hasVoiceNote below also counts a voice note the backend
-    // already has (task.submissionHasVoiceNote, from a reopened task with
-    // nothing local left to hold), so it stays true across relaunch even
-    // though this URL itself doesn't persist.
-    @State private var voiceNoteURL: URL?
-    @State private var voiceUploadState: CapturedPhoto.UploadState = .idle
-    private var hasVoiceNote: Bool { voiceNoteURL != nil || task.submissionHasVoiceNote }
     @State private var submitted: Bool
     // Distinguishes "just tapped All done! this session" (a brief fresh-
     // confirmation beat) from "reopened an already-done task" (goes
@@ -52,11 +43,15 @@ struct TaskDetailView: View {
     // evidence is still pending review — that's the parent's business, not
     // something to make the kid sit and wonder about.
     @State private var justSubmitted = false
+    // Pops the big tick in once the submitted screen is up.
+    @State private var celebrate = false
+    // Haptics at the kid's own tap, the moment it's sent: success for a
+    // task sent in, a soft tap for asking to skip.
+    @State private var sentTick = 0
+    @State private var skipSentTick = 0
     @State private var showBypassSheet = false
     @State private var bypassSent = false
     @State private var viewerIndex: Int?
-    @State private var courseAssignment: ApiCourseAssignment?
-    @State private var courseFullyDone = false
     // Drives the note field's tap-to-dismiss below — see the guarded
     // simultaneousGesture on the ScrollView's content for why this exists
     // instead of the blanket dismissKeyboardOnTap() this screen used to
@@ -86,7 +81,7 @@ struct TaskDetailView: View {
     // created. Photos themselves load separately (see .task below) — a
     // reopened task has no local UIImage any more, only what the backend
     // has, so they can't be seeded synchronously here.
-    init(task: KidTask, onComplete: @escaping (_ photoCount: Int, _ note: String?, _ hasVoiceNote: Bool) -> Void, onRequestBypass: @escaping (String, Bool) -> Void = { _, _ in }) {
+    init(task: KidTask, onComplete: @escaping (_ photoCount: Int, _ note: String?) -> Void, onRequestBypass: @escaping (String) -> Void = { _ in }) {
         self.task = task
         self.onComplete = onComplete
         self.onRequestBypass = onRequestBypass
@@ -101,17 +96,12 @@ struct TaskDetailView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         if bypassSent {
                             bypassSentCard
-                        } else if let assignment = courseAssignment, !submitted {
-                            // A special task is finished by finishing its
-                            // course, so the camera/voice flow doesn't apply
-                            // — this is the first submission kind that
-                            // genuinely branches (photo and voice are both
-                            // offered unconditionally today).
-                            courseTaskContent(assignment)
                         } else if !submitted {
-                            notYetSubmittedContent
+                            VStack(alignment: .leading, spacing: 0) { notYetSubmittedContent }
+                                .transition(.asymmetric(insertion: .opacity, removal: .opacity.combined(with: .offset(y: -20))))
                         } else {
-                            submittedContent
+                            VStack(alignment: .leading, spacing: 0) { submittedContent }
+                                .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.94, anchor: .top)), removal: .opacity))
                         }
 
                         // Nothing sits below "Add a note" but the (short) rest
@@ -160,13 +150,9 @@ struct TaskDetailView: View {
         // touch — see SwipeToDismiss's own doc comment.
         .swipeToDismiss(interactive: false) { dismiss() }
         .task {
-            await reloadCourseAssignment()
             guard let occurrenceId = task.occurrenceId else { return }
             await loadExistingSubmissions(occurrenceId: occurrenceId)
             resumePendingUploads()
-        }
-        .onChange(of: voiceNoteURL) { _, newValue in
-            if let newValue { uploadVoiceNote(fileURL: newValue) }
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraCapture(
@@ -194,75 +180,40 @@ struct TaskDetailView: View {
         .fullScreenCover(isPresented: $showBypassSheet) {
             BypassRequestSheet(
                 taskTitle: task.title,
-                occurrenceId: task.occurrenceId,
-                onSend: { reason, hasVoice in
+                onSend: { reason in
+                    skipSentTick += 1
                     showBypassSheet = false
                     bypassSent = true
-                    onRequestBypass(reason, hasVoice)
+                    onRequestBypass(reason)
                 },
                 onCancel: { showBypassSheet = false }
             )
         }
+        // Felt the instant the kid sends it, not when the tick has finished
+        // popping in.
+        .sensoryFeedback(.success, trigger: sentTick)
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.7), trigger: skipSentTick)
     }
 
     // MARK: - Not-yet-submitted flow (capture + note + "All done!")
 
-    /// A special task: watch the course, answer its quizzes, hand in. The
-    /// backend refuses the submission until the course is actually finished,
-    /// so the button here matches that rather than letting them tap it and
-    /// get an error.
-    @ViewBuilder private func courseTaskContent(_ assignment: ApiCourseAssignment) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            if bonusMinutesForTask > 0 {
-                HStack(spacing: 8) {
-                    Image(systemName: "hourglass")
-                        .foregroundStyle(KidTheme.greenDeep)
-                    Text("Finish this to earn \(bonusMinutesForTask) more minutes")
-                        .font(Typography.font(15, weight: .bold))
-                        .foregroundStyle(KidTheme.ink)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(KidTheme.greenTint))
-            }
-
-            CourseFlowView(assignment: assignment) {
-                await reloadCourseAssignment()
-            }
-
-            Button {
-                justSubmitted = true
-                submitted = true
-            } label: {
-                Text("All done!")
-                    .font(Typography.display(18, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Capsule().fill(courseFullyDone ? KidTheme.greenDeep : KidTheme.mutedBorder))
-            }
-            .buttonStyle(.plain)
-            .disabled(!courseFullyDone)
+    /// Hands the task in the moment the kid says they're done.
+    ///
+    /// The submit used to ride on "Back to today", so the other two ways out
+    /// of this screen — the Back button and a swipe down — closed it after
+    /// it had already said "submitted", and nothing ever reached the server:
+    /// the task sat at pending and the parent saw "waiting". Called again
+    /// after "Redo this", which is a real resubmission.
+    private func handIn() {
+        noteFocused = false
+        celebrate = false
+        sentTick += 1
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
+            submitted = true
+            justSubmitted = true
         }
-        .padding(.top, 12)
-    }
-
-    private var bonusMinutesForTask: Int {
-        guard let childId = SessionManager.shared.activeChildId else { return 0 }
-        return LocalStore.shared.cachedTasks(childId: childId)
-            .first { $0.id == task.id }?.bonusMinutes ?? 0
-    }
-
-    private func reloadCourseAssignment() async {
-        guard let childId = SessionManager.shared.activeChildId,
-              let assignmentId = LocalStore.shared.cachedTasks(childId: childId)
-                  .first(where: { $0.id == task.id })?.courseAssignmentId
-        else { return }
-        guard let refreshed = try? await APIClient.shared.fetchCourseAssignments(childId: childId)
-            .first(where: { $0.id == assignmentId }) else { return }
-        courseAssignment = refreshed
-        courseFullyDone = !refreshed.progress.isEmpty
-            && refreshed.progress.allSatisfy { $0.status == "completed" }
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        onComplete(photos.count, trimmed.isEmpty ? nil : trimmed)
     }
 
     @ViewBuilder private var notYetSubmittedContent: some View {
@@ -293,11 +244,6 @@ struct TaskDetailView: View {
                         .font(Typography.font(14, weight: .regular))
                         .foregroundStyle(KidTheme.ink)
                 }
-                if task.redoHasVoiceNote {
-                    Label("They also left a voice note", systemImage: "waveform")
-                        .font(Typography.font(12.5, weight: .bold))
-                        .foregroundStyle(Color(hex: "EA580C"))
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
@@ -305,17 +251,6 @@ struct TaskDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .padding(.top, 16)
         }
-
-        // A photo is always optional — this used to block "All done!" until
-        // at least one was attached, which meant a task that never needed
-        // photo evidence at all (submission_kind == "none"/"voice") still
-        // forced a kid through the camera. The copy reflects that instead
-        // of implying it's required.
-        Text(photos.isEmpty ? "Add a photo if you'd like" : "Add another photo, or you're all set")
-            .font(Typography.display(18, weight: .bold))
-            .foregroundStyle(KidTheme.ink)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 32).padding(.bottom, 16)
 
         if photos.isEmpty {
             Button { showCamera = true } label: {
@@ -332,6 +267,7 @@ struct TaskDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24))
             }
             .buttonStyle(.plain)
+            .padding(.top, 24)
         } else {
             LazyVGrid(columns: photoGridColumns, spacing: 10) {
                 ForEach(photos) { photo in
@@ -374,6 +310,7 @@ struct TaskDetailView: View {
                 }
                 .buttonStyle(.plain)
             }
+            .padding(.top, 24)
         }
 
         Text("Add a note (optional)")
@@ -390,16 +327,13 @@ struct TaskDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .focused($noteFocused)
 
-        KidVoiceRecorderButton(voiceNoteURL: $voiceNoteURL)
-            .padding(.top, 10)
-
         // Elevated "kid" pill per the style guide: mascot green face, a
         // solid green-deep base for the 3D lift — a duplicate offset
         // rectangle behind the face, not a `.shadow()` (which would also
         // shadow the label text itself, ghosting a second copy of it
         // below). Never disabled by photo count any more — a photo is
         // optional, so "All done!" always has to be reachable.
-        Button { submitted = true; justSubmitted = true } label: {
+        Button { handIn() } label: {
             Text("All done!")
                 .font(Typography.display(20, weight: .heavy))
                 .foregroundStyle(.white)
@@ -416,7 +350,7 @@ struct TaskDetailView: View {
                     .compositingGroup()
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(KidPressStyle())
         .padding(.top, photos.isEmpty ? 18 : 22)
         .padding(.bottom, 5)
 
@@ -438,6 +372,25 @@ struct TaskDetailView: View {
     // MARK: - Submitted flow (recap, no "waiting for parent" framing)
 
     @ViewBuilder private var submittedContent: some View {
+        if justSubmitted {
+            ZStack {
+                Circle().fill(KidTheme.green.opacity(0.18)).frame(width: 112, height: 112)
+                    .scaleEffect(celebrate ? 1 : 0.4)
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 76))
+                    .foregroundStyle(KidTheme.green)
+                    .scaleEffect(celebrate ? 1 : 0.2)
+                    .rotationEffect(.degrees(celebrate ? 0 : -30))
+            }
+            .opacity(celebrate ? 1 : 0)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 18)
+            .onAppear {
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.55).delay(0.12)) { celebrate = true }
+            }
+            .accessibilityHidden(true)
+        }
+
         VStack(alignment: .leading, spacing: 6) {
             Text(justSubmitted ? "Evidence submitted 🎉" : "All done! ✅")
                 .font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
@@ -508,29 +461,6 @@ struct TaskDetailView: View {
             .padding(.top, 20)
         }
 
-        if hasVoiceNote {
-            if voiceUploadState == .failed, let url = voiceNoteURL {
-                HStack(spacing: 8) {
-                    Label("Voice note didn't send", systemImage: "exclamationmark.triangle.fill")
-                        .font(Typography.font(13.5, weight: .bold))
-                        .foregroundStyle(Color(hex: "EA580C"))
-                    Spacer(minLength: 8)
-                    Button("Retry") { uploadVoiceNote(fileURL: url) }
-                        .font(Typography.font(13, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color(hex: "EA580C"))
-                        .clipShape(Capsule())
-                }
-                .padding(.top, 10)
-            } else {
-                Label(voiceUploadState == .uploading ? "Sending voice note…" : "Voice note attached", systemImage: "waveform")
-                    .font(Typography.font(13.5, weight: .bold))
-                    .foregroundStyle(KidTheme.lavenderText)
-                    .padding(.top, 10)
-            }
-        }
-
         // A parent asking for a redo (task.redoRequested) already reopens
         // straight into the edit flow, so this is for everything else a
         // kid might want to fix on their own before a parent has looked at
@@ -538,7 +468,7 @@ struct TaskDetailView: View {
         // the note. Gone once it's actually approved: that submission is
         // done, not something to reopen and rewrite after the fact.
         if !task.approved {
-            Button { submitted = false } label: {
+            Button { withAnimation(.easeInOut(duration: 0.25)) { submitted = false } } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.uturn.backward")
                         .font(.system(size: 13, weight: .bold))
@@ -556,10 +486,7 @@ struct TaskDetailView: View {
             .padding(.top, 20)
         }
 
-        Button {
-            if justSubmitted { onComplete(photos.count, note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note, hasVoiceNote) }
-            dismiss()
-        } label: {
+        Button { dismiss() } label: {
             Text("Back to today")
                 .font(Typography.font(18, weight: .heavy))
                 .foregroundStyle(KidTheme.ink)
@@ -683,35 +610,6 @@ struct TaskDetailView: View {
             photo.pendingWriteId = write.id
             photos.append(photo)
             upload(photoId: photo.id, image: image)
-        }
-    }
-
-    /// Same eager-upload-on-capture shape as a photo — the moment
-    /// KidVoiceRecorderButton hands back a real recorded file, it goes
-    /// straight up, not deferred until "All done!". Previously nothing
-    /// played this role at all: hasVoiceNote was a Bool a kid could set to
-    /// true with zero bytes ever leaving the device.
-    private func uploadVoiceNote(fileURL: URL) {
-        guard let occurrenceId = task.occurrenceId else {
-            voiceUploadState = .failed
-            return
-        }
-        voiceUploadState = .uploading
-        Task { @MainActor in
-            guard let data = await Task.detached(priority: .userInitiated, operation: {
-                try? Data(contentsOf: fileURL)
-            }).value else {
-                voiceUploadState = .failed
-                return
-            }
-            do {
-                let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "voice", contentType: "audio/m4a")
-                try await APIClient.shared.uploadToPresignedURL(result.uploadURL, data: data, contentType: "audio/m4a")
-                try await APIClient.shared.completeSubmission(id: result.submissionId)
-                voiceUploadState = .uploaded
-            } catch {
-                voiceUploadState = .failed
-            }
         }
     }
 
@@ -1049,49 +947,17 @@ private struct KidCapturedPhotoTile: View {
 // itself (see ScreenProfile's bypass row / TaskReviewCard's note block).
 private struct BypassRequestSheet: View {
     var taskTitle: String
-    // Needed to actually upload a recorded voice note as a real submission
-    // (same createSubmission/uploadToPresignedURL/completeSubmission
-    // pipeline a photo uses) — nil only in the "no occurrence yet" edge
-    // case TaskDetailView's own photo upload already guards against.
-    var occurrenceId: String?
-    var onSend: (String, Bool) -> Void
+    var onSend: (String) -> Void
     var onCancel: () -> Void
 
     @State private var reason = ""
-    @State private var voiceNoteURL: URL?
-    @State private var voiceUploadState: CapturedPhoto.UploadState = .idle
-    private var hasVoiceNote: Bool { voiceNoteURL != nil }
     @FocusState private var reasonFocused: Bool
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var kid: KidAdaptive { KidAdaptive(hSizeClass) }
 
-    // Same either/or rule as the parent-side Redo compose sheet: a typed
-    // reason or a recorded one, not necessarily both.
-    private var canSend: Bool { !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasVoiceNote }
-
-    private func uploadVoiceNote(fileURL: URL) {
-        guard let occurrenceId else {
-            voiceUploadState = .failed
-            return
-        }
-        voiceUploadState = .uploading
-        Task { @MainActor in
-            guard let data = await Task.detached(priority: .userInitiated, operation: {
-                try? Data(contentsOf: fileURL)
-            }).value else {
-                voiceUploadState = .failed
-                return
-            }
-            do {
-                let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "voice", contentType: "audio/m4a")
-                try await APIClient.shared.uploadToPresignedURL(result.uploadURL, data: data, contentType: "audio/m4a")
-                try await APIClient.shared.completeSubmission(id: result.submissionId)
-                voiceUploadState = .uploaded
-            } catch {
-                voiceUploadState = .failed
-            }
-        }
-    }
+    // A reason is what a parent decides on, so there's nothing to send
+    // without one.
+    private var canSend: Bool { !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -1111,26 +977,9 @@ private struct BypassRequestSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .focused($reasonFocused)
 
-                KidVoiceRecorderButton(voiceNoteURL: $voiceNoteURL)
-
-                if voiceUploadState == .failed, let url = voiceNoteURL {
-                    HStack(spacing: 8) {
-                        Label("Voice note didn't send", systemImage: "exclamationmark.triangle.fill")
-                            .font(Typography.font(13, weight: .bold))
-                            .foregroundStyle(Color(hex: "EA580C"))
-                        Spacer(minLength: 8)
-                        Button("Retry") { uploadVoiceNote(fileURL: url) }
-                            .font(Typography.font(12.5, weight: .heavy))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(Color(hex: "EA580C"))
-                            .clipShape(Capsule())
-                    }
-                }
-
                 if !kid.isRegular { Spacer(minLength: 0) }
 
-                Button { onSend(reason.trimmingCharacters(in: .whitespacesAndNewlines), hasVoiceNote) } label: {
+                Button { onSend(reason.trimmingCharacters(in: .whitespacesAndNewlines)) } label: {
                     Text("Send to a parent")
                         .font(Typography.display(kid.of(18, 21), weight: .heavy))
                         .foregroundStyle(canSend ? .white : Color(hex: "B5C8BC"))
@@ -1175,167 +1024,17 @@ private struct BypassRequestSheet: View {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel", action: onCancel) }
             }
         }
-        .onChange(of: voiceNoteURL) { _, newValue in
-            if let newValue { uploadVoiceNote(fileURL: newValue) }
-        }
         .swipeToDismiss(interactive: false, onCancel)
     }
 }
 
-// Idle → recording (live timer + pulsing dot) → recorded (duration, tap to
-// remove) — shared between the bypass compose sheet above and the normal
-// task-submission note field. Used to be a plain Task.sleep timer with no
-// AVAudioRecorder behind it at all — "recording" was a Bool a kid could
-// flip to true, with no actual audio ever captured, which is exactly why a
-// "voice note" never really went anywhere: there was nothing to upload.
-private struct KidVoiceRecorderButton: View {
-    // The real recorded file on disk once stopped — nil the rest of the
-    // time. The caller (TaskDetailView/BypassRequestSheet) owns uploading
-    // it; this view only owns capturing it.
-    @Binding var voiceNoteURL: URL?
 
-    private enum VoiceState { case idle, recording, recorded }
-    @State private var voiceState: VoiceState = .idle
-    @State private var recordSeconds = 0
-    @State private var timerTask: Task<Void, Never>?
-    @State private var dotPulse = false
-    @State private var recorder: AVAudioRecorder?
-
-    private var recordedTimeLabel: String { String(format: "%d:%02d", recordSeconds / 60, recordSeconds % 60) }
-
-    // The completion-handler form of this call (requestRecordPermission
-    // { granted in ... }) is what triggered "unsafeForcedSync called from
-    // Swift Concurrent context" — AVFoundation's own bridge from its
-    // async-native implementation back to that legacy callback shape is
-    // what does the unsafe synchronous wait, not anything in this file.
-    // The async entry point goes straight to the real implementation
-    // instead of through that shim. Task inherits this button action's
-    // MainActor context, so beginRecording()'s own synchronous
-    // AVAudioSession calls still land on the main actor, same as before.
-    private func startRecording() {
-        Task {
-            guard await AVAudioApplication.requestRecordPermission() else { return }
-            beginRecording()
-        }
-    }
-
-    private func beginRecording() {
-        let session = AVAudioSession.sharedInstance()
-        guard (try? session.setCategory(.playAndRecord, options: [.defaultToSpeaker])) != nil,
-              (try? session.setActive(true)) != nil else { return }
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("m4a")
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 44_100,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-        ]
-        guard let r = try? AVAudioRecorder(url: fileURL, settings: settings) else { return }
-        recorder = r
-        r.record()
-        recordSeconds = 0
-        voiceState = .recording
-        timerTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard !Task.isCancelled else { return }
-                recordSeconds += 1
-            }
-        }
-    }
-
-    private func stopRecording() {
-        timerTask?.cancel()
-        timerTask = nil
-        recorder?.stop()
-        voiceNoteURL = recorder?.url
-        recorder = nil
-        voiceState = .recorded
-    }
-
-    private func removeRecording() {
-        timerTask?.cancel()
-        timerTask = nil
-        recorder?.stop()
-        recorder = nil
-        if let url = voiceNoteURL { try? FileManager.default.removeItem(at: url) }
-        voiceNoteURL = nil
-        voiceState = .idle
-        recordSeconds = 0
-    }
-
-    var body: some View {
-        Button {
-            switch voiceState {
-            case .idle: startRecording()
-            case .recording: stopRecording()
-            case .recorded: removeRecording()
-            }
-        } label: {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle().fill(voiceState == .idle ? KidTheme.lavender : KidTheme.lavenderText)
-                    switch voiceState {
-                    case .idle:
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(KidTheme.lavenderText)
-                    case .recording:
-                        Circle().fill(.white).frame(width: 12, height: 12).opacity(dotPulse ? 1 : 0.35)
-                    case .recorded:
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                }
-                .frame(width: 40, height: 40)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    switch voiceState {
-                    case .idle:
-                        Text("Record a voice note")
-                            .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                        Text("Say it instead of typing it")
-                            .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
-                    case .recording:
-                        Text("Recording… \(recordedTimeLabel)")
-                            .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                        Text("Tap to stop")
-                            .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
-                    case .recorded:
-                        Text("Voice note attached · \(recordedTimeLabel)")
-                            .font(Typography.font(14, weight: .heavy)).foregroundStyle(KidTheme.ink)
-                        Text("Tap to remove")
-                            .font(Typography.font(12, weight: .medium)).foregroundStyle(KidTheme.inkSoft)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(12)
-            .background(.white)
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(voiceState == .recording ? KidTheme.lavenderText : KidTheme.line, lineWidth: voiceState == .recording ? 2 : 1))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
-        // Deferred into .task rather than started directly from the state
-        // change, for the same reason the splash screen's pulse is
-        // deferred (see RootView.SplashScreenView) — a repeatForever
-        // kicked off at the same moment the view reappears can lose the
-        // race with SwiftUI's own initial transaction and never actually
-        // start.
-        .task(id: voiceState) {
-            guard voiceState == .recording else { dotPulse = false; return }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            guard !Task.isCancelled, voiceState == .recording else { return }
-            withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { dotPulse = true }
-        }
-        .onDisappear {
-            timerTask?.cancel()
-            timerTask = nil
-            recorder?.stop()
-            recorder = nil
-        }
+/// The kid's big buttons press down under the finger the moment they're
+/// touched, so a tap always feels answered.
+struct KidPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(duration: 0.18, bounce: 0), value: configuration.isPressed)
     }
 }

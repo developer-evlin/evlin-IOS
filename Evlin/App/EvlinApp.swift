@@ -16,11 +16,16 @@ struct EvlinApp: App {
             // than sending data nobody will look at.
             options.tracesSampleRate = 0
         }
+        MainActor.assumeIsolated { DemoMode.seedIfOn() }
     }
 
     var body: some Scene {
         WindowGroup {
             RootView()
+        }
+        // iOS wakes the app now and then to sync (see BackgroundSync).
+        .backgroundTask(.appRefresh(BackgroundSync.refreshID)) {
+            await BackgroundSync.refresh()
         }
     }
 }

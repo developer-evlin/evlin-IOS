@@ -57,7 +57,6 @@ enum EIcon {
         case "delete": return "trash.fill"
         case "diversity_3": return "person.3.fill"
         case "edit": return "pencil"
-        case "edit_note": return "square.and.pencil"
         case "expand_more": return "chevron.down"
         case "fitness_center": return "figure.strengthtraining.traditional"
         case "gavel": return "hammer.fill"
@@ -71,8 +70,6 @@ enum EIcon {
         case "notes": return "note.text"
         case "person": return "person.fill"
         case "photo_camera": return "camera.fill"
-        case "play_circle": return "play.circle.fill"
-        case "quiz": return "questionmark.circle.fill"
         case "replay": return "arrow.clockwise"
         case "smart_display": return "play.rectangle.fill"
         case "sync_alt": return "arrow.left.arrow.right"
@@ -177,18 +174,28 @@ struct EToggle: View {
     @Binding var on: Bool
     var color: Color = Brand.green
 
+    // Drawn exactly like Home's lock switch (same knob, shadows and
+    // timing), so every switch in the app is the same object. The system
+    // Toggle isn't used: on iOS 26 it draws a glass pill knob that matches
+    // nothing else here.
     var body: some View {
-        Capsule()
-            .fill(on ? color : Color(hex: "E9E9EA"))
-            .frame(width: 51, height: 31)
-            .overlay(
+        Button { on.toggle() } label: {
+            ZStack(alignment: on ? .trailing : .leading) {
+                Capsule().fill(on ? color : Color(hex: "E9E9EA"))
                 Circle()
                     .fill(.white)
-                    .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+                    .frame(width: 27, height: 27)
+                    .shadow(color: .black.opacity(0.15), radius: 4, y: 3)
+                    .shadow(color: .black.opacity(0.16), radius: 0.5, y: 1)
                     .padding(2)
-                    .offset(x: on ? 10 : -10)
-            )
-            .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { on.toggle() } }
+            }
+            .frame(width: 51, height: 31)
+            .animation(.easeInOut(duration: 0.3), value: on)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(.isToggle)
+        .accessibilityValue(on ? "On" : "Off")
+        .sensoryFeedback(.selection, trigger: on)
     }
 }
 

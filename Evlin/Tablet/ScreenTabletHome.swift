@@ -46,7 +46,9 @@ struct ScreenTabletHome: View {
     private var sectionTitleFont: CGFloat { kid.of(20, 24) }
     private var sectionCountFont: CGFloat { kid.of(13.5, 15) }
     private var nextTaskId: String? { tasks.first { !$0.done }?.id }
-    private var doneCount: Int { tasks.filter(\.done).count }
+    // Done means approved (or a skip said yes to), the same count the
+    // parent's phone shows. A task sent in and waiting isn't done yet.
+    private var doneCount: Int { tasks.filter(\.approved).count }
 
     private func accent(for taskId: String) -> Color {
         let idx = tasks.firstIndex { $0.iconTaskId == taskId } ?? 0
@@ -78,6 +80,8 @@ struct ScreenTabletHome: View {
                         }
                     }
 
+                    blockedNowSection
+
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 4)
@@ -96,7 +100,47 @@ struct ScreenTabletHome: View {
             }
         }
         .sheet(isPresented: $showSettings) {
+            Group {
             ScreenTabletSettings(onSwitchMode: onSwitchMode)
+        }
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    /// What's blocked right now and why, in the same words the parent saw.
+    /// Re-read every minute as well as on every sync: a scheduled block
+    /// starts at 7pm whether or not anything synced at 7pm.
+    private var blockedNowSection: some View {
+        TimelineView(.everyMinute) { context in
+            let _ = SyncState.shared.version
+            let blocked = session.activeChildId.map { LocalStore.shared.blockedNow(childId: $0, at: context.date) } ?? []
+            if !blocked.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Blocked right now")
+                        .font(Typography.display(sectionTitleFont, weight: .heavy))
+                        .foregroundStyle(KidTheme.ink)
+                        .padding(.top, 26)
+                    ForEach(blocked) { app in
+                        HStack(spacing: 12) {
+                            AppIconView(appName: app.name, size: kid.of(40, 48))
+                                .opacity(0.55)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(app.name)
+                                    .font(Typography.font(taskTitleFont, weight: .heavy))
+                                    .foregroundStyle(KidTheme.ink)
+                                Text(app.detail)
+                                    .font(Typography.font(taskMetaFont, weight: .semibold))
+                                    .foregroundStyle(KidTheme.inkSoft)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "lock.fill")
+                                .foregroundStyle(KidTheme.inkSoft)
+                        }
+                        .padding(taskCardPadding)
+                        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(KidTheme.muted))
+                    }
+                }
+            }
         }
     }
 
@@ -113,24 +157,27 @@ struct ScreenTabletHome: View {
     // text stays legible on a light background.
     private let redoOrangeTint = Color(hex: "FFEDD5")
     private let redoOrangeText = Color(hex: "EA580C")
+    // The parent's "waiting for you" amber (HomeStyle.amber).
+    private let waitingAmber = Color(hex: "E8962C")
 
     private func taskCard(_ task: KidTask, isNext: Bool) -> some View {
         let awaitingBypass = task.bypassRequested && !task.done
+        // The kid's ask to skip, answered: yes reads as "skipped", not as a
+        // finished task; no reads as "still on", with the parent's words.
+        let skipped = task.bypassRequested && task.approved
+        let skipKept = !task.done && task.skipDeclinedNote != nil
         let needsRedo = task.redoRequested
-        // A task waiting on a parent's review looks exactly like a plain
-        // finished one to the kid — no separate "still pending" state, no
-        // hourglass, no "waiting for your parent" label. Whether it's been
-        // approved yet is the parent's business, not something to make the
-        // kid sit and watch for. Redo is the one exception: it puts the
-        // task back in "to do" territory visually (not struck through,
-        // full opacity) — the banner below is what explains why, rather
-        // than the row just looking like nothing ever happened.
-        let doneLook = task.done && !needsRedo
+        // Sent in, not checked yet: the parent's phone lists it under
+        // "Waiting for you", so the kid's shows it waiting too, in the same
+        // amber, rather than looking finished. Only an approval (or a skip
+        // said yes to) gets the green tick.
+        let waitingReview = task.pendingApproval && !task.bypassRequested && !needsRedo
+        let doneLook = task.approved && !needsRedo
 
         let chipColor = needsRedo ? redoOrangeTint : (awaitingBypass ? KidTheme.lavender : KidTheme.cream)
         let chipIconColor = needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : KidTheme.greenDeep)
         let chipIcon = awaitingBypass ? "hand.raised.fill" : TabletData.guessedIcon(forTitle: task.title)
-        let ringColor = doneLook ? KidTheme.green : (needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (isNext ? KidTheme.green : Color(hex: "D5DED8"))))
+        let ringColor = doneLook ? KidTheme.green : (waitingReview ? waitingAmber : (needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (isNext ? KidTheme.green : Color(hex: "D5DED8")))))
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 16) {
@@ -158,8 +205,17 @@ struct ScreenTabletHome: View {
                     if needsRedo {
                         Label("Parent asked for a redo", systemImage: "arrow.counterclockwise")
                             .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(redoOrangeText)
+                    } else if waitingReview {
+                        Label("Waiting for a grown-up", systemImage: "hourglass")
+                            .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(waitingAmber)
                     } else if awaitingBypass {
                         Label("Waiting on a parent", systemImage: "hand.raised.fill")
+                            .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.lavenderText)
+                    } else if skipped {
+                        Label("Skipped for today", systemImage: "hand.thumbsup.fill")
+                            .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.lavenderText)
+                    } else if skipKept {
+                        Label("Still on for today", systemImage: "hand.raised.fill")
                             .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.lavenderText)
                     } else if !task.done, let due = task.due {
                         Label("Due \(due)", systemImage: "clock")
@@ -182,6 +238,15 @@ struct ScreenTabletHome: View {
             // note reads as the parent's own words sitting inside this
             // card, not as a separate sticker glued underneath it (the
             // card's own background is tinted the same orange below).
+            if skipKept, let note = task.skipDeclinedNote {
+                HStack(alignment: .top, spacing: 10) {
+                    Capsule().fill(KidTheme.lavenderText).frame(width: 3)
+                    Text(note)
+                        .font(Typography.font(taskMetaFont, weight: .medium))
+                        .foregroundStyle(KidTheme.ink)
+                }
+            }
+
             if needsRedo, let note = task.redoNote, !note.isEmpty {
                 HStack(alignment: .top, spacing: 10) {
                     Capsule().fill(redoOrangeText).frame(width: 3)
@@ -189,11 +254,6 @@ struct ScreenTabletHome: View {
                         Text(note)
                             .font(Typography.font(taskMetaFont, weight: .medium))
                             .foregroundStyle(KidTheme.ink)
-                        if task.redoHasVoiceNote {
-                            Label("Voice note", systemImage: "waveform")
-                                .font(Typography.font(taskMetaFont - 1, weight: .bold))
-                                .foregroundStyle(redoOrangeText)
-                        }
                     }
                 }
             }

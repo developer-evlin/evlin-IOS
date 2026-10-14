@@ -71,10 +71,20 @@ class APIClient {
     let baseURL = "https://evlin-ios.onrender.com"
 
     // 15-second request timeout so unreachable backends fail fast instead
-    // of hanging for the default 60 seconds, which freezes the UI.
-    private let session: URLSession = {
+    // of hanging for the default 60 seconds, which freezes the UI. Settable
+    // only so the tests can answer requests themselves (EvlinTests).
+    var session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
+        return URLSession(configuration: config)
+    }()
+
+    // For the few requests that wait on something slow (a chat reply waits
+    // on the model). Its own session rather than a per-request timeout,
+    // because the session's 15 s isn't reliably overridden by the request's.
+    private let slowSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 45
         return URLSession(configuration: config)
     }()
     
@@ -85,34 +95,53 @@ class APIClient {
     
     // MARK: - Email Auth
     
-    /// Throws the backend's real `APIFailure` (with its `detail`) on
-    /// anything but 2xx, instead of the plain `Bool` this used to return —
-    /// a wrong password and a rate-limited/duplicate-email/disabled-account
-    /// error used to look identical to the caller, which always fell back
-    /// to one of two generic hardcoded strings ("Failed to create account."
-    /// / "Incorrect email or password.") no matter what actually went wrong.
-    func register(email: String, password: String) async throws -> Bool {
-        let data = try await sendAnonymous("POST", "/auth/register", body: ["email": email, "password": password])
+    /// Email sign-up, step 1: the server emails a 6-digit code. It answers
+    /// the same way whether or not the address already has an account (an
+    /// existing one is emailed a "sign in instead" note), so this never says
+    /// which. Returns the seconds to wait before offering "resend". Throws
+    /// `APIFailure` 429 with a "wait" message when asked too often.
+    func startSignup(email: String) async throws -> Int {
+        let data = try await sendAnonymous("POST", "/auth/signup/start", body: ["email": email])
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return json?["resend_after"] as? Int ?? 60
+    }
+
+    /// Email sign-up, step 2: the account is created only now, once the
+    /// code proves the address is the caller's.
+    func verifySignup(email: String, password: String, code: String) async throws -> Bool {
+        let data = try await sendAnonymous("POST", "/auth/signup/verify",
+                                           body: ["email": email, "password": password, "code": code])
+        return storeParentSession(data)
+    }
+
+    /// Sign in with Apple. `nonce` is the raw value whose SHA-256 went into
+    /// Apple's request; the server checks Apple's token carries that hash.
+    func signInWithApple(identityToken: String, nonce: String, authorizationCode: String?,
+                         fullName: String?) async throws -> Bool {
+        var body: [String: Any] = ["identity_token": identityToken, "nonce": nonce]
+        if let authorizationCode { body["authorization_code"] = authorizationCode }
+        if let fullName, !fullName.isEmpty { body["full_name"] = fullName }
+        let data = try await sendAnonymous("POST", "/auth/apple", body: body)
+        return storeParentSession(data)
+    }
+
+    private func storeParentSession(_ data: Data) -> Bool {
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let token = json?["access_token"] as? String else { return false }
         SessionManager.shared.parentAccessToken = token
         SessionManager.shared.parentRefreshToken = json?["refresh_token"] as? String
         return true
     }
 
-    func verifyParent(token: String) async throws -> Bool {
+    func verifyParent(token: String, refreshToken: String) async throws -> Bool {
         _ = try await sendAnonymous("POST", "/auth/verify-parent", body: ["access_token": token])
         SessionManager.shared.parentAccessToken = token
+        SessionManager.shared.parentRefreshToken = refreshToken
         return true
     }
 
     func login(email: String, password: String) async throws -> Bool {
-        let data = try await sendAnonymous("POST", "/auth/login", body: ["email": email, "password": password])
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let token = json?["access_token"] as? String else { return false }
-        SessionManager.shared.parentAccessToken = token
-        SessionManager.shared.parentRefreshToken = json?["refresh_token"] as? String
-        return true
+        storeParentSession(try await sendAnonymous("POST", "/auth/login", body: ["email": email, "password": password]))
     }
 
     func deleteAccount() async throws {
@@ -193,11 +222,8 @@ class APIClient {
         try await fetch(endpoint: "/children/\(childId)/tasks")
     }
     
-    func fetchOccurrences(childId: String) async throws -> [ApiOccurrence] {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        let dateString = formatter.string(from: Date())
-        return try await fetch(endpoint: "/children/\(childId)/occurrences?target_date=\(dateString)")
+    func fetchOccurrences(childId: String, dueDate: String = CalendarSync.isoDay(Date())) async throws -> [ApiOccurrence] {
+        try await fetch(endpoint: "/children/\(childId)/occurrences?target_date=\(dueDate)")
     }
     
     func fetchRules(childId: String) async throws -> ApiChildRule {
@@ -214,16 +240,31 @@ class APIClient {
     /// response; anything else throws, so callers can't mistake a failed
     /// write for a saved one.
     @discardableResult
-    private func send(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> Data {
+    private func send(_ method: String, _ path: String, body: [String: Any]? = nil,
+                      signOutOnUnauthorized: Bool = true, timeout: TimeInterval? = nil) async throws -> Data {
+        let data = try body.map { try JSONSerialization.data(withJSONObject: $0) }
+        return try await send(method, path, bodyData: data, signOutOnUnauthorized: signOutOnUnauthorized, timeout: timeout)
+    }
+
+    /// Sends one of the app's writes (see `APIClient.Write`).
+    @discardableResult
+    func send(_ write: WriteRequest) async throws -> Data {
+        try await send(write.method, write.path, bodyData: write.body)
+    }
+
+    private func send(_ method: String, _ path: String, bodyData body: Data?,
+                      signOutOnUnauthorized: Bool = true, timeout: TimeInterval? = nil) async throws -> Data {
+        await refreshParentTokenIfExpiring()
         do {
-            return try await sendOnce(method, path, body: body)
+            return try await sendOnce(method, path, body: body, timeout: timeout)
         } catch let failure as APIFailure where failure.status == 401 {
+            guard signOutOnUnauthorized else { throw failure }
             let hadParent = SessionManager.shared.parentAccessToken != nil
             if hadParent {
                 // Supabase access tokens last about an hour: trade the refresh
                 // token for a new one and retry once.
                 switch await refreshParentToken() {
-                case .refreshed: return try await sendOnce(method, path, body: body)
+                case .refreshed: return try await sendOnce(method, path, body: body, timeout: timeout)
                 case .unreachable: throw failure // don't sign out over a network blip
                 case .rejected: break
                 }
@@ -235,15 +276,18 @@ class APIClient {
         }
     }
 
-    private func sendOnce(_ method: String, _ path: String, body: [String: Any]?) async throws -> Data {
+    private func sendOnce(_ method: String, _ path: String, body: Data?,
+                          timeout: TimeInterval? = nil) async throws -> Data {
         var request = URLRequest(url: URL(string: "\(baseURL)\(path)")!)
         request.httpMethod = method
+        if let timeout { request.timeoutInterval = timeout }
+        let session = timeout == nil ? self.session : slowSession
         if let token = SessionManager.shared.activeToken {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         if let body {
             request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = body
         }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -255,6 +299,29 @@ class APIClient {
     }
 
     enum RefreshResult { case refreshed, rejected, unreachable }
+
+    /// Trades the refresh token a minute before the access token runs out,
+    /// so a parent coming back after an hour away doesn't send a round of
+    /// requests that all 401 first. A failure here is left to the 401 path.
+    func refreshParentTokenIfExpiring() async {
+        guard let token = SessionManager.shared.parentAccessToken,
+              let expiry = Self.expiry(ofJWT: token),
+              expiry.timeIntervalSinceNow < 60 else { return }
+        await refreshParentToken()
+    }
+
+    /// The `exp` claim of a JWT, read without checking the signature (the
+    /// server does that); only used to decide when to refresh.
+    static func expiry(ofJWT token: String) -> Date? {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return nil }
+        var base64 = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64),
+              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp = claims["exp"] as? TimeInterval else { return nil }
+        return Date(timeIntervalSince1970: exp)
+    }
     private var refreshInFlight: Task<RefreshResult, Never>?
 
     /// Exchanges the stored refresh token for a new access token. Concurrent
@@ -273,7 +340,11 @@ class APIClient {
             guard http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let access = json["access_token"] as? String else {
-                return http.statusCode >= 500 ? .unreachable : .rejected
+                // Only the server saying the refresh token is no good ends
+                // the session (it answers 401 for that and nothing else). A
+                // 503, a 429 or a proxy's error page keeps the tokens to try
+                // again, the way other apps keep you signed in offline.
+                return [401, 403].contains(http.statusCode) ? .rejected : .unreachable
             }
             SessionManager.shared.parentAccessToken = access
             if let newRefresh = json["refresh_token"] as? String { SessionManager.shared.parentRefreshToken = newRefresh }
@@ -283,6 +354,17 @@ class APIClient {
         let result = await task.value
         refreshInFlight = nil
         return result
+    }
+
+    /// The `/live` stream request, or nil with nothing to authenticate as.
+    /// Built here so the stream uses the same base URL and token as every
+    /// other request; `LiveUpdates` owns the connection itself.
+    func liveUpdatesRequest() -> URLRequest? {
+        guard let token = SessionManager.shared.activeToken else { return nil }
+        var request = URLRequest(url: URL(string: "\(baseURL)/live")!)
+        request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.addValue("text/event-stream", forHTTPHeaderField: "Accept")
+        return request
     }
 
     private func decode<T: Decodable>(_ data: Data) throws -> T {
@@ -298,20 +380,7 @@ class APIClient {
     }
 
     func updateMyName(_ name: String) async throws {
-        try await send("PUT", "/auth/me", body: ["name": name])
-    }
-
-    // MARK: - Children
-
-    func updateChild(childId: String, name: String? = nil, colorIndex: Int? = nil) async throws {
-        var body: [String: Any] = [:]
-        if let name { body["name"] = name }
-        if let colorIndex { body["color_index"] = colorIndex }
-        try await send("PUT", "/children/\(childId)", body: body)
-    }
-
-    func deleteChild(childId: String) async throws {
-        try await send("DELETE", "/children/\(childId)")
+        try await send(Write.updateMyName(name))
     }
 
     // MARK: - Calendar events
@@ -324,43 +393,14 @@ class APIClient {
         let f = Self.isoOut
         let q = "start_date=\(f.string(from: from))&end_date=\(f.string(from: to))"
             .replacingOccurrences(of: "+", with: "%2B")
-        return try decode(try await send("GET", "/children/\(childId)/events?\(q)"))
+        // A kid device reading its calendar never signs out over a 401: its
+        // token was just accepted by /device/me in the same sync, so a 401
+        // here only means a server from before kids could read events.
+        let isKidDevice = SessionManager.shared.parentAccessToken == nil
+        return try decode(try await send("GET", "/children/\(childId)/events?\(q)", signOutOnUnauthorized: !isKidDevice))
     }
 
-    private func eventBody(childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, isParentOnly: Bool) -> [String: Any] {
-        var body: [String: Any] = [
-            "title": title,
-            "start_at": Self.isoOut.string(from: start),
-            "end_at": Self.isoOut.string(from: end),
-            "recurrence": recurrence,
-            // The server always stores "manual" here regardless of what's
-            // sent — there's no ICS-import feature yet, and this field
-            // isn't how the parent-lane/family-wide distinction is made
-            // (that's is_parent_only, below).
-            "is_parent_only": isParentOnly,
-        ]
-        if let childId { body["child_id"] = childId }
-        if let category { body["category"] = category }
-        if let note { body["note"] = note }
-        if let location, !location.isEmpty { body["location_or_link"] = location }
-        return body
-    }
-
-    func createEvent(childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, isParentOnly: Bool) async throws -> ApiEvent {
-        let body = eventBody(childId: childId, title: title, start: start, end: end, category: category, note: note, location: location, recurrence: recurrence, isParentOnly: isParentOnly)
-        return try decode(try await send("POST", "/events", body: body))
-    }
-
-    func updateEvent(eventId: String, childId: String?, title: String, start: Date, end: Date, category: String?, note: String?, location: String?, recurrence: String, isParentOnly: Bool) async throws {
-        let body = eventBody(childId: childId, title: title, start: start, end: end, category: category, note: note, location: location, recurrence: recurrence, isParentOnly: isParentOnly)
-        try await send("PUT", "/events/\(eventId)", body: body)
-    }
-
-    func deleteEvent(eventId: String) async throws {
-        try await send("DELETE", "/events/\(eventId)")
-    }
-
-    // MARK: - Submissions (real photo/voice evidence)
+    // MARK: - Submissions (real photo evidence)
 
     struct SubmissionUploadResult { let submissionId: String; let uploadURL: String }
 
@@ -411,20 +451,6 @@ class APIClient {
         return try decode(try await send("GET", "/children/\(childId)/time-grants\(query)"))
     }
 
-    /// Grants (or, with a negative value, deducts) minutes for today —
-    /// what GrantExtraTimeSheet calls now instead of mutating local state.
-    @discardableResult
-    func createTimeGrant(childId: String, minutes: Int, reason: String? = nil) async throws -> ApiTimeGrant {
-        var body: [String: Any] = ["minutes": minutes]
-        if let reason { body["reason"] = reason }
-        return try decode(try await send("POST", "/children/\(childId)/time-grants", body: body))
-    }
-
-    /// The most recent thread — what Chat opens on.
-    func fetchChatHistory(childId: String) async throws -> [ApiChatMessage] {
-        try decode(try await send("GET", "/children/\(childId)/chat"))
-    }
-
     func fetchConversations(childId: String) async throws -> [ApiChatConversation] {
         try decode(try await send("GET", "/children/\(childId)/conversations"))
     }
@@ -447,193 +473,104 @@ class APIClient {
     /// older client does by default.
     @discardableResult
     func sendChatMessage(childId: String, text: String, conversationId: String? = nil,
-                         startNewConversation: Bool = false) async throws -> ApiChatMessage {
-        var body: [String: Any] = ["text": text]
+                         startNewConversation: Bool = false, agent: String = "chat",
+                         shortcut: String? = nil, regenerate: Bool = false) async throws -> ApiChatMessage {
+        // The parent's time zone, so "today" and "tomorrow" in chat are
+        // theirs even before a kid's device has told the server its own.
+        var body: [String: Any] = ["text": text, "agent": agent, "timezone": TimeZone.current.identifier]
+        if let shortcut { body["shortcut"] = shortcut }
+        if regenerate { body["regenerate"] = true }
         if let conversationId { body["conversation_id"] = conversationId }
         if startNewConversation { body["new_conversation"] = true }
-        return try decode(try await send("POST", "/children/\(childId)/chat", body: body))
+        // A reply waits on the model, which can take well past the 15 s
+        // every other request gets, and the server allows it 30. At 15 the
+        // phone gave up on replies the server went on to save.
+        return try decode(try await send("POST", "/children/\(childId)/chat", body: body, timeout: 45))
     }
 
-    // MARK: - Memory
+    // MARK: - App catalog
 
-    /// What the assistant carries between conversations for this child.
-    func fetchMemory(childId: String) async throws -> [ApiChildMemory] {
-        try decode(try await send("GET", "/children/\(childId)/memory"))
+    func fetchAppCatalog() async throws -> [ApiApp] {
+        try decode(try await send("GET", "/apps"))
     }
 
-    /// Archives rather than deletes server-side, so a fact a parent removed
-    /// can't be silently re-learned from the same conversation.
-    func forgetMemory(memoryId: String) async throws {
-        _ = try await send("DELETE", "/memory/\(memoryId)")
+    /// This child's lockable apps — what a lock covers and a block can target.
+    func fetchChildApps(childId: String) async throws -> [ApiApp] {
+        try decode(try await send("GET", "/children/\(childId)/apps"))
     }
 
-    // MARK: - Courses
-
-    /// The shared library: vetted courses any of this family's children can
-    /// be assigned to, independently of each other.
-    func fetchCourses(status: String = "published") async throws -> [ApiCourse] {
-        try decode(try await send("GET", "/courses?status=\(status)"))
-    }
-
-    func fetchCourse(courseId: String) async throws -> ApiCourse {
-        try decode(try await send("GET", "/courses/\(courseId)"))
-    }
-
-    /// Searches YouTube and runs the vetting pass. Returns a *draft* —
-    /// nothing reaches a child until it's approved.
-    func generateCourse(topic: String, videoCount: Int = 4, childId: String? = nil) async throws -> ApiCourse {
-        var body: [String: Any] = ["topic": topic, "video_count": videoCount]
-        if let childId { body["child_id"] = childId }
-        return try decode(try await send("POST", "/courses/generate", body: body))
-    }
-
-    /// One specific video the parent picked themselves — published straight
-    /// away, since there's no agent judgement to review.
-    func createSingleVideoCourse(videoId: String, videoTitle: String?, channelTitle: String?,
-                                 quiz: [[String: Any]] = [], title: String? = nil) async throws -> ApiCourse {
-        var body: [String: Any] = ["video_id": videoId, "quiz": quiz]
-        if let videoTitle { body["video_title"] = videoTitle }
-        if let channelTitle { body["channel_title"] = channelTitle }
-        if let title { body["title"] = title }
-        return try decode(try await send("POST", "/courses/single-video", body: body))
-    }
-
-    /// Publishes a drafted course and, when a child is given, assigns it in
-    /// the same call.
     @discardableResult
-    func approveCourse(courseId: String, assignToChildId: String? = nil) async throws -> ApiCourse {
+    func setChildApps(childId: String, appIds: [String]) async throws -> [ApiApp] {
+        try decode(try await send("PUT", "/children/\(childId)/apps", body: ["app_ids": appIds]))
+    }
+
+    /// Kid device: what only the device knows about its child.
+    @discardableResult
+    func updateMyDevice(timezone: String) async throws -> ApiChild {
+        try decode(try await send("PUT", "/device/me", body: ["timezone": timezone]))
+    }
+
+    // MARK: - Today's videos
+
+    func fetchVideoProfile(childId: String) async throws -> ApiVideoProfile {
+        try decode(try await send("GET", "/children/\(childId)/video-profile"))
+    }
+
+    /// Partial: only the fields passed change.
+    @discardableResult
+    func updateVideoProfile(childId: String, allowedCategories: [String]? = nil,
+                            blockedKeywords: [String]? = nil,
+                            allowedChannels: [ApiVideoChannel]? = nil,
+                            blockedChannels: [ApiVideoChannel]? = nil,
+                            dailyMinutes: Int? = nil, maxVideoMinutes: Int? = nil) async throws -> ApiVideoProfile {
         var body: [String: Any] = [:]
-        if let assignToChildId { body["assign_to_child_id"] = assignToChildId }
-        return try decode(try await send("PUT", "/courses/\(courseId)/approve", body: body))
+        if let allowedCategories { body["allowed_categories"] = allowedCategories }
+        if let blockedKeywords { body["blocked_keywords"] = blockedKeywords }
+        if let allowedChannels { body["allowed_channels"] = allowedChannels.map { ["id": $0.id, "title": $0.title] } }
+        if let blockedChannels { body["blocked_channels"] = blockedChannels.map { ["id": $0.id, "title": $0.title] } }
+        if let dailyMinutes { body["daily_minutes"] = dailyMinutes }
+        if let maxVideoMinutes { body["max_video_minutes"] = maxVideoMinutes }
+        return try decode(try await send("PUT", "/children/\(childId)/video-profile", body: body))
     }
 
-    func searchVideos(query: String) async throws -> [ApiVideoSearchResult] {
-        let escaped = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        return try decode(try await send("GET", "/youtube/search?q=\(escaped)"))
+    /// Both sides: the parent's view of the list, and the child's player.
+    func fetchVideoQueue(childId: String) async throws -> ApiVideoQueue {
+        try decode(try await send("GET", "/children/\(childId)/video-queue"))
     }
 
-    func fetchCourseAssignments(childId: String) async throws -> [ApiCourseAssignment] {
-        try decode(try await send("GET", "/children/\(childId)/course-assignments"))
-    }
-
-    /// Gives an already-published course to a child — how a sibling gets the
-    /// same vetted course with no repeat search.
+    /// The parent's approval — the one way a video reaches the child.
+    /// `replace` swaps out whatever is still unwatched today.
     @discardableResult
-    func assignCourse(childId: String, courseId: String) async throws -> ApiCourseAssignment {
-        try decode(try await send("POST", "/children/\(childId)/course-assignments",
-                                   body: ["course_id": courseId]))
-    }
-
-    /// The kid finishing one video (and its quiz, if it has one). Unlocks
-    /// exactly the next item.
-    @discardableResult
-    func completeCourseItem(progressId: String, quizAnswers: [Int]? = nil) async throws -> ApiCourseItemProgress {
-        var body: [String: Any] = [:]
-        if let quizAnswers { body["quiz_answers"] = quizAnswers }
-        return try decode(try await send("POST", "/course-item-progress/\(progressId)/complete", body: body))
-    }
-
-    // MARK: - Reflections
-
-    /// `status: "open"` is the one the gate cares about — pending *or*
-    /// awaiting review.
-    func fetchReflections(childId: String, status: String? = nil) async throws -> [ApiReflection] {
-        let query = status.map { "?status=\($0)" } ?? ""
-        return try decode(try await send("GET", "/children/\(childId)/reflections\(query)"))
-    }
-
-    /// Give exactly one of videoId (a one-video course is made for it) or
-    /// courseId (assign an existing one).
-    @discardableResult
-    func createReflection(childId: String, videoId: String? = nil, videoTitle: String? = nil,
-                          channelTitle: String? = nil, quiz: [[String: Any]] = [],
-                          courseId: String? = nil, writtenPrompt: String? = nil) async throws -> ApiReflection {
-        var body: [String: Any] = [:]
-        if let videoId {
-            body["video_id"] = videoId
-            body["quiz"] = quiz
-            if let videoTitle { body["video_title"] = videoTitle }
-            if let channelTitle { body["channel_title"] = channelTitle }
+    func addToVideoQueue(childId: String, videos: [VideoSuggestion], replace: Bool) async throws -> ApiVideoQueue {
+        let list: [[String: Any]] = videos.map {
+            ["video_id": $0.videoId, "title": $0.title, "channel_id": $0.channelId,
+             "channel_title": $0.channelTitle, "thumbnail_url": $0.thumbnailUrl,
+             "duration_seconds": $0.durationSeconds, "category": $0.category]
         }
-        if let courseId { body["course_id"] = courseId }
-        if let writtenPrompt { body["written_prompt"] = writtenPrompt }
-        return try decode(try await send("POST", "/children/\(childId)/reflections", body: body))
+        return try decode(try await send("POST", "/children/\(childId)/video-queue",
+                                         body: ["videos": list, "replace": replace]))
     }
 
     @discardableResult
-    func submitReflection(reflectionId: String, writtenResponse: String?) async throws -> ApiReflection {
-        var body: [String: Any] = [:]
-        if let writtenResponse { body["written_response"] = writtenResponse }
-        return try decode(try await send("POST", "/reflections/\(reflectionId)/submit", body: body))
+    func reorderVideoQueue(childId: String, itemIds: [String]) async throws -> ApiVideoQueue {
+        try decode(try await send("PUT", "/children/\(childId)/video-queue/order", body: ["item_ids": itemIds]))
     }
 
-    /// `status` is "approved" or "needs_redo".
+    func removeFromVideoQueue(itemId: String) async throws {
+        try await send("DELETE", "/video-queue/\(itemId)")
+    }
+
+    /// Kid device: seconds actually played. The server only moves it forward.
     @discardableResult
-    func reviewReflection(reflectionId: String, status: String, note: String? = nil) async throws -> ApiReflection {
-        var body: [String: Any] = ["status": status]
-        if let note, !note.isEmpty { body["review_note"] = note }
-        return try decode(try await send("PUT", "/reflections/\(reflectionId)/review", body: body))
+    func reportVideoProgress(itemId: String, watchedSeconds: Int, completed: Bool) async throws -> ApiVideoQueueItem {
+        try decode(try await send("POST", "/video-queue/\(itemId)/progress",
+                                  body: ["watched_seconds": watchedSeconds, "completed": completed]))
     }
 
-    // MARK: - Milestones
+    // MARK: - Policy
 
-    func fetchMilestones(childId: String) async throws -> [ApiMilestone] {
-        try decode(try await send("GET", "/children/\(childId)/milestones"))
-    }
-
-    @discardableResult
-    func createMilestone(childId: String, title: String, kind: String, targetCount: Int? = nil,
-                         description: String? = nil, prizeText: String? = nil,
-                         prizeMinutes: Int = 0, courseId: String? = nil,
-                         createdBy: String = "parent") async throws -> ApiMilestone {
-        var body: [String: Any] = ["title": title, "kind": kind, "prize_minutes": prizeMinutes,
-                                   "created_by": createdBy]
-        if let targetCount { body["target_count"] = targetCount }
-        if let description { body["description"] = description }
-        if let prizeText { body["prize_text"] = prizeText }
-        if let courseId { body["course_id"] = courseId }
-        return try decode(try await send("POST", "/children/\(childId)/milestones", body: body))
-    }
-
-    /// Pays the prize into the time-grant ledger. Only valid once the
-    /// milestone's `achievable` is true.
-    @discardableResult
-    func claimMilestone(milestoneId: String) async throws -> ApiMilestone {
-        try decode(try await send("POST", "/milestones/\(milestoneId)/claim"))
-    }
-
-    func deleteMilestone(milestoneId: String) async throws {
-        _ = try await send("DELETE", "/milestones/\(milestoneId)")
-    }
-
-    /// The kid adding something they'd like to work toward. Lands as
-    /// "proposed" with no prize — a kid can't write their own screen time,
-    /// so a parent decides whether it's real and what it's worth.
-    @discardableResult
-    func proposeMilestone(childId: String, title: String, description: String? = nil) async throws -> ApiMilestone {
-        var body: [String: Any] = ["title": title]
-        if let description { body["description"] = description }
-        return try decode(try await send("POST", "/children/\(childId)/milestones/propose", body: body))
-    }
-
-    /// The parent turning a kid's proposal into a real milestone — this is
-    /// where what it takes and what it's worth get decided.
-    @discardableResult
-    func approveMilestone(milestoneId: String, kind: String? = nil, targetCount: Int? = nil,
-                          prizeText: String? = nil, prizeMinutes: Int? = nil) async throws -> ApiMilestone {
-        var body: [String: Any] = [:]
-        if let kind { body["kind"] = kind }
-        if let targetCount { body["target_count"] = targetCount }
-        if let prizeText { body["prize_text"] = prizeText }
-        if let prizeMinutes { body["prize_minutes"] = prizeMinutes }
-        return try decode(try await send("PUT", "/milestones/\(milestoneId)/approve", body: body))
-    }
-
-    /// A draft for the parent to edit and then save — creates nothing.
-    func generateMilestone(childId: String, hint: String? = nil) async throws -> ApiMilestoneDraft {
-        var body: [String: Any] = [:]
-        if let hint { body["hint"] = hint }
-        return try decode(try await send("POST", "/children/\(childId)/milestones/generate", body: body))
+    func fetchPolicy(childId: String) async throws -> ApiPolicy {
+        try decode(try await send("GET", "/children/\(childId)/policy"))
     }
 
     // MARK: - App blocks
@@ -642,111 +579,22 @@ class APIClient {
         try decode(try await send("GET", "/children/\(childId)/app-blocks?active=\(activeOnly)"))
     }
 
-    /// `blockType` is "duration" (needs durationMinutes) or "until_task"
-    /// (needs untilTaskId — it lifts itself when that task is approved).
+    /// One block per app, created together. What each kind needs:
+    /// duration → durationMinutes; until_task → untilTaskId; scheduled →
+    /// days + start + end ("HH:MM", the child's local time); indefinite →
+    /// nothing. `addToList` puts any app not yet on the child's list onto it.
     @discardableResult
-    func createAppBlock(childId: String, appName: String, appBundleId: String? = nil,
-                        blockType: String, durationMinutes: Int? = nil,
-                        untilTaskId: String? = nil) async throws -> ApiAppBlock {
-        var body: [String: Any] = ["app_name": appName, "block_type": blockType]
-        if let appBundleId { body["app_bundle_id"] = appBundleId }
+    func createAppBlocks(childId: String, appIds: [String], blockType: String,
+                         durationMinutes: Int? = nil, untilTaskId: String? = nil,
+                         scheduleDays: String? = nil, scheduleStart: String? = nil, scheduleEnd: String? = nil,
+                         addToList: Bool = false) async throws -> [ApiAppBlock] {
+        var body: [String: Any] = ["app_ids": appIds, "block_type": blockType, "add_to_list": addToList]
         if let durationMinutes { body["duration_minutes"] = durationMinutes }
         if let untilTaskId { body["until_task_id"] = untilTaskId }
+        if let scheduleDays { body["schedule_days"] = scheduleDays }
+        if let scheduleStart { body["schedule_start"] = scheduleStart }
+        if let scheduleEnd { body["schedule_end"] = scheduleEnd }
         return try decode(try await send("POST", "/children/\(childId)/app-blocks", body: body))
-    }
-
-    func deleteAppBlock(blockId: String) async throws {
-        _ = try await send("DELETE", "/app-blocks/\(blockId)")
-    }
-
-    // MARK: - Task Management (Bi-directional Sync)
-
-    /// Creates the task on the backend and returns the saved row, so callers
-    /// can use the real database id instead of a locally generated one.
-    /// `courseId` makes this a special task: the course is assigned to the
-    /// child and the task is completed by finishing it. A course still
-    /// awaiting review is published by this same call — creating the task
-    /// *is* the approval, so there's never a task pointing at an unpublished
-    /// course. Pair it with `bonusMinutes` for "watch this, earn screen time".
-    func createTask(childId: String, title: String, instructions: String?, recurrence: String, category: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil, bonusMinutes: Int = 0, courseId: String? = nil, milestoneId: String? = nil, createdBy: String = "parent") async throws -> ApiTask {
-        var body: [String: Any] = [
-            "title": title,
-            "instructions": instructions ?? "",
-            "recurrence": recurrence,
-            "category": category,
-            "submission_kind": submissionKind,
-            "bonus_minutes": bonusMinutes,
-            "created_by": createdBy
-        ]
-        if let dueTime { body["due_time"] = dueTime }
-        if let dueDate { body["due_date"] = dueDate }
-        if let courseId { body["course_id"] = courseId }
-        if let milestoneId { body["milestone_id"] = milestoneId }
-        return try decode(try await send("POST", "/children/\(childId)/tasks", body: body))
-    }
-    
-    func submitTask(occurrenceId: String, bypassNote: String? = nil) async throws -> Bool {
-        var body: [String: Any] = [:]
-        if let bypassNote { body["bypass_note"] = bypassNote }
-        try await send("POST", "/tasks/occurrences/\(occurrenceId)/submit", body: body)
-        return true
-    }
-    
-    func approveTask(occurrenceId: String, reject: Bool = false) async throws -> Bool {
-        try await send("POST", "/tasks/occurrences/\(occurrenceId)/\(reject ? "reject" : "approve")")
-        return true
-    }
-
-    /// Parent asks for a redo; the note is shown to the kid.
-    func rejectTask(occurrenceId: String, note: String?) async throws {
-        var body: [String: Any] = ["status": "rejected"]
-        if let note, !note.isEmpty { body["rejection_note"] = note }
-        try await send("PUT", "/occurrences/\(occurrenceId)/status", body: body)
-    }
-
-    /// Kid asks to skip a task today.
-    func requestBypass(occurrenceId: String, note: String?) async throws {
-        try await send("POST", "/occurrences/\(occurrenceId)/bypass", body: ["bypass_note": note ?? ""])
-    }
-
-    func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, category: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil) async throws -> Bool {
-        var body: [String: Any] = [
-            "title": title,
-            "instructions": instructions ?? "",
-            "recurrence": recurrence,
-            "category": category,
-            "submission_kind": submissionKind
-        ]
-        if let dueTime { body["due_time"] = dueTime }
-        if let dueDate { body["due_date"] = dueDate }
-        try await send("PUT", "/tasks/\(taskId)", body: body)
-        return true
-    }
-
-    func deleteTask(taskId: String) async throws -> Bool {
-        try await send("DELETE", "/tasks/\(taskId)")
-        return true
-    }
-
-    /// Saves the whole rules picture for a child (see `RuleSync.payload`).
-    func saveRules(childId: String, body: [String: Any]) async throws {
-        try await send("PUT", "/children/\(childId)/rules", body: body)
-    }
-
-    func updateChildRules(childId: String, dailyLimitMin: Int, downtimeEnabled: Bool) async throws -> Bool {
-        try await send("PUT", "/children/\(childId)/rules", body: [
-            "daily_limit_minutes": dailyLimitMin,
-            "downtime_enabled": downtimeEnabled
-        ])
-        return true
-    }
-
-    func updateChildState(childId: String, manualLock: Bool, taskGateOverride: Bool) async throws -> Bool {
-        try await send("PUT", "/children/\(childId)/state", body: [
-            "manual_lock": manualLock,
-            "task_gate_override": taskGateOverride
-        ])
-        return true
     }
 
 }
@@ -776,6 +624,17 @@ public class SessionManager {
         activeChildId = KeychainStore.get("activeChild")
     }
 
+    /// iOS can start the app after a reboot before the phone is first
+    /// unlocked (prewarming, a background wake). The Keychain is closed then,
+    /// so `init` read nothing, which looked like being signed out. Fills in
+    /// whatever is missing once it opens; never replaces a value in memory.
+    func reloadMissingFromKeychain() {
+        if parentAccessToken == nil, let v = KeychainStore.get("parentAccess") { parentAccessToken = v }
+        if parentRefreshToken == nil, let v = KeychainStore.get("parentRefresh") { parentRefreshToken = v }
+        if childDeviceToken == nil, let v = KeychainStore.get("childDevice") { childDeviceToken = v }
+        if activeChildId == nil, let v = KeychainStore.get("activeChild") { activeChildId = v }
+    }
+
     var activeToken: String? {
         return parentAccessToken ?? childDeviceToken
     }
@@ -785,6 +644,8 @@ public class SessionManager {
 
     func clear() {
         ParentProfile.shared.reset()
+        Outbox.discardAll()
+        LocalStore.shared.eraseAll()
         parentAccessToken = nil
         parentRefreshToken = nil
         childDeviceToken = nil

@@ -9,6 +9,15 @@ import Observation
 final class SyncState {
     static let shared = SyncState()
     var version = 0
+    /// False until the first sync of this launch has finished, however it
+    /// ended. Until then an empty FamilyStore means "not loaded yet", not
+    /// "this parent has no child", and Home shows a spinner instead of its
+    /// "No child yet" screen.
+    var hasFinishedFirstSync = false
+    /// True once a sync this launch has put the server's children and tasks
+    /// on screen, before the slower calendar and video parts finish. The
+    /// splash waits for it, so a launch doesn't flash the saved state.
+    var hasFreshChildren = false
     /// Set when a background save (approve, lock, rule edit, …) fails, so the
     /// UI can tell the user instead of the change silently bouncing back.
     var writeError: String?
@@ -21,6 +30,30 @@ final class SyncState {
     /// this drives a quiet, dismissible banner instead. Cleared the moment
     /// any sync succeeds.
     var syncError: String?
+
+    private var shown = ""
+
+    /// Redraws the screens that read the family (FamilyStore), if it
+    /// changed. A sync that brings back the same data redraws nothing.
+    /// Tasks and the calendar don't need this: TaskStore is observed.
+    func publish() {
+        let now = Self.snapshot()
+        guard now != shown else { return }
+        shown = now
+        version += 1
+    }
+
+    private static func snapshot() -> String {
+        var out = ""
+        for c in FamilyStore.children {
+            out += "\(c.id)|\(c.name)|\(c.manualLock)|\(c.taskGateOverride)|\(c.timeLeft)|\(c.dailyLimitMin)|\(c.devices.count)\n"
+            for r in c.rules { out += "\(r.id)|\(r.title)|\(r.detail)|\(r.on)\n" }
+            for b in LocalStore.shared.cachedAppBlocks(childId: c.id) {
+                out += "\(b.id)|\(b.resolved)|\(b.state ?? "")|\(b.summary ?? "")\n"
+            }
+        }
+        return out
+    }
 }
 
 /// The signed-in parent's own profile (name), loaded from the backend.
@@ -32,6 +65,19 @@ final class ParentProfile {
     /// What the server has, so we only save real changes.
     private(set) var savedName = ""
     private(set) var email = ""
+
+    // The last name and email the server sent, kept on the phone so the
+    // greeting is right from the first frame of a launch instead of reading
+    // "Hi, Parent" until /auth/me answers.
+    private static let cacheKey = "parentProfile.cache"
+
+    init() {
+        if let cached = UserDefaults.standard.dictionary(forKey: Self.cacheKey) as? [String: String] {
+            savedName = cached["name"] ?? ""
+            name = savedName
+            email = cached["email"] ?? ""
+        }
+    }
 
     /// The name to show: the saved one, else the part of the email before the @.
     var displayName: String {
@@ -47,6 +93,7 @@ final class ParentProfile {
         let editing = name != savedName
         savedName = parent.name ?? ""
         if !editing { name = savedName }
+        UserDefaults.standard.set(["name": savedName, "email": email], forKey: Self.cacheKey)
     }
 
     /// Call when the user finishes editing; saves only if it changed.
@@ -54,7 +101,7 @@ final class ParentProfile {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != savedName else { name = savedName; return }
         name = trimmed
-        BackendWrite.run("Your name") { try await APIClient.shared.updateMyName(trimmed) }
+        Outbox.send(APIClient.Write.updateMyName(trimmed), label: "Your name")
     }
 
     /// Used by onboarding, which wants to know whether the save worked.
@@ -66,29 +113,25 @@ final class ParentProfile {
         name = trimmed
     }
 
-    func reset() { name = ""; savedName = ""; email = "" }
-}
-
-/// Runs a backend write in the background. A failure is reported through
-/// `SyncState.writeError`, and either way the app re-syncs so the screen shows
-/// what the server actually has.
-@MainActor
-enum BackendWrite {
-    static func run(_ what: String, _ work: @escaping () async throws -> Void) {
-        Task {
-            do { try await work() }
-            catch { SyncState.shared.writeError = "\(what) wasn't saved. \(error.apiUserMessage)" }
-            await AppSync.shared.syncBackendData()
-        }
+    func reset() {
+        name = ""; savedName = ""; email = ""
+        UserDefaults.standard.removeObject(forKey: Self.cacheKey)
     }
 }
 
 extension Child {
     /// Persists this child's rules (limit, downtime, custom rules) after any local edit.
     func pushRules() {
-        let id = self.id
-        let body = RuleSync.payload(for: self)
-        BackendWrite.run("That rule change") { try await APIClient.shared.saveRules(childId: id, body: body) }
+        Outbox.send(APIClient.Write.saveRules(childId: id, body: RuleSync.payload(for: self)), childId: id, label: "That rule change")
+    }
+}
+
+extension Child {
+    /// Saves the lock and the task-gate override after a local change.
+    func saveState(label: String) {
+        LocalStore.shared.mirrorChildState(childId: id, manualLock: manualLock, taskGateOverride: taskGateOverride)
+        Outbox.send(APIClient.Write.updateChildState(childId: id, manualLock: manualLock, taskGateOverride: taskGateOverride),
+                    childId: id, label: label)
     }
 }
 
@@ -99,11 +142,12 @@ enum RuleSync {
     }
 
     @MainActor static func payload(for child: Child) -> [String: Any] {
-        let limit = child.rules.first { $0.kind == .screenTimeLimit }
         let downtime = child.rules.first { $0.kind == .downtime }
         var body: [String: Any] = [
             "daily_limit_minutes": child.dailyLimitMin,
-            "daily_limit_enabled": limit?.on ?? true,
+            // The limit can't be switched off in the app any more; saving
+            // any rule also turns back on one switched off before.
+            "daily_limit_enabled": true,
             "downtime_enabled": downtime?.on ?? false,
             "custom_rules": child.rules.filter { $0.kind == .custom }.map {
                 ["id": $0.id, "title": $0.title, "detail": $0.detail, "icon": $0.icon, "on": $0.on] as [String: Any]
@@ -127,16 +171,49 @@ class AppSync {
     // await the same task instead of firing duplicate network chains.
     private var inflightSync: Task<Void, Never>?
 
+    /// Set by a caller that arrives while a sync is already running. That
+    /// sync may have fetched before whatever the caller is reacting to was
+    /// committed, so it isn't enough to just wait for it: one more pass runs
+    /// after it. However many callers arrive meanwhile, that's one pass.
+    ///
+    /// Joining without this handed a live-update "changed" the results of a
+    /// sync that started before the change existed — and nothing fetched
+    /// again until the next event, which might never come.
+    private var rerunRequested = false
+
     // Call this when the app starts or comes foreground, and after onboarding finishes
     func syncBackendData() async {
+        // The debug demo never talks to the server (DemoMode).
+        if DemoMode.isOn { SyncState.shared.hasFinishedFirstSync = true; return }
         if let existing = inflightSync {
+            rerunRequested = true
             await existing.value
             return
         }
-        let task = Task { await _syncBackendData() }
+        let task = Task {
+            repeat {
+                rerunRequested = false
+                await _syncBackendData()
+            } while rerunRequested
+        }
         inflightSync = task
         await task.value
         inflightSync = nil
+        SyncState.shared.hasFinishedFirstSync = true
+    }
+
+    private var syncSoonPending = false
+
+    /// A sync a moment from now, for live updates: a burst of changes
+    /// (approving five tasks is five commits) becomes one sync, not five.
+    func syncSoon() {
+        guard !syncSoonPending else { return }
+        syncSoonPending = true
+        Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            syncSoonPending = false
+            await syncBackendData()
+        }
     }
 
     /// A kid's phone only holds a device token (no parent login), so it syncs
@@ -145,15 +222,44 @@ class AppSync {
         SessionManager.shared.parentAccessToken == nil && SessionManager.shared.childDeviceToken != nil
     }
 
+    /// A write queued after a pass started fetching may not be in what it
+    /// fetched. Such a pass stops before showing anything and runs again.
+    private struct Superseded: Error {}
+    private var passGeneration = 0
+
+    private func ensureCurrent(_ generation: Int) throws {
+        if Outbox.generation != generation { throw Superseded() }
+    }
+
+    /// Sends the outbox first. Returns false while writes are still
+    /// waiting: fetching then would bring back the server's older picture
+    /// over changes that haven't reached it.
+    private func sendPendingWrites() async -> Bool {
+        if await Outbox.drain().isEmpty { return true }
+        SyncState.shared.syncError = "Your changes will send when you're back online."
+        return false
+    }
+
     private func syncKidDevice() async {
         do {
             let me = try await APIClient.shared.fetchMyChild()
+            // What "today" and "now" mean for this child on the server — a
+            // scheduled block's window, which day a grant lands on. Sent
+            // only when it differs, so an unchanged zone never writes.
+            let zone = TimeZone.current.identifier
+            if me.timezone != zone { _ = try? await APIClient.shared.updateMyDevice(timezone: zone) }
             let existing = FamilyStore.children.first(where: { $0.id == me.id })
-            let (child, _) = try await syncChild(me, index: 0, existing: existing)
+            let child = try await syncChild(me, index: 0, existing: existing)
             FamilyStore.children = [child]
             SessionManager.shared.activeChildId = me.id
-            SyncState.shared.version += 1
+            SyncState.shared.hasFreshChildren = true
+            // The kid's own calendar: their events and tasks for the month.
+            await syncCalendar(children: [child], generation: passGeneration)
+            await VideoQueueStore.shared.refresh(childId: me.id)
+            SyncState.shared.publish()
             SyncState.shared.syncError = nil
+        } catch is Superseded {
+            rerunRequested = true
         } catch {
             print("AppSync (kid) failed: \(error.localizedDescription)")
             SyncState.shared.syncError = "Couldn't refresh. \(error.apiUserMessage)"
@@ -161,6 +267,8 @@ class AppSync {
     }
 
     private func _syncBackendData() async {
+        guard await sendPendingWrites() else { return }
+        passGeneration = Outbox.generation
         if isKidDevice { await syncKidDevice(); return }
         do {
             let apiChildren = try await APIClient.shared.fetchChildren()
@@ -174,15 +282,16 @@ class AppSync {
             }
 
             var syncedChildren: [Child] = []
-            var apiTasksByChild: [String: [ApiTask]] = [:]
 
             for (index, apiChild) in apiChildren.enumerated() {
                 let existing = FamilyStore.children.first(where: { $0.id == apiChild.id })
                 do {
-                    let (child, tasks) = try await syncChild(apiChild, index: index, existing: existing)
+                    let child = try await syncChild(apiChild, index: index, existing: existing)
                     syncedChildren.append(child)
-                    apiTasksByChild[apiChild.id] = tasks
                     SyncState.shared.syncError = nil
+                } catch is Superseded {
+                    rerunRequested = true
+                    return
                 } catch {
                     // One child failing must not drop them from the UI. On a
                     // cold launch (fresh install, or the very first sync of
@@ -207,14 +316,17 @@ class AppSync {
             // this also clears the placeholder child onboarding adds locally
             // before the real one exists.
             FamilyStore.children = syncedChildren
+            LocalStore.shared.keepOnlyChildren(apiChildren.map(\.id))
             if SessionManager.shared.activeChildId == nil
                 || !syncedChildren.contains(where: { $0.id == SessionManager.shared.activeChildId }) {
                 SessionManager.shared.activeChildId = syncedChildren.first?.id
             }
+            SyncState.shared.hasFreshChildren = true
 
-            await syncCalendar(children: syncedChildren, tasks: apiTasksByChild)
+            await syncCalendar(children: syncedChildren, generation: passGeneration)
+            for child in syncedChildren { await VideoQueueStore.shared.refresh(childId: child.id) }
 
-            SyncState.shared.version += 1
+            SyncState.shared.publish()
             print("AppSync: Successfully synced backend data into UI state!")
         } catch {
             print("AppSync Failed: \(error.localizedDescription)")
@@ -228,16 +340,37 @@ class AppSync {
     // refetching (rules/state/occurrences are already current from the last
     // full sync; occurrence status only exists for today regardless of
     // which month is on screen — see CalendarData.forDay).
+    /// Which children have something on each day of a month, from the
+    /// tasks' and events' own repeat rules. Doesn't move the calendar's
+    /// loaded month: it's for the month picker's dots on any month.
+    func monthDots(year: Int, month: Int) async -> [Int: [String]] {
+        let cal = Calendar(identifier: .gregorian)
+        var c = DateComponents(); c.year = year; c.month = month; c.day = 1
+        guard let first = cal.date(from: c), let days = cal.range(of: .day, in: .month, for: first),
+              let end = cal.date(byAdding: .day, value: days.count, to: first) else { return [:] }
+        var dots: [Int: [String]] = [:]
+        for child in FamilyStore.children {
+            let tasks = (try? await APIClient.shared.fetchTasks(childId: child.id)) ?? []
+            let events = (try? await APIClient.shared.fetchEvents(childId: child.id, from: first, to: end)) ?? []
+            for day in days {
+                guard let date = cal.date(byAdding: .day, value: day - 1, to: first) else { continue }
+                if tasks.contains(where: { CalendarSync.applies($0, on: date) })
+                    || events.contains(where: { CalendarSync.eventApplies($0, on: date) }) {
+                    dots[day, default: []].append(child.id)
+                }
+            }
+        }
+        return dots
+    }
+
     func loadCalendarMonth(year: Int, month: Int) async {
         CalendarData.dataYear = year
         CalendarData.dataMonth = month
-        let children = FamilyStore.children
-        var apiTasksByChild: [String: [ApiTask]] = [:]
-        for child in children {
-            apiTasksByChild[child.id] = (try? await APIClient.shared.fetchTasks(childId: child.id)) ?? []
-        }
-        await syncCalendar(children: children, tasks: apiTasksByChild)
-        SyncState.shared.version += 1
+        // What the phone already has for that month shows at once.
+        TaskStore.shared.reload()
+        TaskStore.shared.rebuildCalendar()
+        // Tasks are already on the phone; only the month's events are new.
+        await syncCalendar(children: FamilyStore.children, generation: Outbox.generation)
     }
 
     // MARK: - One child
@@ -265,37 +398,87 @@ class AppSync {
         )
     }
 
-    private func syncChild(_ apiChild: ApiChild, index: Int, existing: Child?) async throws -> (Child, [ApiTask]) {
+    /// Photo download links per occurrence, for the ones turned in
+    /// (submitted or approved), all requested at once. Photos only: an old
+    /// voice submission from before voice notes were removed is left out.
+    private static func photoURLs(for occurrences: [ApiOccurrence]) async -> [String: [String]] {
+        await withTaskGroup(of: (String, [String]).self) { group in
+            for occ in occurrences where occ.status == "submitted" || occ.status == "approved" {
+                group.addTask {
+                    let subs = (try? await APIClient.shared.fetchSubmissions(occurrenceId: occ.id)) ?? []
+                    return (occ.id, subs.filter { $0.kind == "photo" }.compactMap { $0.downloadUrl })
+                }
+            }
+            var out: [String: [String]] = [:]
+            for await (id, urls) in group { out[id] = urls }
+            return out
+        }
+    }
+
+    private func syncChild(_ apiChild: ApiChild, index: Int, existing: Child?) async throws -> Child {
         let id = apiChild.id
-        let rules = try await APIClient.shared.fetchRules(childId: id)
-        let state = try await APIClient.shared.fetchState(childId: id)
-        let apiTasks = try await APIClient.shared.fetchTasks(childId: id)
-        let apiOccurrences = try await APIClient.shared.fetchOccurrences(childId: id)
+        // All at once rather than one after another: each is a round trip
+        // to the server, and none depends on another.
+        async let rulesFetch = APIClient.shared.fetchRules(childId: id)
+        async let stateFetch = APIClient.shared.fetchState(childId: id)
+        async let tasksFetch = APIClient.shared.fetchTasks(childId: id)
+        async let occurrencesFetch = APIClient.shared.fetchOccurrences(childId: id)
         // Real available-today total (base limit, or a weekly_schedule
-        // override for today, plus every grant/deduction) — not just the
-        // flat daily limit. Best-effort: a failure here shouldn't fail the
-        // whole sync over a number that's secondary to tasks/rules.
-        let timeGrants = try? await APIClient.shared.fetchTimeGrants(childId: id)
-        // Also best-effort, and for a sharper reason: reflections and app
-        // blocks feed the lock, so they have to be cached to stay correct
-        // offline — but a fetch failure here must not fail the whole sync,
-        // since the previously cached values are still the right answer.
-        let reflections = try? await APIClient.shared.fetchReflections(childId: id)
-        let appBlocks = try? await APIClient.shared.fetchAppBlocks(childId: id, activeOnly: false)
-        let milestones = try? await APIClient.shared.fetchMilestones(childId: id)
+        // override for today, plus every grant/deduction). Best-effort: a
+        // failure here shouldn't fail the whole sync.
+        async let timeGrantsFetch = try? APIClient.shared.fetchTimeGrants(childId: id)
+        // Also best-effort: app blocks are cached to stay correct offline,
+        // and a failed fetch keeps the previous ones.
+        async let appBlocksFetch = try? APIClient.shared.fetchAppBlocks(childId: id, activeOnly: false)
+        // The server's combined answer (lock, blocks, allowance). A failed
+        // fetch keeps the last one.
+        async let policyFetch = try? APIClient.shared.fetchPolicy(childId: id)
+        let rules = try await rulesFetch
+        let state = try await stateFetch
+        let apiTasks = try await tasksFetch
+        let apiOccurrences = try await occurrencesFetch
+        let timeGrants = await timeGrantsFetch
+        let appBlocks = await appBlocksFetch
+        let policy = await policyFetch
 
-        LocalStore.shared.saveTasks(apiTasks, childId: id)
-        LocalStore.shared.saveOccurrences(apiOccurrences, childId: id, dueDate: CalendarSync.isoDay(Date()))
-        LocalStore.shared.saveChildState(childId: id, childName: apiChild.name, rules: rules, state: state)
-        if let timeGrants { LocalStore.shared.saveTimeGrants(timeGrants, childId: id) }
-        if let reflections { LocalStore.shared.saveReflections(reflections, childId: id) }
-        if let appBlocks { LocalStore.shared.saveAppBlocks(appBlocks, childId: id) }
-        if let milestones { LocalStore.shared.saveMilestones(milestones, childId: id) }
+        // Photo links for everything turned in today, fetched together.
+        let photosByOccurrence = await Self.photoURLs(for: apiOccurrences)
+        try ensureCurrent(passGeneration)
 
-        // Map Tasks/Occurrences -> UI `ChildTask`
-        var uiTasks: [ChildTask] = []
-        for task in apiTasks {
-            let occurrence = apiOccurrences.first(where: { $0.taskId == task.id })
+        // Into the database in one batch; the screens follow from it
+        // (TaskStore.reload), once.
+        let store = LocalStore.shared
+        store.batch {
+            store.saveChild(apiChild, position: index, rules: rules, state: state, availableMinutes: timeGrants?.availableMinutes)
+            store.saveTasks(apiTasks, childId: id)
+            store.saveOccurrences(apiOccurrences, photos: photosByOccurrence, childId: id, dueDate: CalendarSync.isoDay(Date()))
+            if let timeGrants { store.saveTimeGrants(timeGrants, childId: id) }
+            if let appBlocks { store.saveAppBlocks(appBlocks, childId: id) }
+            if let policy { store.savePolicy(policy) }
+        }
+
+        // The photos a parent is about to review start downloading now, so
+        // they're ready when the card opens.
+        if !isKidDevice {
+            ImageCache.shared.prefetch(TaskStore.tasks(for: id).filter { $0.state == .review }.flatMap(\.photoURLs))
+        }
+
+        // Real total (base limit, or today's weekly_schedule override, plus
+        // every grant/deduction) when that fetch succeeded, else the flat limit.
+        let available = timeGrants?.availableMinutes ?? rules.dailyLimitMinutes
+        return Self.makeChild(apiChild, rules: rules, state: state, availableMinutes: available, existing: existing)
+    }
+
+    // MARK: - Server rows -> what the screens show
+    //
+    // Shared by a sync and by launch (LocalStore.hydrate), so the phone's
+    // saved copy opens looking exactly like a fresh sync.
+
+    /// Today's list for one child: each task with today's occurrence.
+    static func makeTasks(_ apiTasks: [ApiTask], occurrences: [ApiOccurrence], photos: [String: [String]]) -> [ChildTask] {
+        let now = Date()
+        return apiTasks.map { task in
+            let occurrence = occurrences.first(where: { $0.taskId == task.id })
 
             let bypass = occurrence?.bypassRequested ?? false
             let uiState: TaskState
@@ -304,6 +487,13 @@ class AppSync {
             case "submitted": uiState = .review
             case "rejected": uiState = .pending // a redo: goes back to the kid
             default: uiState = bypass ? .bypass : .pending
+            }
+            // A refused skip comes back as pending (the server withdraws
+            // the ask) with the parent's note kept on it.
+            var skipDeclinedNote: String? = nil
+            if occurrence?.status == "pending", !bypass,
+               let n = occurrence?.rejectionNote, !n.isEmpty {
+                skipDeclinedNote = n
             }
             var redoNote: String? = nil
             if occurrence?.status == "rejected" {
@@ -318,43 +508,16 @@ class AppSync {
             var dueDate: Date? = nil
             var dueLabel: String? = nil
             if occurrence == nil {
-                dueDate = CalendarSync.nextOccurrence(of: task, after: Date())
+                dueDate = CalendarSync.nextOccurrence(of: task, after: now)
             } else if let time = CalendarSync.parseTime(task.dueTime) {
-                dueDate = CalendarSync.date(on: Date(), minutes: time)
+                dueDate = CalendarSync.date(on: now, minutes: time)
                 dueLabel = CalendarSync.clock(minutes: time)
             }
 
-            // Real evidence, not a guess from the task's declared kind —
-            // that used to read task.submissionKind (what a task is
-            // *supposed* to require, which nothing in the UI actually lets
-            // a parent set — every task is created with "none") instead of
-            // what the kid actually turned in, so a real photo submission
-            // always showed the review card's empty "waiting for photo"
-            // state no matter what the kid uploaded. Only worth a fetch
-            // once there's something to fetch: a pending occurrence has no
-            // submissions yet.
-            // Same story as photoURLs above, and the same mirrored bug:
-            // hasVoiceNote was never set from real data at all here, so a
-            // real recorded voice note never showed on the review card
-            // either — on top of KidVoiceRecorderButton never having
-            // captured real audio in the first place (see TaskDetailView).
-            var photoURLs: [String] = []
-            var hasVoiceNote = false
-            var voiceURL: String? = nil
-            if let occId = occurrence?.id, occurrence?.status == "submitted" || occurrence?.status == "approved" {
-                let subs = (try? await APIClient.shared.fetchSubmissions(occurrenceId: occId)) ?? []
-                photoURLs = subs.filter { $0.kind == "photo" }.compactMap { $0.downloadUrl }
-                // A voice submission row can exist before its own upload
-                // finishes (downloadUrl only comes back once the backend
-                // sees status "uploaded") — hasVoiceNote tracks the row,
-                // voiceURL tracks whether it's actually ready to play.
-                if let voiceSub = subs.first(where: { $0.kind == "voice" }) {
-                    hasVoiceNote = true
-                    voiceURL = voiceSub.downloadUrl
-                }
-            }
+            // What the kid actually turned in, photos only.
+            let photoURLs = occurrence.flatMap { photos[$0.id] } ?? []
 
-            uiTasks.append(ChildTask(
+            return ChildTask(
                 id: task.id,
                 occurrenceId: occurrence?.id,
                 title: task.title,
@@ -367,21 +530,22 @@ class AppSync {
                 photoCount: photoURLs.count,
                 photoURLs: photoURLs,
                 repeats: CalendarSync.repeatCodes(task.recurrence),
-                hasVoiceNote: hasVoiceNote,
-                voiceURL: voiceURL,
-                redoNote: redoNote
-            ))
+                redoNote: redoNote,
+                skipDeclinedNote: skipDeclinedNote,
+                createdAt: CalendarSync.parseTimestamp(task.createdAt)
+            )
         }
-        TaskStore.binding(for: id).wrappedValue = uiTasks.sortedForReview()
+        .sortedForReview()
+    }
 
-        // Map Rules — all of them now live on the backend.
+    static func makeRules(_ rules: ApiChildRule) -> [ChildRule] {
         var childRules: [ChildRule] = [ChildRule(
             id: "screen-time-limit",
             kind: .screenTimeLimit,
             icon: "sf:hourglass",
             title: "Screen Time Limit",
             detail: "\(formatMinutes(rules.dailyLimitMinutes)) per day",
-            on: rules.dailyLimitEnabled ?? true
+            on: true
         )]
         // The Downtime rule exists once it has times (it can still be switched off).
         if rules.downtimeEnabled || rules.downtimeStart != nil {
@@ -394,27 +558,33 @@ class AppSync {
         for c in rules.customRules ?? [] {
             childRules.append(ChildRule(id: c.id, kind: .custom, icon: c.icon, title: c.title, detail: c.detail, on: c.on))
         }
+        return childRules
+    }
 
+    /// The child, updated in place when already on screen (so views holding
+    /// it keep it), else new.
+    static func makeChild(_ apiChild: ApiChild, rules: ApiChildRule, state: ApiChildState,
+                          availableMinutes: Int, existing: Child?) -> Child {
         let palette = FamilyStore.childColorPalette
         let color = palette[apiChild.colorIndex % palette.count]
-        // Real total (base limit, or today's weekly_schedule override, plus
-        // every grant/deduction) when the fetch above succeeded; falls back
-        // to the flat limit only if it didn't, same as this always showed
-        // before time_grants existed — never worse than the old behavior.
-        let realTimeLeft = formatMinutes(timeGrants?.availableMinutes ?? rules.dailyLimitMinutes)
+        let childRules = makeRules(rules)
+        let timeLeft = formatMinutes(availableMinutes)
 
         if let child = existing {
-            child.name = apiChild.name
-            child.color = color
-            child.rules = childRules
-            child.dailyLimitMin = rules.dailyLimitMinutes
-            child.manualLock = state.manualLock
-            child.taskGateOverride = state.taskGateOverride
-            // Real data now, not a guess — safe to overwrite unconditionally
-            // (this also self-heals a placeholderChild's "—" sentinel, which
-            // used to be the one special case handled here).
-            child.timeLeft = realTimeLeft
-            child.timePct = 100
+            // Only what changed: every assignment to a published property
+            // redraws whatever shows the child, equal value or not, and a
+            // sync that changed nothing must not redraw Home.
+            func update<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<Child, T>, _ value: T) {
+                if child[keyPath: keyPath] != value { child[keyPath: keyPath] = value }
+            }
+            update(\.name, apiChild.name)
+            update(\.color, color)
+            update(\.rules, childRules)
+            update(\.dailyLimitMin, rules.dailyLimitMinutes)
+            update(\.manualLock, state.manualLock)
+            update(\.taskGateOverride, state.taskGateOverride)
+            update(\.timeLeft, timeLeft)
+            update(\.timePct, availableMinutes > 0 ? 100 : 0)
             // Reflect real pairing state: the "1 device" row is only true
             // once a device has actually paired.
             if apiChild.isPaired && child.devices.isEmpty {
@@ -422,53 +592,65 @@ class AppSync {
             } else if !apiChild.isPaired && !child.devices.isEmpty {
                 child.devices = []
             }
-            return (child, apiTasks)
+            return child
         }
 
-        let child = Child(
-            id: id, name: apiChild.name, age: 10, dailyLimitMin: rules.dailyLimitMinutes,
+        return Child(
+            id: apiChild.id, name: apiChild.name, age: 10, dailyLimitMin: rules.dailyLimitMinutes,
             color: color, manualLock: state.manualLock, taskGateOverride: state.taskGateOverride,
-            timeLeft: realTimeLeft, timePct: 100, usageTodayMin: 0,
+            // No time left today reads as time's up (the header's hourglass).
+            timeLeft: timeLeft, timePct: availableMinutes > 0 ? 100 : 0, usageTodayMin: 0,
             subtitle: "No tasks yet",
             devices: apiChild.isPaired ? FamilyStore.demoDevice(apiChild.name) : [],
             rules: childRules
         )
-        return (child, apiTasks)
     }
 
     // MARK: - Calendar
 
-    /// Builds the month's calendar (events + tasks) from backend rows.
-    private func syncCalendar(children: [Child], tasks: [String: [ApiTask]]) async {
+    /// Fetches the displayed month's events, saves them on the phone, and
+    /// builds the calendar.
+    private func syncCalendar(children: [Child], generation: Int) async {
         let cal = Calendar(identifier: .gregorian)
         let monthStart = CalendarData.date(day: 1)
         let monthEnd = cal.date(byAdding: .day, value: CalendarData.daysInDataMonth, to: monthStart) ?? monthStart
 
-        var byDay: [Int: [CalEvent]] = [:]
-        var seenEventIds = Set<String>()
-
+        var fetched: [String: [ApiEvent]] = [:]
         for child in children {
-            // Events: this child's plus family-wide ones (deduped by id).
             do {
-                let events = try await APIClient.shared.fetchEvents(childId: child.id, from: monthStart, to: monthEnd)
-                for e in events where seenEventIds.insert(e.id).inserted {
-                    if let (day, ev) = CalendarSync.calEvent(from: e) { byDay[day, default: []].append(ev) }
-                }
+                fetched[child.id] = try await APIClient.shared.fetchEvents(childId: child.id, from: monthStart, to: monthEnd)
             } catch {
                 print("AppSync: events for \(child.id) failed: \(error.localizedDescription)")
                 return // keep the previous calendar rather than showing a partial one
             }
+        }
+        guard Outbox.generation == generation else { rerunRequested = true; return }
+        let store = LocalStore.shared
+        store.batch {
+            for child in children {
+                store.saveEvents(fetched[child.id] ?? [], childId: child.id, from: monthStart, to: monthEnd)
+            }
+        }
+    }
 
-            // Tasks, using today's state from TaskStore (filled by syncChild).
-            let store = TaskStore.tasks(for: child.id)
-            for task in tasks[child.id] ?? [] {
-                let state = store.first(where: { $0.id == task.id })?.state ?? .pending
-                if let (day, ev) = CalendarSync.calEvent(from: task, childId: child.id, todayState: state) {
+    /// The displayed month's calendar from server rows: events, and tasks
+    /// with today's state.
+    static func buildCalendar(events: [ApiEvent], tasks: [String: [ApiTask]], today: [String: [ChildTask]]) -> [Int: [CalEvent]] {
+        var byDay: [Int: [CalEvent]] = [:]
+        var seen = Set<String>()
+        for e in events where seen.insert(e.id).inserted {
+            if let (day, ev) = CalendarSync.calEvent(from: e) { byDay[day, default: []].append(ev) }
+        }
+        for (childId, childTasks) in tasks.sorted(by: { $0.key < $1.key }) {
+            let todays = today[childId] ?? []
+            for task in childTasks {
+                let state = todays.first(where: { $0.id == task.id })?.state ?? .pending
+                if let (day, ev) = CalendarSync.calEvent(from: task, childId: childId, todayState: state) {
                     byDay[day, default: []].append(ev)
                 }
             }
         }
-        CalendarData.eventsByDay = byDay
+        return byDay
     }
 }
 
@@ -486,6 +668,43 @@ enum CalendarSync {
     }()
 
     static func parseISO(_ s: String) -> Date? { iso.date(from: s) ?? isoFrac.date(from: s) }
+    static func isoString(_ date: Date) -> String { iso.string(from: date) }
+
+    /// A server timestamp, which can carry microseconds ("…49.839097+00:00")
+    /// that the ISO formatter doesn't read: the fraction is dropped.
+    static func parseTimestamp(_ s: String?) -> Date? {
+        guard let s else { return nil }
+        if let known = timestampCache[s] { return known }
+        let date = parseTimestampUncached(s)
+        timestampCache[s] = date
+        return date
+    }
+
+    // Each list rebuild asks again about every task; the answers for a given
+    // timestamp, or a given task on a given day, don't change, so they're
+    // worked out once. (Keyed by every field they depend on.)
+    private static var timestampCache: [String: Date?] = [:]
+    private static var nextOccurrenceCache: [String: Date] = [:]
+
+    private static func parseTimestampUncached(_ s: String) -> Date? {
+        if let date = parseISO(s) { return date }
+        let trimmed = s.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
+        return parseISO(trimmed) ?? parseISO(trimmed + "Z")
+    }
+
+    /// A calendar item the parent or kid just saved, in the server's shape,
+    /// for the phone's database until the server's own row comes back.
+    static func apiEvent(_ ev: CalEvent, id: String, start: Date, end: Date) -> ApiEvent {
+        ApiEvent(
+            id: id, childId: ev.personId, title: ev.title,
+            startAt: isoString(start), endAt: isoString(end),
+            locationOrLink: ev.location.isEmpty ? nil : ev.location, source: "manual",
+            category: ev.category, note: ev.note,
+            recurrence: ev.repeats == CalendarData.allDayCodes ? "daily" : ev.repeats,
+            createdBy: ev.isKidPlan ? "child" : "parent", status: ev.planStatus.rawValue,
+            reviewNote: ev.reviewNote
+        )
+    }
 
     private static let isoDayFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f
@@ -509,6 +728,14 @@ enum CalendarSync {
         guard p.count == 3, let y = Int(p[0]), let m = Int(p[1]), let d = Int(p[2]) else { return nil }
         var c = DateComponents(); c.year = y; c.month = m; c.day = d
         return cal.date(from: c)
+    }
+
+    /// The local calendar day a server timestamp falls on. Not
+    /// parseDay(createdAt): that reads the first ten characters, which are
+    /// the UTC date, so a task made after 5pm in California landed on
+    /// tomorrow.
+    static func localDay(ofTimestamp s: String?) -> Date? {
+        parseTimestamp(s).map { cal.startOfDay(for: $0) }
     }
 
     static func date(on day: Date, minutes: Int) -> Date {
@@ -540,33 +767,102 @@ enum CalendarSync {
     /// dropped "weekly" (never expanded into a real weekday match, so a
     /// weekly task never applied on any day at all through this function).
     static func applies(_ task: ApiTask, on day: Date) -> Bool {
-        let start = parseDay(task.dueDate) ?? parseDay(task.createdAt) ?? day
-        let d = cal.startOfDay(for: day)
-        let startDay = cal.startOfDay(for: start)
-        let rec = task.recurrence.trimmingCharacters(in: .whitespaces).lowercased()
-        if rec.isEmpty || rec == "none" { return cal.isDate(d, inSameDayAs: startDay) }
-        // A UTC-anchored created_at fallback (no explicit due_date) can
-        // already read as "tomorrow" on a device west of UTC the same
-        // evening a task was created — without this slack, a recurring
-        // task never gets an occurrence on the day it was actually made.
-        // due_date is already an unambiguous calendar date with no UTC
-        // conversion involved, so it gets no slack — mirrors
-        // task_applies_on's own comment exactly.
-        let slackDays = task.dueDate == nil ? 1 : 0
-        let boundary = cal.date(byAdding: .day, value: -slackDays, to: startDay) ?? startDay
-        if d < boundary { return false }
-        if rec == "daily" { return true }
-        if rec == "weekly" { return weekdayCode(d) == weekdayCode(startDay) }
-        let codes = Set(rec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
-        return codes.contains(weekdayCode(d))
+        let key = "\(task.id)|\(task.recurrence)|\(task.dueDate ?? "")|\(task.createdAt ?? "")|\(isoDay(day))"
+        if let known = appliesCache[key] { return known }
+        let result = RepeatRule(task, fallbackStart: day).applies(on: day)
+        appliesCache[key] = result
+        return result
+    }
+    private static var appliesCache: [String: Bool] = [:]
+
+    /// A task's repeat rule, read once: its start, and which days it falls
+    /// on. Looking ahead for the next day a task applies asks up to a year
+    /// of days, and re-reading the task for each one made rebuilding the
+    /// lists slow enough to stall an animation on a phone.
+    struct RepeatRule {
+        private enum Days { case once, daily, weekly(String), codes(Set<String>) }
+        private let startDay: Date
+        private let boundary: Date
+        private let days: Days
+
+        init(_ task: ApiTask, fallbackStart: Date) {
+            let start = CalendarSync.parseDay(task.dueDate) ?? CalendarSync.localDay(ofTimestamp: task.createdAt) ?? fallbackStart
+            startDay = cal.startOfDay(for: start)
+            // A UTC-anchored created_at fallback (no explicit due_date) can
+            // already read as "tomorrow" on a device west of UTC the same
+            // evening a task was created: a day of slack, as the server's
+            // task_applies_on has. A due_date is an exact day: none.
+            let slackDays = task.dueDate == nil ? 1 : 0
+            boundary = cal.date(byAdding: .day, value: -slackDays, to: startDay) ?? startDay
+            let rec = task.recurrence.trimmingCharacters(in: .whitespaces).lowercased()
+            if rec.isEmpty || rec == "none" { days = .once }
+            else if rec == "daily" { days = .daily }
+            else if rec == "weekly" { days = .weekly(CalendarSync.weekdayCode(startDay)) }
+            else { days = .codes(Set(rec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })) }
+        }
+
+        func applies(on day: Date) -> Bool {
+            let d = cal.startOfDay(for: day)
+            if case .once = days { return cal.isDate(d, inSameDayAs: startDay) }
+            if d < boundary { return false }
+            switch days {
+            case .once: return false
+            case .daily: return true
+            case .weekly(let code): return CalendarSync.weekdayCode(d) == code
+            case .codes(let codes): return codes.contains(CalendarSync.weekdayCode(d))
+            }
+        }
+
+        /// The first day after `date` it applies, a year ahead at most.
+        func next(after date: Date) -> Date? {
+            if case .once = days { return startDay > date ? startDay : nil }
+            for offset in 1...365 {
+                if let d = cal.date(byAdding: .day, value: offset, to: date), applies(on: d) { return d }
+            }
+            return nil
+        }
     }
 
     /// First day after `date` the task applies (looks a year ahead).
-    static func nextOccurrence(of task: ApiTask, after date: Date) -> Date {
-        for offset in 1...365 {
-            if let d = cal.date(byAdding: .day, value: offset, to: date), applies(task, on: d) { return d }
+    /// Tomorrow's list for a child: each task that applies tomorrow, as not
+    /// yet started, at its due time. Built from the task rules, not from
+    /// occurrences: the server only creates a day's occurrence on that day.
+    static func tomorrowTasks(from apiTasks: [ApiTask]) -> [ChildTask] {
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date())) ?? Date()
+        return apiTasks.filter { applies($0, on: tomorrow) }.map { task in
+            let time = parseTime(task.dueTime)
+            return ChildTask(
+                id: task.id, occurrenceId: nil, title: task.title, state: .pending,
+                category: task.category ?? task.bucket, description: task.instructions ?? "",
+                note: nil,
+                dueLabel: time.map { clock(minutes: $0) },
+                dueDate: time.map { date(on: tomorrow, minutes: $0) } ?? tomorrow,
+                repeats: repeatCodes(task.recurrence),
+                createdAt: parseTimestamp(task.createdAt)
+            )
         }
-        return cal.date(byAdding: .year, value: 1, to: date) ?? date
+        .sortedForTomorrow()
+    }
+
+    /// Whether an event falls on `day`: its own day, or for a repeat, a
+    /// matching weekday on or after the day it starts.
+    static func eventApplies(_ e: ApiEvent, on day: Date) -> Bool {
+        guard e.childId != nil, let start = parseISO(e.startAt) else { return false }
+        let d = cal.startOfDay(for: day), s = cal.startOfDay(for: start)
+        let rec = e.recurrence.trimmingCharacters(in: .whitespaces).lowercased()
+        if rec.isEmpty || rec == "none" { return cal.isDate(d, inSameDayAs: s) }
+        if d < s { return false }
+        if rec == "daily" { return true }
+        if rec == "weekly" { return weekdayCode(d) == weekdayCode(s) }
+        return rec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.contains(weekdayCode(d))
+    }
+
+    static func nextOccurrence(of task: ApiTask, after date: Date) -> Date {
+        let key = "\(task.id)|\(task.recurrence)|\(task.dueDate ?? "")|\(task.createdAt ?? "")|\(isoDay(date))"
+        if let known = nextOccurrenceCache[key] { return known }
+        let next = RepeatRule(task, fallbackStart: date).next(after: date) ?? cal.date(byAdding: .year, value: 1, to: date) ?? date
+        nextOccurrenceCache[key] = next
+        return next
     }
 
     /// Day-of-month a (possibly repeating) item should be filed under in the
@@ -583,24 +879,28 @@ enum CalendarSync {
     }
 
     static func calEvent(from e: ApiEvent) -> (Int, CalEvent)? {
-        guard let start = parseISO(e.startAt), let end = parseISO(e.endAt) else { return nil }
+        guard let childId = e.childId,
+              let start = parseISO(e.startAt), let end = parseISO(e.endAt) else { return nil }
         let repeats = repeatCodes(e.recurrence)
         guard let day = placement(start: start, repeats: repeats) else { return nil }
         let category = e.category ?? "Activity"
         var ev = CalEvent(
-            personId: e.childId ?? (e.isParentOnly ? "family" : "everyone"),
+            personId: childId,
             title: e.title, emoji: emojiForCalendarCategory(category),
             start: ChildRule.fmtClock(start), end: ChildRule.fmtClock(end),
             category: category, location: e.locationOrLink ?? "", note: e.note ?? "", repeats: repeats
         )
         ev.remoteId = e.id
         if let id = UUID(uuidString: e.id) { ev.id = id }
+        ev.isKidPlan = e.createdBy == "child"
+        ev.planStatus = PlanStatus(rawValue: e.status ?? "approved") ?? .approved
+        ev.reviewNote = e.reviewNote
         return (day, ev)
     }
 
     static func calEvent(from t: ApiTask, childId: String, todayState: TaskState) -> (Int, CalEvent)? {
         let repeats = repeatCodes(t.recurrence)
-        guard let startDay = parseDay(t.dueDate) ?? parseDay(t.createdAt),
+        guard let startDay = parseDay(t.dueDate) ?? localDay(ofTimestamp: t.createdAt),
               let day = placement(start: startDay, repeats: repeats) else { return nil }
         let minutes = parseTime(t.dueTime)
         let startLabel = minutes.map(clock(minutes:)) ?? "12:00 AM"
@@ -613,6 +913,7 @@ enum CalendarSync {
             gatesUnlock: t.gatesApps, linkedTaskId: t.id
         )
         ev.remoteId = t.id
+        if let id = UUID(uuidString: t.id) { ev.id = id }
         return (day, ev)
     }
 }
