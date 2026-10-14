@@ -1,5 +1,8 @@
 # Evlin backend architecture
 
+> **Out of date in places (2026-10-03).** Specifically: the courses, reflections and milestones material (removed, tables dropped), "Planned: Milestones" (never built, now dropped), polling as the real-time mechanism (replaced by `GET /live`), the `content` router and comics (removed), and voice submissions (photos only now). Its warning that `evlin-tables.sql` isn't the schema still holds. See [handover-2026-10-03.md](handover-2026-10-03.md) for what changed.
+
+
 A from-scratch orientation to `evlin-backend/`, for an agent (or developer)
 with no prior context. Covers the real, currently-deployed system — not the
 aspirational one described in `evlin-tables.sql` (see "Schema — what's
@@ -89,6 +92,23 @@ Two independent auth schemes, both in `routers/auth.py`:
   `DevicePairing` (a short-lived code + secret the parent's app shows and
   the kid's app claims). `PairingCode` also exists in `models.py` but isn't
   referenced by any router — `DevicePairing` is the one actually in use.
+
+How a parent gets a Supabase account:
+- **Email**: `/auth/signup/start` emails a 6-digit code;
+  `/auth/signup/verify` takes the code and password and only then creates
+  the Supabase user. Nobody gets an account for an inbox they can't read.
+  Limits, hashing and the threat model are at the top of
+  `email_verification.py`; mail goes out through Resend (`email_sender.py`).
+  `/auth/register`, which created accounts with no check, now returns 410.
+- **Apple**: the app's native sheet sends Apple's identity token and the raw
+  nonce to `/auth/apple`. `apple_auth.py` checks the signature, audience,
+  issuer, expiry and nonce, then Supabase signs the user in with the same
+  token. The Apple refresh token is stored encrypted so `DELETE
+  /auth/account` can revoke it, which the App Store requires.
+- **Google**: Supabase's web flow, then `/auth/verify-parent`.
+
+Rate limits key on the last `X-Forwarded-For` entry, the one Render's
+proxy appends; earlier entries are whatever the caller wrote.
 
 A third helper, `assert_child_access` (`access.py`), accepts *either* role
 — used by endpoints both a parent and that child's own device can read.

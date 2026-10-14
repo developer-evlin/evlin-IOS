@@ -1,5 +1,8 @@
 # Evlin frontend component & Profile-screen guide
 
+> **Out of date in places (2026-10-03).** The profile no longer has the mock "Reflection Assignment" card or the Milestones link, and the review card no longer plays voice notes. It does have a Blocked apps section with Lift. See [handover-2026-10-03.md](handover-2026-10-03.md) for what changed.
+
+
 Companion to `docs/frontend-architecture.md` (read that first for the overall
 app/data-flow picture — mode switching, onboarding, `FamilyStore`/`TaskStore`,
 the two-disconnected-worlds split). This doc has two parts: (1) a walkthrough

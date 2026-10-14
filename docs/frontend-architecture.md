@@ -1,5 +1,8 @@
 # Evlin frontend architecture
 
+> **Out of date in places (2026-10-03).** This already predated the backend. It also describes the Library and comics, and voice notes, which have since been removed. The current tabs are Home, Calendar, Chat and Settings (parent), and Task and Calendar (kid). See [handover-2026-10-03.md](handover-2026-10-03.md) for what changed.
+
+
 A from-scratch orientation to this codebase, for an agent (or developer) with
 no prior context. Covers what the app is, how it's structured, how data
 flows, and what's real vs. mocked. Written after a restructure that moved

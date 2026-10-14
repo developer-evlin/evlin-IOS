@@ -1,5 +1,8 @@
 # Child status model & confirmation cards — backend handoff
 
+> **Out of date in places (2026-10-03).** References to reflections as a lock reason, voice notes, and polling are out of date: reflections and voice notes were removed, and polling was replaced by live updates. The lock now comes from `GET /children/{id}/policy`. See [handover-2026-10-03.md](handover-2026-10-03.md) for what changed.
+
+
 Written for whoever (person or agent) is building a real backend for this
 app. Everything described here is currently **client-only, in-memory, and
 non-authoritative** — a `Child`'s `status` is just a `@Published` enum field
