@@ -1,12 +1,19 @@
-fastapi[standard]
-SQLAlchemy
-psycopg2-binary
-python-dotenv
-boto3
-pydantic[email]
-supabase
-pytest
-httpx
-PyJWT
-slowapi
-cryptography
+# Exact versions, the ones the tests pass with. Unpinned, a fresh Render
+# build picked up SQLAlchemy 2.1, whose default Postgres driver is psycopg 3
+# (not installed here), and the server crashed on start. Upgrade on purpose:
+# change a version, run the tests, then deploy.
+fastapi[standard]==0.141.1
+starlette==1.6.0
+uvicorn==0.53.0
+SQLAlchemy==2.0.54
+psycopg2-binary==2.9.13
+python-dotenv==1.2.3
+boto3==1.43.98
+pydantic[email]==2.13.5
+email-validator==2.3.0
+supabase==2.31.0
+pytest==9.1.1
+httpx==0.28.1
+PyJWT==2.14.0
+slowapi==0.1.10
+cryptography==50.0.1
