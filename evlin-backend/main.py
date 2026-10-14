@@ -1,10 +1,32 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, content, time_grants, chat, courses, reflections, milestones, app_blocks, memory
+from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, time_grants, chat, app_blocks, live, apps, policy, videos
+from routers.auth import limiter
 from storage import storage_configured
+import app_catalog
+import live_updates
 
 app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app")
+
+# M-5: Explicit CORS policy — this is a mobile-only backend, so allow_origins
+# is empty. The middleware is present so any future web surface (admin dash,
+# web app) must consciously add itself here rather than opening everything.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[],         # No browser origins permitted by default
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# H-1: Attach the rate-limiter and its 429-handler to the app.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # Additive, idempotent schema updates for columns added after the original
@@ -18,7 +40,6 @@ _MIGRATIONS = [
     "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS daily_limit_enabled boolean NOT NULL DEFAULT true",
     "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS custom_rules jsonb NOT NULL DEFAULT '[]'::jsonb",
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS category text",
-    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS is_parent_only boolean NOT NULL DEFAULT false",
     # The original schema's tasks.recurrence check only allowed the literal
     # words 'daily'/'weekly'/'none' — the app's day-picker stores a
     # comma-joined weekday list instead (e.g. "mon,wed,fri"), which the old
@@ -85,7 +106,7 @@ _MIGRATIONS = [
     )""",
     # Flexible screen-time pool: an append-only ledger, not a mutable
     # balance — see models.py's TimeGrant for why. bonus_minutes on tasks
-    # is what a "special task" grants once its occurrence is approved.
+    # is what a task grants once its occurrence is approved.
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS bonus_minutes integer NOT NULL DEFAULT 0",
     """CREATE TABLE IF NOT EXISTS app.time_grants (
         id uuid PRIMARY KEY,
@@ -117,12 +138,21 @@ _MIGRATIONS = [
         created_at timestamptz NOT NULL DEFAULT now()
     )""",
     "CREATE INDEX IF NOT EXISTS chat_messages_child_id_idx ON app.chat_messages(child_id, created_at)",
-    # The original schema constrained submission_kind to
-    # ('none','photo','voice','either'). A "special task" — completed by
-    # finishing an assigned course rather than by photo/voice evidence —
-    # needs 'course' too, or every such save dies on the constraint. Same
-    # introspect-then-replace shape as the recurrence constraint above,
-    # for the same reason: the auto-generated name can't be relied on.
+    # Courses (and the course tasks, reflections and milestones built on
+    # them) were removed. A task that was completed by finishing a course
+    # becomes an ordinary task first: its course is dropped below, and a
+    # course task with no course could never be handed in.
+    "UPDATE app.tasks SET submission_kind = 'none' WHERE submission_kind = 'course'",
+    # Voice notes were removed too: a task that took a photo or a voice note
+    # now takes a photo; one that took only a voice note takes nothing. Old
+    # voice submissions stay as history (app.submissions still allows them).
+    "UPDATE app.tasks SET submission_kind = 'photo' WHERE submission_kind = 'either'",
+    "UPDATE app.tasks SET submission_kind = 'none' WHERE submission_kind = 'voice'",
+    # A recording's length — nothing a photo has.
+    "ALTER TABLE app.submissions DROP COLUMN IF EXISTS duration_seconds",
+    # submission_kind's allowed values, rebuilt every boot. Introspect-then-
+    # replace, the same shape as the recurrence constraint above, because the
+    # constraint's auto-generated name can't be relied on.
     """DO $$
     DECLARE r record;
     BEGIN
@@ -139,118 +169,32 @@ _MIGRATIONS = [
     """DO $$
     BEGIN
         ALTER TABLE app.tasks ADD CONSTRAINT tasks_submission_kind_check
-            CHECK (submission_kind IN ('none','photo','voice','either','course'));
+            CHECK (submission_kind IN ('none','photo'));
     EXCEPTION WHEN duplicate_object THEN NULL;
     END $$""",
-    # Courses: shared vetted content (courses/course_items, no child_id) +
-    # per-child progress (course_assignments/course_item_progress). See
-    # models.py's Course for why that's split rather than one per-child table.
-    # id has no DEFAULT here, matching time_grants/chat_messages above — the
-    # models supply it Python-side.
-    """CREATE TABLE IF NOT EXISTS app.courses (
-        id uuid PRIMARY KEY,
-        title text NOT NULL,
-        topic text,
-        category text,
-        status text NOT NULL DEFAULT 'pending_review',
-        created_by text NOT NULL DEFAULT 'ai_agent',
-        created_by_parent_id uuid REFERENCES app.parents(id) ON DELETE SET NULL,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        published_at timestamptz
-    )""",
-    """CREATE TABLE IF NOT EXISTS app.course_items (
-        id uuid PRIMARY KEY,
-        course_id uuid NOT NULL REFERENCES app.courses(id) ON DELETE CASCADE,
-        order_index integer NOT NULL,
-        video_id text NOT NULL,
-        video_title text,
-        channel_title text,
-        vetting_notes text,
-        quiz jsonb NOT NULL DEFAULT '[]'::jsonb,
-        created_at timestamptz NOT NULL DEFAULT now()
-    )""",
-    "CREATE INDEX IF NOT EXISTS course_items_course_order_idx ON app.course_items(course_id, order_index)",
-    """CREATE TABLE IF NOT EXISTS app.course_assignments (
-        id uuid PRIMARY KEY,
-        course_id uuid NOT NULL REFERENCES app.courses(id),
-        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
-        status text NOT NULL DEFAULT 'active',
-        assigned_by text NOT NULL DEFAULT 'parent',
-        created_at timestamptz NOT NULL DEFAULT now(),
-        completed_at timestamptz
-    )""",
-    "CREATE INDEX IF NOT EXISTS course_assignments_child_idx ON app.course_assignments(child_id, status)",
-    """CREATE TABLE IF NOT EXISTS app.course_item_progress (
-        id uuid PRIMARY KEY,
-        assignment_id uuid NOT NULL REFERENCES app.course_assignments(id) ON DELETE CASCADE,
-        course_item_id uuid NOT NULL REFERENCES app.course_items(id),
-        status text NOT NULL DEFAULT 'locked',
-        quiz_answers jsonb,
-        quiz_score integer,
-        completed_at timestamptz
-    )""",
-    """CREATE UNIQUE INDEX IF NOT EXISTS course_item_progress_assignment_item_uidx
-        ON app.course_item_progress(assignment_id, course_item_id)""",
-    # The original evlin-tables.sql created an app.reflections that was never
-    # wired to anything (no model, no router, no way to write it) and whose
-    # columns are nothing like the real one below. CREATE TABLE IF NOT EXISTS
-    # would silently no-op against it, leaving the model pointing at columns
-    # that don't exist — passing every test (SQLite builds from models) and
-    # 500ing in production.
-    #
-    # Renamed rather than dropped: it's almost certainly empty, but "almost
-    # certainly" isn't a good enough reason to run an irreversible statement
-    # against a live database. Guarded so it's idempotent and can't touch the
-    # new table once that exists.
-    """DO $$
-    BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.tables
-                   WHERE table_schema = 'app' AND table_name = 'reflections')
-           AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                           WHERE table_schema = 'app' AND table_name = 'reflections'
-                             AND column_name = 'course_assignment_id')
-        THEN
-            ALTER TABLE app.reflections RENAME TO reflections_legacy;
-        END IF;
-    END $$""",
-    """CREATE TABLE IF NOT EXISTS app.reflections (
-        id uuid PRIMARY KEY,
-        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
-        course_assignment_id uuid NOT NULL REFERENCES app.course_assignments(id),
-        written_prompt text,
-        written_response text,
-        status text NOT NULL DEFAULT 'pending',
-        review_note text,
-        created_by text NOT NULL DEFAULT 'parent',
-        created_at timestamptz NOT NULL DEFAULT now(),
-        submitted_at timestamptz,
-        reviewed_at timestamptz
-    )""",
-    "CREATE INDEX IF NOT EXISTS reflections_child_status_idx ON app.reflections(child_id, status)",
-    """CREATE TABLE IF NOT EXISTS app.milestones (
-        id uuid PRIMARY KEY,
-        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
-        title text NOT NULL,
-        description text,
-        kind text NOT NULL DEFAULT 'count',
-        target_count integer,
-        progress_count integer NOT NULL DEFAULT 0,
-        course_assignment_id uuid REFERENCES app.course_assignments(id),
-        prize_text text,
-        prize_minutes integer NOT NULL DEFAULT 0,
-        status text NOT NULL DEFAULT 'active',
-        created_by text NOT NULL DEFAULT 'parent',
-        created_at timestamptz NOT NULL DEFAULT now(),
-        achieved_at timestamptz
-    )""",
-    "CREATE INDEX IF NOT EXISTS milestones_child_status_idx ON app.milestones(child_id, status)",
-    # Special tasks and milestone tagging. SET NULL on both: without it,
-    # deleting a milestone or a course assignment fails while any task still
-    # references it.
-    """ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS course_assignment_id uuid
-        REFERENCES app.course_assignments(id) ON DELETE SET NULL""",
-    """ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS milestone_id uuid
-        REFERENCES app.milestones(id) ON DELETE SET NULL""",
+    # The removed features' storage, dropped for good. Columns referencing
+    # the tables first, then tables in foreign-key order (milestones and
+    # reflections point at course_assignments, which points at courses).
+    # reflections_legacy was the original schema's never-used reflections
+    # table, renamed aside when the real one arrived. IF EXISTS throughout,
+    # so this is a no-op on every boot after the first.
+    "ALTER TABLE app.tasks DROP COLUMN IF EXISTS course_assignment_id",
+    "ALTER TABLE app.tasks DROP COLUMN IF EXISTS milestone_id",
+    "DROP TABLE IF EXISTS app.reflections",
+    "DROP TABLE IF EXISTS app.reflections_legacy",
+    "DROP TABLE IF EXISTS app.milestones",
+    "DROP TABLE IF EXISTS app.course_item_progress",
+    "DROP TABLE IF EXISTS app.course_assignments",
+    "DROP TABLE IF EXISTS app.course_items",
+    "DROP TABLE IF EXISTS app.courses",
+    # The comics and slide-lesson library was removed. These tables were
+    # created by the original evlin-tables.sql and never written to (empty
+    # in production when this went in).
+    "DROP TABLE IF EXISTS app.lesson_slides",
+    "DROP TABLE IF EXISTS app.slide_lessons",
+    "DROP TABLE IF EXISTS app.comic_panels",
+    "DROP TABLE IF EXISTS app.comic_guides",
+    "DROP TABLE IF EXISTS content.comics",
     # Structured app blocks, replacing the free-text custom_rules sentence
     # for anything that needs to resolve itself — see models.py's AppBlock.
     """CREATE TABLE IF NOT EXISTS app.app_blocks (
@@ -285,6 +229,9 @@ _MIGRATIONS = [
         REFERENCES app.chat_conversations(id) ON DELETE CASCADE""",
     """CREATE INDEX IF NOT EXISTS chat_messages_conversation_idx
         ON app.chat_messages(conversation_id, created_at)""",
+    # Which assistant a message belongs to: the main chat or the YouTube
+    # agent, which runs inside the same thread with its own short memory.
+    "ALTER TABLE app.chat_messages ADD COLUMN IF NOT EXISTS agent text NOT NULL DEFAULT 'chat'",
     # Backfill: every message written before threading existed gets grouped
     # into one conversation per child, so nothing is orphaned or disappears
     # from the UI. One statement rather than an insert plus a title-matched
@@ -317,6 +264,122 @@ _MIGRATIONS = [
     SET conversation_id = n.id
     FROM new_convs n
     WHERE m.child_id = n.child_id AND m.conversation_id IS NULL""",
+    # Apps get Evlin's own identity — see app_catalog.py. The catalog is
+    # global; child_apps is each child's lockable list.
+    "ALTER TABLE app.children ADD COLUMN IF NOT EXISTS timezone text",
+    """CREATE TABLE IF NOT EXISTS app.apps (
+        id uuid PRIMARY KEY,
+        name text NOT NULL,
+        aliases jsonb NOT NULL DEFAULT '[]',
+        category text,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS apps_name_uidx ON app.apps (lower(name))",
+    app_catalog.seed_sql(),
+    """CREATE TABLE IF NOT EXISTS app.child_apps (
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        app_id uuid NOT NULL REFERENCES app.apps(id) ON DELETE CASCADE,
+        added_by text NOT NULL DEFAULT 'parent',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (child_id, app_id)
+    )""",
+    # Blocks point at catalog apps and come in four kinds — see blocks.py.
+    "ALTER TABLE app.app_blocks ADD COLUMN IF NOT EXISTS app_id uuid REFERENCES app.apps(id) ON DELETE SET NULL",
+    "ALTER TABLE app.app_blocks ADD COLUMN IF NOT EXISTS ends_at timestamptz",
+    "ALTER TABLE app.app_blocks ADD COLUMN IF NOT EXISTS schedule_days text",
+    "ALTER TABLE app.app_blocks ADD COLUMN IF NOT EXISTS schedule_start time",
+    "ALTER TABLE app.app_blocks ADD COLUMN IF NOT EXISTS schedule_end time",
+    "ALTER TABLE app.app_blocks ADD COLUMN IF NOT EXISTS resolved_reason text",
+    # Rows written before the catalog: find their app by name or alias, and
+    # fix a duration block's end the way new ones get it. Both only touch
+    # rows still missing the value, so a rerun changes nothing.
+    """UPDATE app.app_blocks b SET app_id = a.id
+        FROM app.apps a
+        WHERE b.app_id IS NULL
+          AND (lower(a.name) = lower(b.app_name)
+               OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(a.aliases::jsonb) al
+                          WHERE lower(al) = lower(b.app_name)))""",
+    """UPDATE app.app_blocks SET ends_at = created_at + make_interval(mins => duration_minutes)
+        WHERE block_type = 'duration' AND ends_at IS NULL AND duration_minutes IS NOT NULL""",
+    # Evlin keeps the children's calendars only: no parent events, no
+    # family-wide ones. Every event gets a child, in this order, each step a
+    # no-op on reruns:
+    # 1. The parent's own events go (only while the column that marks them
+    #    still exists).
+    """DO $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = 'app' AND table_name = 'events' AND column_name = 'is_parent_only') THEN
+            DELETE FROM app.events WHERE child_id IS NULL AND is_parent_only;
+        END IF;
+    END $$""",
+    # 2. Family-wide events have no owner column, so the family can't be
+    #    traced. With exactly one child in the whole database they can only
+    #    be that child's, and move there; otherwise step 3 removes them.
+    """UPDATE app.events SET child_id = (SELECT id FROM app.children)
+        WHERE child_id IS NULL AND (SELECT count(*) FROM app.children) = 1""",
+    "DELETE FROM app.events WHERE child_id IS NULL",
+    "ALTER TABLE app.events DROP COLUMN IF EXISTS is_parent_only",
+    "ALTER TABLE app.events ALTER COLUMN child_id SET NOT NULL",
+    # Today's videos: a parent-approved list per child per day, filtered by
+    # the child's video profile. Not the removed courses — no shared course
+    # content, no lessons; see models.py's VideoQueueItem.
+    """CREATE TABLE IF NOT EXISTS app.child_video_profiles (
+        child_id uuid PRIMARY KEY REFERENCES app.children(id) ON DELETE CASCADE,
+        allowed_categories jsonb NOT NULL DEFAULT '[]',
+        blocked_keywords jsonb NOT NULL DEFAULT '[]',
+        allowed_channels jsonb NOT NULL DEFAULT '[]',
+        blocked_channels jsonb NOT NULL DEFAULT '[]',
+        daily_minutes integer NOT NULL DEFAULT 30,
+        max_video_minutes integer NOT NULL DEFAULT 10,
+        updated_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    """CREATE TABLE IF NOT EXISTS app.video_queue_items (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        local_date date NOT NULL,
+        position integer NOT NULL DEFAULT 0,
+        video_id text NOT NULL,
+        title text NOT NULL,
+        channel_id text,
+        channel_title text,
+        thumbnail_url text,
+        duration_seconds integer NOT NULL,
+        category text,
+        added_by_parent_id uuid REFERENCES app.parents(id) ON DELETE SET NULL,
+        watched_seconds integer NOT NULL DEFAULT 0,
+        completed_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    """CREATE INDEX IF NOT EXISTS video_queue_items_child_date_idx
+        ON app.video_queue_items(child_id, local_date, position)""",
+    # Email sign-up codes (email_verification.py). The account is created
+    # only after the code matches; one row per address and purpose.
+    """CREATE TABLE IF NOT EXISTS app.email_verifications (
+        id uuid PRIMARY KEY,
+        email text NOT NULL,
+        purpose text NOT NULL DEFAULT 'signup',
+        code_hash text NOT NULL,
+        attempts integer NOT NULL DEFAULT 0,
+        send_count integer NOT NULL DEFAULT 0,
+        window_started_at timestamptz NOT NULL,
+        last_sent_at timestamptz,
+        expires_at timestamptz NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS email_verifications_email_purpose_idx
+        ON app.email_verifications(email, purpose)""",
+    # Sign in with Apple: the encrypted refresh token that account deletion
+    # revokes (apple_auth.py).
+    "ALTER TABLE app.parents ADD COLUMN IF NOT EXISTS apple_refresh_token_enc text",
+    # Kids' plans: events a child proposes and the parent approves or
+    # declines (routers/calendar.py). Existing events are the parent's and
+    # already on the calendar.
+    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT 'parent'",
+    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'approved'",
+    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS review_note text",
+    # Never used; kids' plans live in app.events.
+    "DROP TABLE IF EXISTS app.event_proposals",
 ]
 
 
@@ -355,14 +418,13 @@ app.include_router(submissions.router)
 app.include_router(rules.router)
 app.include_router(calendar.router)
 app.include_router(compliance.router)
-app.include_router(content.router)
 app.include_router(time_grants.router)
 app.include_router(chat.router)
-app.include_router(courses.router)
-app.include_router(reflections.router)
-app.include_router(milestones.router)
 app.include_router(app_blocks.router)
-app.include_router(memory.router)
+app.include_router(live.router)
+app.include_router(apps.router)
+app.include_router(policy.router)
+app.include_router(videos.router)
 
 @app.get("/")
 def read_root():
@@ -376,16 +438,18 @@ from sqlalchemy import text
 _EXPECTED_COLUMNS = [
     ("app.parents", "name"), ("app.tasks", "due_date"),
     ("app.events", "category"), ("app.events", "note"), ("app.events", "recurrence"),
+    ("app.events", "created_by"), ("app.events", "status"), ("app.events", "review_note"),
     ("app.child_rules", "daily_limit_enabled"), ("app.child_rules", "custom_rules"),
     # A model with no matching migration is a table that doesn't exist in
     # production — the failure shows up as a 500 in whatever feature needed
     # it, long after deploy. These make a silently-failed migration visible
     # from one curl instead.
-    ("app.courses", "status"), ("app.course_items", "video_id"),
-    ("app.course_assignments", "child_id"), ("app.course_item_progress", "status"),
-    ("app.reflections", "course_assignment_id"), ("app.milestones", "kind"),
-    ("app.tasks", "course_assignment_id"), ("app.tasks", "milestone_id"),
     ("app.app_blocks", "block_type"), ("app.child_memory", "fact"),
+    ("app.children", "timezone"), ("app.apps", "aliases"), ("app.child_apps", "app_id"),
+    ("app.app_blocks", "app_id"), ("app.app_blocks", "schedule_days"),
+    ("app.child_video_profiles", "allowed_categories"), ("app.video_queue_items", "local_date"),
+    ("app.email_verifications", "code_hash"), ("app.parents", "apple_refresh_token_enc"),
+    ("app.chat_messages", "agent"),
 ]
 
 
@@ -403,14 +467,20 @@ def health_check(db: Session = Depends(get_db)):
         except Exception:
             missing.append(f"{table}.{column}")
             db.rollback()  # the failed SELECT leaves the transaction unusable otherwise
-    # R2 (photo/voice upload) creds are set separately per environment —
+    # R2 (photo upload) creds are set separately per environment —
     # a working local .env doesn't mean the deployed service has them, and
     # that gap shows up to a kid only as a silent "failed" upload badge with
     # no indication why. Surfacing it here makes that checkable with one
     # curl instead of guessing.
+    # Open /live streams on this process. Zero while apps are open means the
+    # stream isn't getting through (a buffering proxy, a failed deploy) and
+    # devices are only refreshing on foreground and after their own writes.
+    live_connections = live_updates.broker.subscriber_count()
     if missing or not storage_configured():
         return {
             "status": "degraded", "database": "connected",
             "missing_columns": missing, "storage_configured": storage_configured(),
+            "live_connections": live_connections,
         }
-    return {"status": "healthy", "database": "connected", "storage_configured": True}
+    return {"status": "healthy", "database": "connected", "storage_configured": True,
+            "live_connections": live_connections}

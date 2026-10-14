@@ -12,12 +12,11 @@ from datetime import datetime, timezone
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 # generate_presigned_url is pure local signing (no network call), so the
-# submissions/content routers are fully testable with made-up credentials.
+# submissions router is fully testable with made-up credentials.
 os.environ.setdefault("R2_ACCOUNT_ID", "test-account")
 os.environ.setdefault("R2_ACCESS_KEY_ID", "test-key")
 os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-secret")
 os.environ.setdefault("R2_BUCKET_NAME", "test-bucket")
-os.environ.setdefault("R2_PUBLIC_BUCKET_NAME", "test-public")
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
@@ -71,6 +70,9 @@ def db_session():
 @pytest.fixture()
 def client(db_session):
     PARENT_TOKENS.clear()
+    # Rate limits are per minute and in memory; without a reset, requests
+    # from earlier tests count against later ones.
+    auth_router.limiter.reset()
 
     def fake_get_current_parent(credentials: HTTPAuthorizationCredentials = Depends(security), db=Depends(get_db)):
         from fastapi import HTTPException
@@ -130,6 +132,16 @@ def _aware_pairing_code(target, _ctx):
 
 
 @pytest.fixture(autouse=True)
+def deleted_r2_keys(monkeypatch):
+    """R2 deletes are recorded, never sent: the test credentials are fake and
+    the suite runs without a network."""
+    import storage
+    deleted: list[str] = []
+    monkeypatch.setattr(storage, "delete_objects", lambda keys: deleted.extend(keys))
+    return deleted
+
+
+@pytest.fixture(autouse=True)
 def _no_real_memory_extraction(monkeypatch):
     """Memory extraction runs as a background task with its own session, so
     it bypasses the get_db override and would talk to a different database —
@@ -137,5 +149,22 @@ def _no_real_memory_extraction(monkeypatch):
     from the test suite. Off by default; the memory tests turn it back on
     around a stub.
     """
-    import routers.memory as memory_router
-    monkeypatch.setattr(memory_router, "gemini_configured", lambda: False)
+    import memory
+    monkeypatch.setattr(memory, "gemini_configured", lambda: False)
+
+
+def fake_chat_model(monkeypatch, fake):
+    """Stand in for the chat model. `fake(system_prompt, messages, tools)`
+    returns (text, None), (None, FunctionCall), or (None, [FunctionCall, ...])
+    for a reply that calls several tools — chat.py uses generate_all, which
+    always hands back a list."""
+    import routers.chat as chat_router
+    from gemini_client import FunctionCall
+
+    async def _all(system_prompt, messages, tools=None):
+        text, call = await fake(system_prompt, messages, tools)
+        if isinstance(call, FunctionCall):
+            return None, [call]
+        return text, list(call or [])
+
+    monkeypatch.setattr(chat_router, "generate_all", _all)

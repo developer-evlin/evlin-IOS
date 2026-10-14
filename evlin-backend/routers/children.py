@@ -98,6 +98,19 @@ def delete_child(child_id: UUID, current_parent: models.Parent = Depends(get_cur
     return {"detail": "Child removed"}
 
 
+@router.delete("/children/{child_id}/device")
+def unpair_device(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent),
+                  db: Session = Depends(get_db)):
+    """The parent unpairs the child's device. Its token stops working, so its
+    next request is a 401 and the kid's app goes back to the start. Until
+    then the token is the only thing that keeps a kid's phone signed in:
+    updates and reinstalls keep it, and it doesn't expire."""
+    assert_parent_owns_child(db, current_parent, child_id)
+    db.query(models.Device).filter(models.Device.child_id == child_id).delete()
+    db.commit()
+    return {"detail": "Device unpaired"}
+
+
 @router.get("/device/me", response_model=schemas.ChildResponse)
 def get_my_child(device: models.Device = Depends(get_current_device), db: Session = Depends(get_db)):
     """The child profile a paired device belongs to (so the kid's app can show
@@ -105,5 +118,26 @@ def get_my_child(device: models.Device = Depends(get_current_device), db: Sessio
     child = db.query(models.Child).filter(models.Child.id == device.child_id).first()
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
+    child.is_paired = True
+    return child
+
+
+@router.put("/device/me", response_model=schemas.ChildResponse)
+def update_my_device(body: schemas.DeviceUpdate, device: models.Device = Depends(get_current_device),
+                     db: Session = Depends(get_db)):
+    """What the child's own device knows about the child that the server
+    can't: which timezone "today" is in.
+
+    Sent on every sync, so it only writes on a real change. An unchanged
+    value written anyway would announce a live update, which makes the
+    device sync, which sends this again.
+    """
+    child = db.query(models.Child).filter(models.Child.id == device.child_id).first()
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    if body.timezone is not None and body.timezone != child.timezone:
+        child.timezone = body.timezone
+        db.commit()
+        db.refresh(child)
     child.is_paired = True
     return child

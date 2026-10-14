@@ -42,6 +42,21 @@ def get_occurrence_for_parent(db: Session, parent: models.Parent, occurrence_id:
     return occ
 
 
+def resolve_caller(db: Session, credentials: HTTPAuthorizationCredentials) -> models.Device | models.Parent:
+    """Whoever this token belongs to: a paired kid device, else a parent.
+
+    For routes open to both roles that aren't about one child in particular
+    (the live-updates stream). Raises 401 when neither matches.
+    """
+    device = db.query(models.Device).filter(
+        models.Device.token_hash == hash_token(credentials.credentials),
+        models.Device.revoked_at == None,  # noqa: E711
+    ).first()
+    if device:
+        return device
+    return get_current_parent(credentials, db)
+
+
 def check_child_access(db: Session, credentials: HTTPAuthorizationCredentials, child_id: UUID) -> None:
     """Allow either the child's own paired device or a parent of that child.
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID
-from datetime import datetime, timezone, timedelta, time, date
+from datetime import timedelta, time, date
 from sqlalchemy.exc import IntegrityError
 from typing import Optional
 import models, schemas
@@ -27,11 +27,9 @@ def _derive_bucket(due_time: Optional[time]) -> str:
     return "evening"
 
 
-# 'course' means the task is completed by finishing an assigned course
-# (watch the videos, answer the quizzes) instead of by photo/voice evidence.
-# The DB's own CHECK constraint on this column has to accept it too — see
-# the submission_kind migration in main.py.
-_VALID_SUBMISSION_KINDS = {"none", "photo", "voice", "either", "course"}
+# Must match the DB's CHECK constraint on this column — see the
+# submission_kind migration in main.py.
+_VALID_SUBMISSION_KINDS = {"none", "photo"}
 
 
 def _safe_submission_kind(value: str) -> str:
@@ -73,44 +71,28 @@ def get_child_tasks(child_id: UUID, db: Session = Depends(get_db), _access: None
     tasks = db.query(models.Task).filter(models.Task.child_id == child_id).all()
     return tasks
 
-def _attach_course(db: Session, task: schemas.TaskCreate, child_id: UUID) -> Optional[UUID]:
-    """Turn a course_id on a task create into this child's own assignment.
-
-    A course still pending review is published here: the parent tapping
-    Create on the proposal card is the approval. Doing both inside the
-    task's own transaction means there's never a task pointing at an
-    unpublished course, or a course published by a call whose task then
-    failed to save.
-    """
-    if task.course_id is None:
-        return None
-
-    # Imported here rather than at module scope: courses.py doesn't import
-    # this module today, but routers importing each other at import time is
-    # how the time_grants/occurrences circular-import problem started.
-    from routers.courses import assign_course
-
-    course = db.query(models.Course).filter(models.Course.id == task.course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    if course.status == "pending_review":
-        course.status = "published"
-        course.published_at = datetime.now(timezone.utc)
-        db.flush()
-
-    assignment = assign_course(db, course.id, child_id, assigned_by="parent")
-    db.flush()
-    return assignment.id
-
-
 @router.post("/children/{child_id}/tasks", response_model=schemas.TaskResponse)
 def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
     """Create a new task for a child"""
     assert_parent_owns_child(db, current_parent, child_id)
+    if task.id is not None:
+        existing = db.query(models.Task).filter(models.Task.id == task.id).first()
+        if existing is not None:
+            # A retry of a create that already went through.
+            if existing.child_id != child_id:
+                raise HTTPException(status_code=409, detail="That id is already in use")
+            return existing
     parsed_time, parsed_date = _parse_due(task)
-    assignment_id = _attach_course(db, task, child_id)
+    if parsed_date is None and (task.recurrence or "none").strip().lower() in ("", "none"):
+        # A one-off with no day is for today — the child's today. Left
+        # empty, it fell back to created_at's UTC date, which is already
+        # tomorrow for a Pacific family every evening after 5pm.
+        from blocks import local_now
+        child = db.query(models.Child).filter(models.Child.id == child_id).first()
+        parsed_date = local_now(child).date()
 
     new_task = models.Task(
+        **({"id": task.id} if task.id is not None else {}),
         child_id=child_id,
         title=task.title,
         instructions=task.instructions,
@@ -125,13 +107,29 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         active=task.active,
         bonus_minutes=task.bonus_minutes,
         created_by=task.created_by,
-        course_assignment_id=assignment_id,
-        milestone_id=task.milestone_id,
     )
     db.add(new_task)
+    _lock_again_for_new_task(db, child_id, new_task)
     _commit_or_400(db)
     db.refresh(new_task)
     return new_task
+
+
+def _lock_again_for_new_task(db: Session, child_id: UUID, task: models.Task):
+    """A new task that gates apps today closes the phone again, even if the
+    parent had opened it: the task-gate override is cleared. (The app clears
+    it too, so the screen changes at once; this keeps every client, the AI
+    drafts' included, to the same rule.)"""
+    from blocks import local_now
+    from routers.occurrences import task_applies_on
+    if not task.gates_apps:
+        return
+    child = db.query(models.Child).filter(models.Child.id == child_id).first()
+    if child is None or not task_applies_on(task, local_now(child).date()):
+        return
+    state = db.query(models.ChildState).filter(models.ChildState.child_id == child_id).first()
+    if state is not None and state.task_gate_override:
+        state.task_gate_override = False
 
 @router.put("/tasks/{task_id}", response_model=schemas.TaskResponse)
 def update_task(task_id: UUID, task_update: schemas.TaskCreate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):

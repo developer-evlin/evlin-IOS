@@ -25,5 +25,21 @@ services:
         sync: false
       - key: R2_BUCKET_NAME
         sync: false
-      - key: R2_PUBLIC_BUCKET_NAME
+      # Today's videos: the search behind the chat's video suggestions.
+      - key: YOUTUBE_API_KEY
+        sync: false
+      # Auth: see .env.example for what each one is.
+      - key: AUTH_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: APPLE_BUNDLE_ID
+        value: com.evlin.app
+      - key: APPLE_TEAM_ID
+        sync: false
+      - key: APPLE_KEY_ID
+        sync: false
+      - key: APPLE_PRIVATE_KEY
         sync: false

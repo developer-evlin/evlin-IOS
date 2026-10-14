@@ -4,23 +4,17 @@ Chat history is per-thread; this is what survives across all of them. It's
 deliberately small and readable — see models.py's ChildMemory for why rows
 rather than embeddings.
 
-Extraction runs after the reply has already been sent, so it never adds
-latency to a message.
+Entirely internal: nothing here is exposed over HTTP. Chat reads the facts
+into its system prompt and hands each exchange back for extraction, which
+runs after the reply has already been sent so it never adds latency to a
+message.
 """
-from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 import models
-import schemas
-from access import assert_parent_owns_child
-from database import get_db
 from gemini_client import gemini_configured, generate
-from routers.auth import get_current_parent
-
-router = APIRouter(tags=["memory"])
 
 # Keeping the prompt honest about what's already a database column is the
 # whole game here: a remembered copy of the bedtime rule is a second source
@@ -61,7 +55,7 @@ recognise as true:
 
 Do not record:
 - Anything the app already stores: screen-time limits, downtime hours, the task list,
-  milestones. Those are looked up live and a copy here would go stale.
+  calendar events. Those are looked up live and a copy here would go stale.
 - Judgements about the child's character. "Struggles to focus after school" is an
   observation; "is lazy" or "is defiant" is a label that would colour every future
   answer. Never write the second kind.
@@ -72,12 +66,60 @@ Most exchanges contain nothing worth keeping. Returning an empty list is the nor
 correct outcome — do not invent something to record."""
 
 
+# Every one of these goes into every system prompt, so this is a hard
+# ceiling on what memory can cost — in tokens and in dilution. Nothing
+# prunes this table on a schedule, so without a cap the prompt would grow
+# for the life of the account. Newest wins: if a child has more than this
+# many durable facts, the stale ones are the old ones.
+MAX_FACTS_IN_PROMPT = 40
+
+
 def facts_for(db: Session, child_id: UUID) -> list[models.ChildMemory]:
-    """Live facts, oldest first. Archived ones stay gone."""
+    """The most recent live facts, returned oldest-first for the prompt.
+
+    Archived ones stay gone. Nothing writes archived_at automatically — it's
+    the manual kill switch for a bad fact, and it survives re-extraction
+    where a DELETE wouldn't.
+    """
+    newest_first = _live_facts_query(db, child_id).order_by(
+        models.ChildMemory.created_at.desc()
+    ).limit(MAX_FACTS_IN_PROMPT).all()
+    return list(reversed(newest_first))
+
+
+def _live_facts_query(db: Session, child_id: UUID):
     return db.query(models.ChildMemory).filter(
         models.ChildMemory.child_id == child_id,
         models.ChildMemory.archived_at.is_(None),
-    ).order_by(models.ChildMemory.created_at).all()
+    )
+
+
+def _all_live_facts(db: Session, child_id: UUID) -> list[models.ChildMemory]:
+    """Uncapped — for deduplication, which has to see everything."""
+    return _live_facts_query(db, child_id).order_by(models.ChildMemory.created_at).all()
+
+
+def forget_from_conversation(db: Session, conversation_id: UUID) -> int:
+    """Drop the facts extracted from one thread. Returns how many went.
+
+    Must run before that thread's messages are deleted, while
+    source_message_id still points at something — afterwards the FK nulls
+    out and the fact is left live with no provenance, which is how a parent
+    ends up unable to get rid of something they thought they had deleted.
+
+    A hard delete rather than an archive, unlike the manual kill switch: the
+    parent removed the transcript, so keeping a derived copy of it is the
+    surprising outcome, and with the transcript gone there is nothing left
+    to re-extract it from anyway.
+    """
+    message_ids = [row.id for row in db.query(models.ChatMessage.id).filter(
+        models.ChatMessage.conversation_id == conversation_id
+    ).all()]
+    if not message_ids:
+        return 0
+    return db.query(models.ChildMemory).filter(
+        models.ChildMemory.source_message_id.in_(message_ids)
+    ).delete(synchronize_session=False)
 
 
 async def extract_memories(child_id: UUID, exchange: list[dict], source_message_id: UUID | None = None) -> int:
@@ -106,7 +148,10 @@ async def _extract(child_id: UUID, exchange: list[dict], source_message_id: UUID
 
     db = SessionLocal()
     try:
-        existing = facts_for(db, child_id)
+        # Every live fact, not the capped prompt window: a fact that has aged
+        # out of the prompt is still known, and must not be written a second
+        # time as if it were new.
+        existing = _all_live_facts(db, child_id)
         known = "\n".join(f"- {m.fact}" for m in existing) or "- (nothing yet)"
         transcript = "\n".join(f"{m['role']}: {m['text']}" for m in exchange)
 
@@ -138,25 +183,3 @@ async def _extract(child_id: UUID, exchange: list[dict], source_message_id: UUID
         return written
     finally:
         db.close()
-
-
-@router.get("/children/{child_id}/memory", response_model=list[schemas.ChildMemoryResponse])
-def list_memory(child_id: UUID, current_parent: models.Parent = Depends(get_current_parent),
-                db: Session = Depends(get_db)):
-    """Everything the assistant is working from — a parent can always see it."""
-    assert_parent_owns_child(db, current_parent, child_id)
-    return facts_for(db, child_id)
-
-
-@router.delete("/memory/{memory_id}")
-def forget(memory_id: UUID, current_parent: models.Parent = Depends(get_current_parent),
-           db: Session = Depends(get_db)):
-    """Archived, not deleted, so extraction can't quietly re-learn something
-    a parent has explicitly removed."""
-    row = db.query(models.ChildMemory).filter(models.ChildMemory.id == memory_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Not found")
-    assert_parent_owns_child(db, current_parent, row.child_id)
-    row.archived_at = datetime.now(timezone.utc)
-    db.commit()
-    return {"detail": "Forgotten"}

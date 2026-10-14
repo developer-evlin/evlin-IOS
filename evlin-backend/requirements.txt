@@ -3,6 +3,10 @@ SQLAlchemy
 psycopg2-binary
 python-dotenv
 boto3
-pydantic
+pydantic[email]
 supabase
+pytest
+httpx
 PyJWT
+slowapi
+cryptography

@@ -6,6 +6,7 @@ caught a live bug here — models.AuditLog mapped a Python attribute to a
 evlin-tables.sql); every /audit call crashed with a 500. That's what
 test_audit_persists_the_real_payload guards against.
 """
+import uuid
 from datetime import date
 
 import models
@@ -121,26 +122,6 @@ def test_unknown_occurrence_and_submission_404(client, db_session):
                         headers=auth("dev-kid")).status_code == 404
 
 
-# ---- content ------------------------------------------------------------
-
-def test_content_upload_and_download_urls(client, db_session):
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    make_device(db_session, kid, "dev-kid")
-    up = client.post("/content/upload-url", headers=auth("dev-kid"), json={"content_type": "image/png"})
-    assert up.status_code == 200, up.text
-    assert up.json()["upload_url"].startswith("https://") and up.json()["object_key"]
-
-    down = client.get(f"/content/{up.json()['object_key']}/url", headers=auth("dev-kid"))
-    assert down.status_code == 200 and down.json()["download_url"].startswith("https://")
-
-
-def test_content_requires_a_device_token(client, db_session):
-    p = make_parent(db_session, "pa")
-    r = client.post("/content/upload-url", headers=auth("pa"), json={"content_type": "image/png"})
-    assert r.status_code == 401
-
-
 # ---- list submissions -----------------------------------------------------
 
 def test_list_submissions_includes_download_url_only_once_uploaded(client, db_session):
@@ -191,13 +172,43 @@ def test_submission_upload_returns_503_when_storage_not_configured(client, db_se
     assert r.status_code == 503 and "R2" in r.json()["detail"]
 
 
-def test_content_upload_and_download_return_503_when_storage_not_configured(client, db_session, monkeypatch):
-    import routers.content as content_router
-    monkeypatch.setattr(content_router, "storage_configured", lambda: False)
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    make_device(db_session, kid, "dev-kid")
-    up = client.post("/content/upload-url", headers=auth("dev-kid"), json={"content_type": "image/png"})
-    assert up.status_code == 503
-    down = client.get("/content/some-key/url", headers=auth("dev-kid"))
-    assert down.status_code == 503
+def test_a_new_voice_submission_is_refused(client, db_session):
+    # Voice notes were removed; evidence is a photo.
+    kid, occ = _occurrence(client, db_session)
+    r = client.post(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid"),
+                    json={"kind": "voice", "content_type": "audio/m4a"})
+    assert r.status_code == 422
+
+
+def test_an_old_voice_submission_still_lists(client, db_session):
+    # History stays readable: a voice row from before the removal mustn't
+    # break the list for that task.
+    kid, occ = _occurrence(client, db_session)
+    db_session.add(models.Submission(occurrence_id=uuid.UUID(occ["id"]), kind="voice",
+                                     r2_key="k", content_type="audio/m4a", status="uploaded"))
+    db_session.commit()
+    r = client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("pa"))
+    assert r.status_code == 200 and [s["kind"] for s in r.json()] == ["voice"]
+
+
+def test_a_redo_discards_what_was_sent_in(client, db_session, deleted_r2_keys):
+    kid, occ = _occurrence(client, db_session)
+    sub = client.post(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid"),
+                      json={"kind": "photo", "content_type": "image/jpeg"}).json()["submission"]
+    client.post(f"/submissions/{sub['id']}/complete", headers=auth("dev-kid"))
+    key = db_session.query(models.Submission).filter(models.Submission.id == uuid.UUID(sub["id"])).one().r2_key
+
+    r = client.put(f"/occurrences/{occ['id']}/status", headers=auth("pa"),
+                   json={"status": "rejected", "rejection_note": "Too blurry"})
+    assert r.status_code == 200 and r.json()["status"] == "rejected"
+    # Gone for both phones, and from R2.
+    assert client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("pa")).json() == []
+    assert client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid")).json() == []
+    assert deleted_r2_keys == [key]
+
+    # The new photo sends it back in for review.
+    again = client.post(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid"),
+                        json={"kind": "photo", "content_type": "image/jpeg"}).json()["submission"]
+    client.post(f"/submissions/{again['id']}/complete", headers=auth("dev-kid"))
+    listed = client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("pa")).json()
+    assert [s["id"] for s in listed] == [again["id"]]

@@ -1,7 +1,6 @@
-"""The one place that knows Gemini's actual wire format. Both Chat and
-(later) Milestones-AI call generate() — neither knows or cares the other
-exists; this module has no knowledge of either feature's own tables or
-routes, just "give me a system prompt, a message history, and optionally
+"""The one place that knows Gemini's actual wire format. Chat and memory
+extraction call generate(); this module has no knowledge of either
+feature's own tables or routes, just "give me a system prompt, a message history, and optionally
 some tools, get back text or a function call."
 
 Uses httpx (already a dependency) directly against the REST API rather
@@ -19,6 +18,28 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # model is, so that breakage can't recur on the next rotation.
 _MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 _BASE_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{_MODEL}:generateContent"
+
+# How hard the model thinks before answering. Its default thought for
+# 200-2,000 tokens per reply, billed as output, and was most of the time a
+# parent waited. "low", measured on the chat cases (9 kinds, 27 runs): all
+# still right, thinking down 50-80%, about 1.7 s faster per reply. Every
+# caller here — chat, memory, video ranking — is a short, bounded decision.
+# Set GEMINI_THINKING_LEVEL="" to send nothing and get the model's default,
+# e.g. for a model that doesn't accept a level.
+_THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "low")
+
+
+def request_body(system_prompt: str, messages: list[dict], tools: list[dict] | None = None) -> dict:
+    """The generateContent request, in Gemini's wire format."""
+    body: dict = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": m["role"], "parts": [{"text": m["text"]}]} for m in messages],
+    }
+    if tools:
+        body["tools"] = _to_gemini_tools(tools)
+    if _THINKING_LEVEL:
+        body["generationConfig"] = {"thinkingConfig": {"thinkingLevel": _THINKING_LEVEL}}
+    return body
 
 
 def gemini_configured() -> bool:
@@ -45,18 +66,27 @@ async def generate(
 ) -> tuple[str | None, FunctionCall | None]:
     """messages: [{"role": "user"|"model", "text": "..."}] — the running
     conversation, oldest first. Returns (text, None) for a plain reply, or
-    (None, FunctionCall) when the model calls one of `tools`. Raises on a
+    (None, FunctionCall) when the model calls one of `tools` — the first,
+    if it called several (generate_all keeps them all). Raises on a
     real API/network failure — callers decide how to surface that (see
     routers/chat.py, which doesn't swallow it into a fake reply)."""
+    text, calls = await generate_all(system_prompt, messages, tools)
+    return (None, calls[0]) if calls else (text, None)
+
+
+async def generate_all(
+    system_prompt: str,
+    messages: list[dict],
+    tools: list[dict] | None = None,
+) -> tuple[str | None, list[FunctionCall]]:
+    """generate(), keeping every function call in the reply. The model
+    calls a tool once per item when it's asked for several things at once
+    ("piano at 5 and tidy her room on Saturday"), so a caller that can
+    show several cards needs all of them, in order."""
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
-    body: dict = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"role": m["role"], "parts": [{"text": m["text"]}]} for m in messages],
-    }
-    if tools:
-        body["tools"] = _to_gemini_tools(tools)
+    body = request_body(system_prompt, messages, tools)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"{_BASE_URL}?key={GEMINI_API_KEY}", json=body)
@@ -68,12 +98,12 @@ async def generate(
         # A real response with no candidates (e.g. blocked by safety
         # filters) — surface as a plain, honest reply rather than crashing
         # the caller on a KeyError.
-        return "I couldn't come up with a reply to that — try rephrasing?", None
+        return "I couldn't come up with a reply to that — try rephrasing?", []
 
     parts = candidates[0].get("content", {}).get("parts") or []
-    for part in parts:
-        if "functionCall" in part:
-            fc = part["functionCall"]
-            return None, FunctionCall(name=fc["name"], args=fc.get("args", {}))
+    calls = [FunctionCall(name=p["functionCall"]["name"], args=p["functionCall"].get("args", {}))
+             for p in parts if "functionCall" in p]
+    if calls:
+        return None, calls
     text = "".join(p.get("text", "") for p in parts).strip()
-    return (text or "..."), None
+    return (text or "..."), []

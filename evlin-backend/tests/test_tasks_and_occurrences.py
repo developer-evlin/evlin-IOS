@@ -1,3 +1,4 @@
+import pytest
 from datetime import date, datetime, timezone
 
 import models
@@ -258,17 +259,26 @@ def test_redo_note_reaches_the_kid_and_resubmitting_clears_it(client, db_session
     assert again["status"] == "submitted" and again["rejection_note"] is None
 
 
-def test_course_is_an_accepted_submission_kind(client, db_session):
-    # A "special task" is completed by finishing an assigned course rather
-    # than by photo/voice evidence. Both the server's own vocabulary and the
-    # DB CHECK constraint (see the migration) have to accept it — without
-    # the former it was silently coerced to "none", losing the course with
-    # no error anywhere.
+def test_course_is_no_longer_a_submission_kind(client, db_session):
+    # Courses were removed, and the DB constraint no longer allows 'course'.
+    # An older app build that still sends it gets an ordinary task instead
+    # of a 400 on the constraint.
     p = make_parent(db_session, "pa")
     c = make_child(db_session, p)
     r = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
                      json={"title": "Watch the water cycle course", "submission_kind": "course"}).json()
-    assert r["submission_kind"] == "course"
+    assert r["submission_kind"] == "none"
+
+
+@pytest.mark.parametrize("sent,stored", [("either", "none"), ("voice", "none"), ("photo", "photo"), ("none", "none")])
+def test_only_photo_or_no_proof_is_stored(client, db_session, sent, stored):
+    # Voice notes were removed: anything but "photo" is a task with no
+    # evidence, coerced rather than refused like any unknown value.
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    r = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                    json={"title": "Tidy room", "submission_kind": sent}).json()
+    assert r["submission_kind"] == stored
 
 
 def test_both_review_routes_award_the_task_bonus(client, db_session):
@@ -330,3 +340,45 @@ def test_icon_update_is_partial_like_category(client, db_session):
     changed = client.put(f"/tasks/{t['id']}", headers=auth("pa"),
                           json={"title": "renamed", "icon": "moon.fill"}).json()
     assert changed["icon"] == "moon.fill"
+
+
+def test_update_clears_due_time_only_when_sent_as_null(client, db_session):
+    # The app's edit form removes a deadline by sending due_time: null;
+    # leaving the field out keeps the time as it was.
+    p = make_parent(db_session, "pa")
+    kid = make_child(db_session, p)
+    t = client.post(f"/children/{kid.id}/tasks", headers=auth("pa"), json={"title": "x", "due_time": "18:00:00"}).json()
+    base = {"title": "x", "instructions": "", "recurrence": "none", "category": "Task", "submission_kind": "none"}
+    assert client.put(f"/tasks/{t['id']}", headers=auth("pa"), json=base).json()["due_time"] is not None
+    r = client.put(f"/tasks/{t['id']}", headers=auth("pa"), json={**base, "due_time": None})
+    assert r.status_code == 200 and r.json()["due_time"] is None
+
+
+def test_a_retried_create_with_the_phones_id_saves_once(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    other = make_child(db_session, p)
+    body = {"id": "6f1f6c1e-6b1a-4a43-9a51-0d3f3b1c2a10", "title": "Read", "recurrence": "daily"}
+    first = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json=body)
+    again = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={**body, "title": "Changed"})
+    assert first.status_code == again.status_code == 200, again.text
+    assert first.json()["id"] == again.json()["id"] == body["id"]
+    assert again.json()["title"] == "Read"
+    assert db_session.query(models.Task).filter(models.Task.child_id == c.id).count() == 1
+    # The same id can't be claimed for another child.
+    assert client.post(f"/children/{other.id}/tasks", headers=auth("pa"), json=body).status_code == 409
+
+
+def test_a_new_task_for_today_locks_the_phone_again(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    r = client.put(f"/children/{c.id}/state", headers=auth("pa"),
+                   json={"manual_lock": False, "task_gate_override": True})
+    assert r.status_code == 200, r.text
+    # One for another day leaves the phone open.
+    client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
+                json={"title": "Later", "recurrence": "none", "due_date": "2099-01-01"})
+    assert client.get(f"/children/{c.id}/state", headers=auth("pa")).json()["task_gate_override"] is True
+    # One for today closes it.
+    client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={"title": "Now", "recurrence": "daily"})
+    assert client.get(f"/children/{c.id}/state", headers=auth("pa")).json()["task_gate_override"] is False

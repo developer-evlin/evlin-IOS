@@ -98,6 +98,7 @@ async def video_details(video_ids: list[str]) -> dict[str, dict]:
         details[item["id"]] = {
             "video_id": item["id"],
             "title": snippet.get("title", ""),
+            "channel_id": snippet.get("channelId", ""),
             "channel_title": snippet.get("channelTitle", ""),
             "description": (snippet.get("description") or "")[:500],
             "thumbnail_url": _thumb(snippet),

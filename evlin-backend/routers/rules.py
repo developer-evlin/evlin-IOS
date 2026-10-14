@@ -54,13 +54,7 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
     return rules
 
 def _state_response(db: Session, state: models.ChildState) -> schemas.ChildStateResponse:
-    """The gate flag is a query result, not a column, so the response is
-    built explicitly rather than serialized straight off the ORM row."""
-    from routers.reflections import child_has_open_reflection
-
-    body = schemas.ChildStateResponse.model_validate(state)
-    body.has_open_reflection = child_has_open_reflection(db, state.child_id)
-    return body
+    return schemas.ChildStateResponse.model_validate(state)
 
 
 @router.get("/children/{child_id}/state", response_model=schemas.ChildStateResponse)

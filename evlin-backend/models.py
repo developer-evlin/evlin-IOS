@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON
+from sqlalchemy import UniqueConstraint, Column, String, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -15,6 +15,35 @@ class Parent(Base):
     plan = Column(String, nullable=False, default="free")
     terms_accepted_at = Column(DateTime(timezone=True))
     terms_version = Column(Integer)
+    # Apple's refresh token for this account, encrypted (apple_auth.py). It
+    # is kept only so deleting the account can revoke Sign in with Apple, as
+    # the App Store requires. Null for email and Google accounts.
+    apple_refresh_token_enc = Column(String)
+
+class EmailVerification(Base):
+    """A pending email sign-up: the code sent to `email`, waiting to be typed
+    back. The Supabase account is created only once the code matches, so an
+    address can't be claimed by someone who doesn't read its inbox.
+
+    One row per (email, purpose). Only an HMAC of the code is stored
+    (email_verification.py). `attempts` caps guesses at this code;
+    `send_count` and `window_started_at` cap how many codes one address can
+    be sent per hour, so the endpoint can't be used to flood an inbox.
+    """
+    __tablename__ = "email_verifications"
+    __table_args__ = (UniqueConstraint("email", "purpose"), {"schema": "app"})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, nullable=False)
+    purpose = Column(String, nullable=False, default="signup")
+    code_hash = Column(String, nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    send_count = Column(Integer, nullable=False, default=0)
+    window_started_at = Column(DateTime(timezone=True), nullable=False)
+    last_sent_at = Column(DateTime(timezone=True))
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
 
 class Child(Base):
     __tablename__ = "children"
@@ -26,6 +55,10 @@ class Child(Base):
     color_index = Column(Integer, nullable=False, default=0)
     avatar_url = Column(String)
     activated_at = Column(DateTime(timezone=True))
+    # IANA name ("Europe/London"), reported by the child's own device. What
+    # "today" and "right now" mean for this child — a scheduled block's
+    # window, which day a grant lands on — rather than the server's UTC.
+    timezone = Column(String)
 
 class ParentChild(Base):
     __tablename__ = "parent_children"
@@ -108,16 +141,6 @@ class Task(Base):
     bonus_minutes = Column(Integer, nullable=False, default=0)
     # 'parent' | 'ai_agent' | 'system' — who/what authored this task.
     created_by = Column(String, nullable=False, default="parent")
-    # A "special task": completed by finishing this course rather than by
-    # photo/voice evidence (submission_kind == 'course'). Paired with
-    # bonus_minutes, that's "watch this and answer the quizzes to earn screen
-    # time" — and the reward needs no new code, since approving any task with
-    # bonus_minutes already writes to the ledger.
-    course_assignment_id = Column(UUID(as_uuid=True), ForeignKey("app.course_assignments.id", ondelete="SET NULL"))
-    # Approving this task's occurrence ticks the tagged milestone's progress.
-    # SET NULL on both: without it, deleting a milestone or an assignment
-    # would fail while any task still points at it.
-    milestone_id = Column(UUID(as_uuid=True), ForeignKey("app.milestones.id", ondelete="SET NULL"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class Occurrence(Base):
@@ -148,7 +171,6 @@ class Submission(Base):
     r2_key = Column(String, nullable=False)
     content_type = Column(String, nullable=False)
     bytes_size = Column("bytes", Integer) # Maps the 'bytes' db column to bytes_size to avoid python keyword conflict
-    duration_seconds = Column(Integer)
     status = Column(String, nullable=False, default="pending")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     uploaded_at = Column(DateTime(timezone=True))
@@ -197,15 +219,15 @@ class TimeGrant(Base):
     # Signed: a deduction (an agent or a parent taking time away) is a
     # negative row, same ledger, same no-lost-update reasoning as a grant.
     minutes = Column(Integer, nullable=False)
-    source = Column(String, nullable=False)  # 'manual' | 'task_bonus' | 'milestone' | 'ai_agent'
+    source = Column(String, nullable=False)  # 'manual' | 'task_bonus' | 'ai_agent'
     reason = Column(String)
     # 'parent' | 'ai_agent' | 'system' — distinct from `source` (why), this
     # is *what kind of actor* made the change.
     created_by = Column(String, nullable=False, default="parent")
     granted_by_parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
-    # Deliberately not a real FK: this row may point at an occurrence today
-    # and, later, a not-yet-built milestone — decoupling means that feature
-    # can start writing here with zero migration to this table.
+    # Deliberately not a real FK: it points at whatever earned the grant (an
+    # occurrence, for a task bonus), so a new kind of reward can write here
+    # with no migration to this table.
     source_ref_id = Column(UUID(as_uuid=True))
     credited_date = Column(Date, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -251,9 +273,8 @@ class ChatConversation(Base):
     models 'setup' vs 'kid_agent' surfaces and is dead (no model, no router,
     nothing writes it). Different schema, so no collision.
 
-    parent_id is attribution only, and ON DELETE SET NULL for the same
-    reason courses.created_by_parent_id is: it must not block deleting an
-    account.
+    parent_id is attribution only, and ON DELETE SET NULL so it can't block
+    deleting an account.
     """
     __tablename__ = "chat_conversations"
     __table_args__ = {"schema": "app"}
@@ -289,102 +310,41 @@ class ChatMessage(Base):
     parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
     role = Column(String, nullable=False)  # 'user' | 'assistant'
     text = Column(String, nullable=False)
-    tool_call = Column(String)             # 'draft_task' | 'open_block_picker' | null
+    tool_call = Column(String)             # 'draft_task' | 'draft_event' | 'ask_follow_up' | null — see tool_calls/
     tool_args = Column(JSON)
+    # Which assistant this message is part of: 'chat' (the main assistant)
+    # or 'youtube' (the YouTube agent, run inside the same thread). Each one
+    # is only ever sent its own messages — see agent_sessions.py.
+    agent = Column(String, nullable=False, default="chat", server_default="chat")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-class Course(Base):
-    """A vetted, ordered sequence of YouTube videos — shared library content,
-    deliberately with no child_id.
+class App(Base):
+    """One app in Evlin's own catalog — see app_catalog.py.
 
-    Vetting a course is the expensive part (a real YouTube search plus an LLM
-    pass over the candidates' real metadata), so it happens once and any
-    number of children can then be assigned to the same course. That split is
-    the whole reason this is two pairs of tables: Course/CourseItem is the
-    content, CourseAssignment/CourseItemProgress is one child's journey
-    through it. A shared row is never mutated by a child's progress.
-
-    Same no-owner shape as SlideLesson/ComicGuide. created_by_parent_id is
-    attribution only and is ON DELETE SET NULL: a course outliving the parent
-    who requested it is correct for a shared library, and without that the
-    row would block account deletion (courses aren't reachable by the
-    child-cascade that clears everything else).
+    Global, not child-scoped: "YouTube" is one row for every family. A
+    child's lockable apps and every block point here, so a parent, the AI
+    and a later enforcement layer all mean the same thing by "YouTube".
     """
-    __tablename__ = "courses"
+    __tablename__ = "apps"
     __table_args__ = {"schema": "app"}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    title = Column(String, nullable=False)
-    topic = Column(String)
+    name = Column(String, nullable=False)
+    aliases = Column(JSON, nullable=False, default=list)
     category = Column(String)
-    # 'pending_review' until a parent approves it — nothing reaches a child
-    # from an unapproved course. Then 'published' (browsable/assignable) or
-    # 'archived'.
-    status = Column(String, nullable=False, default="pending_review")
-    created_by = Column(String, nullable=False, default="ai_agent")  # 'parent' | 'ai_agent'
-    created_by_parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    published_at = Column(DateTime(timezone=True))
-
-
-class CourseItem(Base):
-    """One video in a course. Shared content: no per-child state lives here —
-    that's CourseItemProgress. `quiz` is optional; an empty list means the
-    video alone completes the item."""
-    __tablename__ = "course_items"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("app.courses.id", ondelete="CASCADE"), nullable=False)
-    order_index = Column(Integer, nullable=False)
-    video_id = Column(String, nullable=False)   # YouTube video id — the only source
-    video_title = Column(String)
-    channel_title = Column(String)
-    # Why the vetting pass picked this one (age-appropriateness, channel,
-    # topic match) — shown to the parent on the approval card.
-    vetting_notes = Column(String)
-    quiz = Column(JSON, nullable=False, default=list)  # [{question, options, correct_index}]
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-class CourseAssignment(Base):
-    """One child working through one course.
-
-    Claimed by exactly one consumer — a reflection, a task, or a milestone —
-    or by nothing at all for a course assigned straight from the library.
-    Never shared between two of them: if a reflection and a task pointed at
-    the same assignment, finishing it for one would silently finish the
-    other. Assigning the same course to the same child twice for two
-    purposes is fine — that's two assignments, two independent progress
-    tracks, one shared course.
-    """
-    __tablename__ = "course_assignments"
+class ChildApp(Base):
+    """An app on this child's lockable list: what locks when the device is
+    locked, and what a block can be about."""
+    __tablename__ = "child_apps"
     __table_args__ = {"schema": "app"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    course_id = Column(UUID(as_uuid=True), ForeignKey("app.courses.id"), nullable=False)
-    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
-    status = Column(String, nullable=False, default="active")  # 'active' | 'completed'
-    assigned_by = Column(String, nullable=False, default="parent")
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), primary_key=True)
+    app_id = Column(UUID(as_uuid=True), ForeignKey("app.apps.id", ondelete="CASCADE"), primary_key=True)
+    added_by = Column(String, nullable=False, default="parent")  # 'parent' | 'ai_agent'
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    completed_at = Column(DateTime(timezone=True))
-
-
-class CourseItemProgress(Base):
-    """One child's state on one video of one course — the per-child half of
-    the split described on Course. Seeded one row per item when the
-    assignment is created: the lowest order_index starts 'available', the
-    rest 'locked', and completing one unlocks exactly the next."""
-    __tablename__ = "course_item_progress"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    assignment_id = Column(UUID(as_uuid=True), ForeignKey("app.course_assignments.id", ondelete="CASCADE"), nullable=False)
-    course_item_id = Column(UUID(as_uuid=True), ForeignKey("app.course_items.id"), nullable=False)
-    status = Column(String, nullable=False, default="locked")  # 'locked' | 'available' | 'completed'
-    quiz_answers = Column(JSON)
-    quiz_score = Column(Integer)
-    completed_at = Column(DateTime(timezone=True))
 
 
 class AppBlock(Base):
@@ -399,90 +359,87 @@ class AppBlock(Base):
     version, so "no YouTube until homework is done" can actually resolve
     itself when the homework is approved.
 
-    Display/state only for now: real per-app shielding needs
-    ManagedSettingsStore and an ApplicationToken, which is deliberately not
-    part of this pass. Nothing here has to change when it lands.
+    One row per app. The app is Evlin's own catalog row (app_id) — never a
+    platform identifier; app_name is a snapshot for display. Four kinds, and
+    what each means at a given moment, live in blocks.py. Expiry is computed
+    there, not written: `resolved` is only ever a decision (task_approved,
+    parent_lifted).
     """
     __tablename__ = "app_blocks"
     __table_args__ = {"schema": "app"}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    app_id = Column(UUID(as_uuid=True), ForeignKey("app.apps.id", ondelete="SET NULL"))
     app_name = Column(String, nullable=False)
-    app_bundle_id = Column(String)
-    block_type = Column(String, nullable=False)  # 'duration' | 'until_task'
+    app_bundle_id = Column(String)  # legacy, no longer written
+    block_type = Column(String, nullable=False)  # 'duration' | 'until_task' | 'indefinite' | 'scheduled'
     duration_minutes = Column(Integer)
+    ends_at = Column(DateTime(timezone=True))  # duration: fixed at creation
     until_task_id = Column(UUID(as_uuid=True), ForeignKey("app.tasks.id", ondelete="SET NULL"))
+    # scheduled: weekday codes the window *starts* on, and child-local times.
+    # A window with end <= start runs past midnight.
+    schedule_days = Column(String)
+    schedule_start = Column(Time)
+    schedule_end = Column(Time)
     resolved = Column(Boolean, nullable=False, default=False)
+    resolved_reason = Column(String)  # 'task_approved' | 'parent_lifted'
     created_by = Column(String, nullable=False, default="parent")  # 'parent' | 'ai_agent'
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at = Column(DateTime(timezone=True))
 
 
-class Milestone(Base):
-    """A longer-arc goal with a prize, tracked separately from day-to-day
-    tasks.
+class ChildVideoProfile(Base):
+    """What this child's videos may be: which categories, how long, and what
+    to keep out. One row per child, created on first save; a child with no
+    row gets video_filter's defaults (every category allowed).
 
-    Two shapes of progress, deliberately not merged: 'count'/'streak' tick up
-    as tagged tasks get approved (tasks.milestone_id is what makes a task
-    count toward one — without that linkage nothing would ever increment it),
-    while 'course' is achieved by finishing an assigned course, reusing the
-    same completion check reflections and special tasks use.
-
-    The prize pays out through the existing time-grant ledger
-    (source='milestone'), which has had a source_ref_id with no FK reserved
-    for exactly this since before milestones existed.
+    Channels are stored as [{"id", "title"}] so a list can be shown without
+    asking YouTube; the id is what filtering matches.
     """
-    __tablename__ = "milestones"
+    __tablename__ = "child_video_profiles"
+    __table_args__ = {"schema": "app"}
+
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), primary_key=True)
+    allowed_categories = Column(JSON, nullable=False, default=list)
+    blocked_keywords = Column(JSON, nullable=False, default=list)
+    allowed_channels = Column(JSON, nullable=False, default=list)
+    blocked_channels = Column(JSON, nullable=False, default=list)
+    daily_minutes = Column(Integer, nullable=False, default=30)
+    max_video_minutes = Column(Integer, nullable=False, default=10)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class VideoQueueItem(Base):
+    """One video on a child's list for one day — the only videos the child's
+    device will play.
+
+    Only a parent's approval writes these (POST /children/{id}/video-queue,
+    from the chat card or the profile). The metadata is a snapshot taken
+    when it was approved, so the child's device never talks to YouTube's API
+    and a later title change can't alter what the parent agreed to.
+    local_date is the child's day (blocks.local_now), not the server's.
+    How much of today's allowance is left is computed from watched_seconds
+    on read, never stored.
+    """
+    __tablename__ = "video_queue_items"
     __table_args__ = {"schema": "app"}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    local_date = Column(Date, nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+    video_id = Column(String, nullable=False)
     title = Column(String, nullable=False)
-    description = Column(String)
-    kind = Column(String, nullable=False, default="count")  # 'count' | 'streak' | 'course' | 'custom'
-    target_count = Column(Integer)
-    progress_count = Column(Integer, nullable=False, default=0)
-    course_assignment_id = Column(UUID(as_uuid=True), ForeignKey("app.course_assignments.id"))
-    prize_text = Column(String)
-    prize_minutes = Column(Integer, nullable=False, default=0)
-    status = Column(String, nullable=False, default="active")  # 'active' | 'achieved' | 'expired'
-    created_by = Column(String, nullable=False, default="parent")  # 'parent' | 'ai_agent'
+    channel_id = Column(String)
+    channel_title = Column(String)
+    thumbnail_url = Column(String)
+    duration_seconds = Column(Integer, nullable=False)
+    category = Column(String)
+    added_by_parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
+    watched_seconds = Column(Integer, nullable=False, default=0)
+    completed_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    achieved_at = Column(DateTime(timezone=True))
-
-
-class Reflection(Base):
-    """A gate the child clears by watching and answering, then writing.
-
-    Priority 0: while one is open the device is locked regardless of task
-    status, and clearing it doesn't satisfy outstanding tasks either — the
-    two gates are independent (see the iOS lock logic).
-
-    The video+quiz half is a course assignment rather than columns on this
-    table, so there's exactly one implementation of "watch, answer, unlock"
-    shared with special tasks and milestones. Usually that's a one-video
-    course created on the spot; it can equally be a full vetted course.
-
-    Note the original evlin-tables.sql had an unrelated, never-wired
-    app.reflections — see the rename guard in main.py's migrations.
-    """
-    __tablename__ = "reflections"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
-    course_assignment_id = Column(UUID(as_uuid=True), ForeignKey("app.course_assignments.id"), nullable=False)
-    written_prompt = Column(String)
-    written_response = Column(String)
-    # 'pending' | 'submitted' | 'approved' | 'needs_redo'. Only 'approved'
-    # closes the gate; 'needs_redo' sends it back to 'pending'.
-    status = Column(String, nullable=False, default="pending")
-    review_note = Column(String)
-    created_by = Column(String, nullable=False, default="parent")  # 'parent' | 'ai_agent'
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    submitted_at = Column(DateTime(timezone=True))
-    reviewed_at = Column(DateTime(timezone=True))
 
 
 class ICSFeed(Base):
@@ -501,39 +458,28 @@ class Event(Base):
     __table_args__ = {"schema": "app"}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE")) # null = family-wide
+    # Every event is one child's. Evlin manages the children's calendars
+    # only: there are no parent or family-wide events.
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
     title = Column(String, nullable=False)
     start_at = Column(DateTime(timezone=True), nullable=False)
     end_at = Column(DateTime(timezone=True), nullable=False)
     gates_apps = Column(Boolean, nullable=False, default=False)
     location_or_link = Column(String)
     source = Column(String, nullable=False, default="manual")
-    # True for the parent's own personal lane; False (and child_id is null)
-    # for a genuinely family-wide event. Both cases have child_id = null, so
-    # this is the only thing telling them apart — it used to be smuggled
-    # into `source`, which the DB restricts to ('manual','ics_import') and
-    # rejected anything else outright.
-    is_parent_only = Column(Boolean, nullable=False, default=False)
     category = Column(String)
     note = Column(String)
     # Comma-joined weekday codes ("mon,wed") or "none".
     recurrence = Column(String, nullable=False, default="none")
     ics_feed_id = Column(UUID(as_uuid=True), ForeignKey("app.ics_feeds.id", ondelete="CASCADE"))
     external_uid = Column(String)
-
-class EventProposal(Base):
-    __tablename__ = "event_proposals"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
-    title = Column(String, nullable=False)
-    start_at = Column(DateTime(timezone=True), nullable=False)
-    end_at = Column(DateTime(timezone=True), nullable=False)
-    recurrence = Column(String)
-    conflicts = Column(JSON)
-    status = Column(String, nullable=False, default="pending")
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # 'parent' | 'child'. A child's event is their own plan.
+    created_by = Column(String, nullable=False, default="parent")
+    # 'approved' (on the calendar) | 'proposed' (a child's plan waiting on
+    # the parent) | 'declined' (the parent said "Not this one"; it stays,
+    # with review_note, until the child dismisses it).
+    status = Column(String, nullable=False, default="approved")
+    review_note = Column(String)
 
 class Consent(Base):
     __tablename__ = "consent"
@@ -554,53 +500,4 @@ class AuditLog(Base):
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id"))
     kind = Column(String, nullable=False)
     payload = Column(JSON, nullable=False, default=dict)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-class ComicGuide(Base):
-    __tablename__ = "comic_guides"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    title = Column(String, nullable=False)
-    blurb = Column(String)
-    emoji = Column(String)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-class ComicPanel(Base):
-    __tablename__ = "comic_panels"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    guide_id = Column(UUID(as_uuid=True), ForeignKey("app.comic_guides.id", ondelete="CASCADE"), nullable=False)
-    step = Column(Integer, nullable=False)
-    r2_key = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-class SlideLesson(Base):
-    __tablename__ = "slide_lessons"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    category = Column(String, nullable=False)
-    title = Column(String, nullable=False)
-    subtitle = Column(String, nullable=False)
-    cover_r2_key = Column(String)
-    accent_hex = Column(String)
-    icon = Column(String)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-class LessonSlide(Base):
-    __tablename__ = "lesson_slides"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    lesson_id = Column(UUID(as_uuid=True), ForeignKey("app.slide_lessons.id", ondelete="CASCADE"), nullable=False)
-    kind = Column(String, nullable=False, default="body")
-    step = Column(Integer, nullable=False)
-    kicker = Column(String, nullable=False)
-    headline = Column(String, nullable=False)
-    body = Column(String)
-    sub = Column(String)
-    points = Column(ARRAY(String))
-    icon = Column(String)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

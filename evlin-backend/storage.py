@@ -9,7 +9,6 @@ R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
-R2_PUBLIC_BUCKET_NAME = os.getenv("R2_PUBLIC_BUCKET_NAME")
 
 def storage_configured() -> bool:
     """Whether R2 credentials are present at all — lets a route tell "not
@@ -31,7 +30,7 @@ def get_s3_client():
         region_name="auto",
     )
 
-def generate_presigned_upload_url(object_name: str, content_type: str, expiration=3600, bucket_name=None):
+def generate_presigned_upload_url(object_name: str, content_type: str, expiration=3600):
     """
     Generate a presigned URL to upload a file directly to R2. Returns None on
     any failure — including missing/misconfigured credentials (get_s3_client
@@ -40,14 +39,12 @@ def generate_presigned_upload_url(object_name: str, content_type: str, expiratio
     single upload/submission route. The caller decides what to tell the
     client; this function just never lets a config problem crash the process.
     """
-    if bucket_name is None:
-        bucket_name = R2_BUCKET_NAME
     try:
         s3_client = get_s3_client()
         response = s3_client.generate_presigned_url(
             'put_object',
             Params={
-                'Bucket': bucket_name,
+                'Bucket': R2_BUCKET_NAME,
                 'Key': object_name,
                 'ContentType': content_type
             },
@@ -58,19 +55,17 @@ def generate_presigned_upload_url(object_name: str, content_type: str, expiratio
         print(f"Error generating presigned upload URL: {e}")
         return None
 
-def generate_presigned_download_url(object_name: str, expiration=3600, bucket_name=None):
+def generate_presigned_download_url(object_name: str, expiration=3600):
     """
     Generate a presigned URL to securely download a file from R2. Same
     all-failures-return-None contract as generate_presigned_upload_url.
     """
-    if bucket_name is None:
-        bucket_name = R2_BUCKET_NAME
     try:
         s3_client = get_s3_client()
         response = s3_client.generate_presigned_url(
             'get_object',
             Params={
-                'Bucket': bucket_name,
+                'Bucket': R2_BUCKET_NAME,
                 'Key': object_name
             },
             ExpiresIn=expiration
@@ -79,3 +74,18 @@ def generate_presigned_download_url(object_name: str, expiration=3600, bucket_na
     except Exception as e:
         print(f"Error generating presigned download URL: {e}")
         return None
+
+
+def delete_objects(keys: list[str]) -> None:
+    """Deletes these photos from R2. Best effort: the database rows are
+    already gone, so a failure here only leaves an unreachable file behind,
+    and is logged rather than failing the parent's request."""
+    if not keys or not storage_configured():
+        return
+    try:
+        get_s3_client().delete_objects(
+            Bucket=R2_BUCKET_NAME,
+            Delete={"Objects": [{"Key": k} for k in keys], "Quiet": True},
+        )
+    except Exception as e:
+        print(f"R2: couldn't delete {len(keys)} photo(s): {e}")

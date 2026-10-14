@@ -18,6 +18,15 @@ router = APIRouter(tags=["time_grants"])
 _WEEKDAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
+def child_today(db: Session, child_id: UUID) -> date:
+    """The child's own calendar day — what "today's grants" means. The
+    server runs on UTC, so a Pacific-evening bonus used to be dated
+    tomorrow and missing from tonight's allowance."""
+    import blocks  # lazily: blocks imports occurrences, which imports this module
+    child = db.query(models.Child).filter(models.Child.id == child_id).first()
+    return blocks.local_now(child).date()
+
+
 def award_time_grant(
     db: Session,
     child_id: UUID,
@@ -40,7 +49,7 @@ def award_time_grant(
         granted_by_parent_id=granted_by_parent_id,
         source_ref_id=source_ref_id,
         created_by=created_by,
-        credited_date=date.today(),
+        credited_date=child_today(db, child_id),
     )
     db.add(grant)
     return grant
@@ -81,7 +90,7 @@ def create_time_grant(
 @router.get("/children/{child_id}/time-grants", response_model=schemas.TimeGrantsSummary)
 def get_time_grants(
     child_id: UUID,
-    target_date: date = Query(default_factory=date.today, alias="date"),
+    target_date: Optional[date] = Query(None, alias="date"),
     db: Session = Depends(get_db),
     _access: None = Depends(assert_child_access),
 ):
@@ -91,6 +100,8 @@ def get_time_grants(
     signed grants/deductions, floored at 0. There's no usage/consumption
     subtracted here, since no real usage tracking exists yet (see the plan
     doc) — this is minutes *available*, not minutes *remaining*."""
+    if target_date is None:
+        target_date = child_today(db, child_id)
     rule = db.query(models.ChildRule).filter(models.ChildRule.child_id == child_id).first()
     daily_limit = _base_limit_for(rule, target_date)
 

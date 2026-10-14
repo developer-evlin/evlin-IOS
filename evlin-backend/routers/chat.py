@@ -6,164 +6,21 @@ import models, schemas
 from database import get_db
 from routers.auth import get_current_parent
 from access import assert_parent_owns_child
-from gemini_client import generate, gemini_configured, FunctionCall
+from blocks import local_now
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from gemini_client import generate_all, gemini_configured, FunctionCall
+import tool_calls
 
 router = APIRouter(tags=["chat"])
 
-# The model never writes directly — it can only propose opening one of the
-# app's existing confirm-and-submit cards (AddTaskCard / BlockAppCard). The
-# parent still explicitly taps Create/Block on the card itself, same as
-# today. This keeps the blast radius of a misunderstood request at "wrong
-# pre-filled draft shown," never "wrong action taken" — a parental-control
-# app is exactly the wrong place for an LLM tool call to silently create a
-# task or block an app with no human in the loop.
-_TOOLS = [
-    {
-        "name": "draft_task",
-        "description": (
-            "Pre-fill the app's Add Task card for the parent to review and confirm — does not create the task "
-            "itself. Work out the concrete date, time and recurrence from what the parent said; the card is "
-            "meant to arrive correct, not to be filled in by hand afterwards."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "title": {"type": "STRING", "description": "Short task title, e.g. 'Tidy his room'"},
-                "instructions": {"type": "STRING", "description": "What to actually do, if the parent said. Empty otherwise."},
-                "due_date": {"type": "STRING", "description": "Resolved calendar date as YYYY-MM-DD. Empty if no specific day."},
-                "due_time": {"type": "STRING", "description": "24-hour HH:MM. Empty if no specific time."},
-                "recurrence": {
-                    "type": "STRING",
-                    "description": (
-                        "'none' for a one-off, 'daily', or comma-joined weekday codes from "
-                        "mon,tue,wed,thu,fri,sat,sun — e.g. 'mon,wed,fri' or 'sat,sun'. Nothing else."
-                    ),
-                },
-                "gates_apps": {"type": "BOOLEAN", "description": "Whether not doing it should keep apps locked. Default true."},
-                "bonus_minutes": {"type": "INTEGER", "description": "Extra screen-time minutes for finishing it, 0 if the parent didn't say."},
-            },
-            "required": ["title"],
-        },
-    },
-    {
-        "name": "ask_follow_up",
-        "description": (
-            "Ask the parent for one thing you need before you can draft something. Use this when a request "
-            "doesn't say what the task or event actually is, or when a detail you'd otherwise have to invent "
-            "is missing. A drafted card with a made-up title is worse than a question."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "question": {"type": "STRING", "description": "One short question. Ask for a single thing, not several."},
-            },
-            "required": ["question"],
-        },
-    },
-    {
-        "name": "draft_event",
-        "description": (
-            "Pre-fill the app's Add Event card for a calendar entry — practice, an appointment, a trip. Use "
-            "this for something that happens at a time, not something the child has to do and get approved "
-            "(that's draft_task). Does not create the event itself."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "title": {"type": "STRING", "description": "Short event title, e.g. 'Football practice'"},
-                "start_date": {"type": "STRING", "description": "Resolved calendar date as YYYY-MM-DD"},
-                "start_time": {"type": "STRING", "description": "24-hour HH:MM"},
-                "end_time": {"type": "STRING", "description": "24-hour HH:MM. Assume an hour if the parent didn't say."},
-                "recurrence": {
-                    "type": "STRING",
-                    "description": (
-                        "'none', 'daily', or comma-joined weekday codes from mon,tue,wed,thu,fri,sat,sun. "
-                        "Nothing else."
-                    ),
-                },
-                "is_family": {"type": "BOOLEAN", "description": "True for a whole-family event, false when it's this child's own."},
-                "note": {"type": "STRING", "description": "Anything else worth recording, or empty."},
-            },
-            "required": ["title", "start_date", "start_time"],
-        },
-    },
-    {
-        "name": "open_block_picker",
-        "description": "Open the app's Block an App picker for the parent to choose which app and duration — does not block anything itself.",
-        "parameters": {"type": "OBJECT", "properties": {}},
-    },
-    {
-        "name": "propose_reflection",
-        "description": (
-            "Suggest the child be given a reflection — a video to watch plus questions to answer, which locks "
-            "the device until it's done. Opens the reflection card for the parent to fill in and confirm; "
-            "does not assign anything."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "title": {"type": "STRING", "description": "What the reflection is about"},
-                "reason": {"type": "STRING", "description": "Why this is being suggested now"},
-            },
-            "required": ["title"],
-        },
-    },
-    {
-        "name": "generate_course",
-        "description": (
-            "Search YouTube and assemble a vetted, ordered course on a topic, for the parent to review and "
-            "approve. Nothing reaches the child until they approve it."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "topic": {"type": "STRING", "description": "What the course should teach"},
-                "video_count": {"type": "INTEGER", "description": "How many videos, 1-10. Default 4."},
-            },
-            "required": ["topic"],
-        },
-    },
-    {
-        "name": "draft_special_task",
-        "description": (
-            "Draft a task the child completes by watching a vetted course and answering its quizzes, earning "
-            "bonus screen time. Builds the course and opens the card for the parent to confirm; creates nothing."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "title": {"type": "STRING", "description": "Short task title"},
-                "topic": {"type": "STRING", "description": "What the course should teach"},
-                "bonus_minutes": {"type": "INTEGER", "description": "Screen-time minutes earned, 0 if none"},
-                "video_count": {"type": "INTEGER", "description": "How many videos, 1-10. Default 3."},
-            },
-            "required": ["title", "topic"],
-        },
-    },
-]
+# The tools, their replies and which ones speak for themselves all live in
+# tool_calls/ — see its README for the list. The model never writes: each
+# tool pre-fills a card or asks a question, and the parent's tap creates.
+_TOOLS = tool_calls.TOOLS
 
-# What the assistant says while the card it just opened does the rest. Keyed
-# by tool name rather than an if/else so adding a tool can't silently answer
-# with another tool's line.
-_TOOL_REPLIES = {
-    "draft_task": "Sure — let's set that up.",
-    "draft_event": "Here's the event — check the details before you add it.",
-    "open_block_picker": "Sure — which app should I block?",
-    "propose_reflection": "Good idea — here's a reflection to set up.",
-    "generate_course": "I found some videos — have a look before I send them over.",
-    "draft_special_task": "Here's a task built around a course — check the videos before you create it.",
-}
-_DEFAULT_TOOL_REPLY = "Sure — let's set that up."
-
-# ask_follow_up carries its own text: the question the model wrote is the
-# message, so a canned line in front of it would just be noise.
-_TOOLS_THAT_SPEAK_FOR_THEMSELVES = {"ask_follow_up"}
-
-# Tools whose handler does real work server-side before replying (searching
-# YouTube, running a vetting pass) rather than just signalling the client to
-# open a card. Kept apart because they're slow and can fail for reasons the
-# parent needs told about.
-_COURSE_BUILDING_TOOLS = ("generate_course", "draft_special_task")
+# How many of a thread's messages the model is sent, newest first. Parent's
+# and assistant's both count; the current message is one of them.
+HISTORY_WINDOW = 50
 
 
 def _stringify_tool_args(args: dict | None) -> dict:
@@ -188,48 +45,21 @@ def _stringify_tool_args(args: dict | None) -> dict:
     return out
 
 
-async def _build_course_for_tool(db: Session, child: models.Child, tool_name: str,
-                                 args: dict, parent: models.Parent) -> dict:
-    """Run the real search-and-vet pipeline for a course-building tool call.
-
-    The course is saved as a draft (pending_review) and its id handed back on
-    the chat message, so the card the parent sees is backed by real, checked
-    videos rather than titles the model made up. Approving the card — or
-    creating the task from it — is what publishes it.
-    """
-    from routers.courses import generate_and_vet_course
-
-    default_count = 3 if tool_name == "draft_special_task" else 4
-    try:
-        video_count = int(args.get("video_count") or default_count)
-    except (TypeError, ValueError):
-        video_count = default_count
-    video_count = max(1, min(video_count, 10))
-
-    topic = (args.get("topic") or args.get("title") or "").strip()
-    course = await generate_and_vet_course(
-        db, topic, video_count=video_count, child=child,
-        created_by_parent_id=parent.id,
-    )
-    db.commit()
-    db.refresh(course)
-
-    args["course_id"] = str(course.id)
-    args["course_title"] = course.title
-    return args
-
-
 def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: list[models.Occurrence],
-                   rule: models.ChildRule | None, memories: list | None = None) -> str:
+                   rule: models.ChildRule | None, memories: list | None = None,
+                   now: datetime | None = None, completed: list | None = None) -> str:
     today_occ_by_task = {o.task_id: o for o in occurrences}
-    lines = [f"You are Evlin, a parental-control assistant helping a parent manage {child.name}'s tasks and screen time."]
+    lines = [f"You are Evlin, a parental-control assistant helping a parent manage {child.name}'s tasks and calendar."]
     # Without this the model resolves "tomorrow at 6pm" against its training
     # cutoff — i.e. guesses. Most of what a parent says about scheduling is
     # relative, so every date it produces was unreliable until this was here.
-    today = date.today()
+    # The child's clock, not the server's: on Render that's UTC, which is
+    # already tomorrow for a Pacific family every evening after 5pm.
+    now = now or local_now(child)
+    today = now.date()
     tomorrow = today + timedelta(days=1)
     lines.append(
-        f"\nToday is {today:%A, %-d %B %Y} ({today.isoformat()}). "
+        f"\nToday is {today:%A, %-d %B %Y} ({today.isoformat()}) and it's {now:%H:%M} where {child.name} is. "
         f"Tomorrow is {tomorrow:%A} ({tomorrow.isoformat()}). "
         "Resolve any relative date the parent uses against these, and emit real calendar dates."
     )
@@ -237,9 +67,41 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
     # drift into describing a tool set the model wasn't actually given.
     tool_names = " or ".join(t["name"] for t in _TOOLS)
     lines.append(f"You can have a normal conversation, or call one of the tools you're given — {tool_names}.")
-    lines.append("Never claim you created a task, blocked an app, changed a rule, or granted time — you can't do any of that directly. "
-                  "If asked for something you have no tool for (a bedtime/downtime rule, adding a calendar event, granting extra screen "
-                  "time), say plainly that you can't do that yet and suggest where in the app to do it, rather than pretending it's done.")
+    lines.append("If the parent asks for several things in one message, call the tool once for each of them, "
+                  "all in the same reply. Never pick a day or time the parent didn't give: if you'd have to "
+                  "guess when, call ask_follow_up and ask.")
+    # One chat is about one child. Evlin manages the children's tasks and
+    # calendars only, never the parent's own schedule, so there's nothing
+    # to ask about whose a task or event is.
+    lines.append(f"Everything you draft is for {child.name}: every task and every calendar event. "
+                  f"Don't ask who it's for, and don't offer to add anything to the parent's own calendar "
+                  f"or a family calendar; Evlin only keeps {child.name}'s.")
+    lines.append("Never claim you created a task or added an event — you draft them, and the parent confirms. "
+                  "If asked for something you have no tool for — blocking an app (the parent can use the Block an app card "
+                  "in this chat), a bedtime/downtime rule, or extra screen time (both in the child's profile) — say plainly "
+                  "that you can't do that and where in the app it's done, rather than pretending it's done.")
+    # Videos belong to the YouTube agent, a separate pipeline behind the
+    # Library tab. This assistant has no video tools and no video context,
+    # so it hands the parent over rather than half-answering.
+    lines.append(f"Finding, choosing or changing YouTube videos for {child.name} isn't done here: it's the Library tab, "
+                  "which has its own assistant for videos. If the parent asks about videos, say so in one sentence; "
+                  "never suggest or name specific videos or channels yourself.")
+    # The chat shows replies as plain text, so a markdown list with bold
+    # labels reads as a wall. The app already lists what Evlin can do, with
+    # icons, behind the ? button.
+    lines.append("Keep replies short and conversational: one to three sentences, no bullet lists, headings or bold labels. "
+                  "If asked what you can do, say in one sentence that you draft tasks and calendar events "
+                  "for the parent to confirm, and that the ? button at the top of the chat lists everything.")
+    # Suggesting something to do: a real habit a parent can check, built on
+    # what the child already does. The tile has its own faster path
+    # (_suggest_activities); this covers asking in your own words.
+    age = _age(child, today)
+    if age is not None:
+        lines.append(f"\n{child.name} is about {age} years old.")
+    lines.append(ACTIVITY_RULE.format(name=child.name))
+    if completed:
+        lines.append(f"{child.name} already does: {', '.join(completed)}.")
+
     lines.append(f"\nToday's real tasks for {child.name}:")
     if tasks:
         for t in tasks:
@@ -262,6 +124,24 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
             lines.append(f"- {m.fact}")
         lines.append("Treat these as background, not as current settings — rules and tasks above are authoritative.")
     return "\n".join(lines)
+
+
+def _chat_now(child: models.Child, parent_zone: str | None) -> datetime:
+    """Now, for resolving "today" and "tomorrow" in chat.
+
+    The child's zone when their device has reported one, as everywhere else.
+    Before that, the zone of the parent's phone sending the message: without
+    it the server fell back to UTC, which is already tomorrow for a family
+    in California every evening, so "today" landed a day late.
+    """
+    if child.timezone:
+        return local_now(child)
+    if parent_zone:
+        try:
+            return datetime.now(timezone.utc).astimezone(ZoneInfo(parent_zone))
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    return local_now(child)
 
 
 def _get_conversation_for_parent(db: Session, parent: models.Parent,
@@ -322,6 +202,11 @@ def delete_conversation(conversation_id: UUID,
                         current_parent: models.Parent = Depends(get_current_parent),
                         db: Session = Depends(get_db)):
     conversation = _get_conversation_for_parent(db, current_parent, conversation_id)
+    # Before the messages go, while the facts can still be traced back to
+    # them: deleting a thread has to unlearn what was learned from it, or
+    # the transcript disappears and the assistant keeps quoting it.
+    from memory import forget_from_conversation
+    forget_from_conversation(db, conversation_id)
     # Messages go with it via ON DELETE CASCADE in Postgres; deleted here
     # explicitly too because SQLite (the test harness) doesn't enforce it.
     db.query(models.ChatMessage).filter(
@@ -350,7 +235,7 @@ def get_chat_history(child_id: UUID, current_parent: models.Parent = Depends(get
     ).order_by(models.ChatMessage.created_at).all()
 
 
-@router.post("/children/{child_id}/chat", response_model=schemas.ChatMessageResponse)
+@router.post("/children/{child_id}/chat", response_model=schemas.ChatSendResponse)
 async def send_chat_message(
     child_id: UUID,
     body: schemas.ChatSendRequest,
@@ -387,64 +272,294 @@ async def send_chat_message(
         db.add(conversation)
         db.flush()
 
-    user_row = models.ChatMessage(child_id=child_id, conversation_id=conversation.id,
-                                  parent_id=current_parent.id, role="user", text=body.text)
-    db.add(user_row)
+    parent_text = body.text
+    if body.regenerate:
+        if body.conversation_id is None:
+            raise HTTPException(status_code=400, detail="Try again needs the conversation")
+        parent_text = _drop_reply_to_last_message(db, conversation, body.agent)
+    else:
+        db.add(models.ChatMessage(child_id=child_id, conversation_id=conversation.id,
+                                  parent_id=current_parent.id, role="user", text=body.text,
+                                  agent=body.agent))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
+
+    now = _chat_now(child, body.timezone)
+    if body.shortcut == "suggest_activity" and body.agent == "chat":
+        return await _suggest_activities(db, child, conversation, now)
+    if body.shortcut and body.agent == "chat":
+        return _shortcut_reply(db, child, conversation, body.shortcut)
+    if body.agent == "youtube":
+        return await _youtube_turn(db, child, conversation, now)
 
     tasks = db.query(models.Task).filter(models.Task.child_id == child_id, models.Task.active == True).all()  # noqa: E712
     occurrences = db.query(models.Occurrence).filter(
-        models.Occurrence.child_id == child_id, models.Occurrence.due_date == date.today()
+        models.Occurrence.child_id == child_id, models.Occurrence.due_date == now.date()
     ).all()
     rule = db.query(models.ChildRule).filter(models.ChildRule.child_id == child_id).first()
+    completed = _done_lately(db, child_id, now)
 
-    # Scoped to this thread, not the child. Sending every message the child
-    # ever generated would make separate threads share context — defeating
-    # the point of having them — and grow the prompt without bound.
-    history_rows = db.query(models.ChatMessage).filter(
-        models.ChatMessage.conversation_id == conversation.id
-    ).order_by(models.ChatMessage.created_at).all()
-    messages = [{"role": "user" if r.role == "user" else "model", "text": r.text} for r in history_rows if r.text]
+    # Scoped to this thread, not the child: sending every message the child
+    # ever generated would make separate threads share context, defeating
+    # the point of having them. And only the newest HISTORY_WINDOW of it.
+    # The whole thread is resent on every message, so without a window a
+    # month in one thread costs in proportion to its length squared. The
+    # parent still sees the whole thread; the model sees the recent part,
+    # and anything durable from before it reaches the model as memory.
+    newest_first = db.query(models.ChatMessage).filter(
+        models.ChatMessage.conversation_id == conversation.id,
+        models.ChatMessage.agent == "chat",  # the YouTube agent's turns are its own
+        models.ChatMessage.text != "",  # a second card's row has no text
+    ).order_by(models.ChatMessage.created_at.desc()).limit(HISTORY_WINDOW).all()
+    messages = [{"role": "user" if r.role == "user" else "model", "text": r.text}
+                for r in reversed(newest_first)]
+    # A cut can land on an assistant reply; the conversation the model sees
+    # should open with what the parent said.
+    while messages and messages[0]["role"] != "user":
+        messages.pop(0)
 
-    from routers.memory import facts_for
+    from memory import facts_for
     memories = facts_for(db, child_id)
-
     try:
-        text, call = await generate(_system_prompt(child, tasks, occurrences, rule, memories),
-                                     messages, tools=_TOOLS)
+        text, calls = await generate_all(_system_prompt(child, tasks, occurrences, rule, memories, now, completed),
+                                         messages, tools=_TOOLS)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Chat request failed: {e}")
 
-    if isinstance(call, FunctionCall):
-        args = dict(call.args)
-        if call.name in _COURSE_BUILDING_TOOLS:
-            args = await _build_course_for_tool(db, child, call.name, args, current_parent)
-        if call.name in _TOOLS_THAT_SPEAK_FOR_THEMSELVES:
-            reply_text = (args.get("question") or "").strip() or _DEFAULT_TOOL_REPLY
-        else:
-            reply_text = _TOOL_REPLIES.get(call.name, _DEFAULT_TOOL_REPLY)
-        assistant_row = models.ChatMessage(
-            child_id=child_id, conversation_id=conversation.id, role="assistant",
-            text=reply_text,
-            tool_call=call.name, tool_args=_stringify_tool_args(args),
-        )
-    else:
-        assistant_row = models.ChatMessage(child_id=child_id, conversation_id=conversation.id,
-                                           role="assistant", text=text or "...")
-
-    db.add(assistant_row)
-    conversation.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(assistant_row)
+    replies = await _replies(db, child, text, calls, now.date())
+    rows = _store_replies(db, child, conversation, replies, "chat")
 
     # After the reply is on its way, so remembering costs the parent nothing
     # in latency. Runs on its own session — this one is closed by then.
-    from routers.memory import extract_memories
+    from memory import extract_memories
     background.add_task(
         extract_memories, child_id,
-        [{"role": "parent", "text": body.text},
-         {"role": "assistant", "text": assistant_row.text}],
-        assistant_row.id,
+        [{"role": "parent", "text": parent_text},
+         {"role": "assistant", "text": rows[0].text}],
+        rows[0].id,
     )
-    return assistant_row
+    return _send_response(rows)
+
+
+# What a suggested activity has to be. Evlin is about doing real things:
+# something a parent can check, that builds a habit. Without this the model
+# offered "a LEGO build or a walk around the block".
+ACTIVITY_RULE = (
+    "When asked for an activity or something {name} can do instead of screen time, draft 2 or 3 tasks with "
+    "draft_task: real habits a parent can check by eye or photo (chores, self-care, tidying, helping at home, "
+    "pet or plant care, practice that leaves something to show). Never play, games, walks or screens. Build on "
+    "what {name} already does without repeating it. Each repeats daily or on set weekdays; its instructions say "
+    "in one sentence what done looks like."
+)
+
+
+def _age(child: models.Child, today: date) -> int | None:
+    return today.year - child.birth_year if getattr(child, "birth_year", None) else None
+
+
+def _done_lately(db: Session, child_id, now: datetime, limit: int = 12) -> list[str]:
+    """Names only, short: the child's active tasks and anything approved in
+    the last 30 days, most recent first, without repeats."""
+    approved = db.query(models.Task.title).join(
+        models.Occurrence, models.Occurrence.task_id == models.Task.id
+    ).filter(
+        models.Occurrence.child_id == child_id,
+        models.Occurrence.status == "approved",
+        models.Occurrence.due_date >= now.date() - timedelta(days=30),
+    ).order_by(models.Occurrence.due_date.desc()).limit(50).all()
+    active = db.query(models.Task.title).filter(
+        models.Task.child_id == child_id, models.Task.active == True,  # noqa: E712
+    ).all()
+    names: list[str] = []
+    for (title,) in [*approved, *active]:
+        t = (title or "").strip()
+        if t and t.lower() not in {n.lower() for n in names}:
+            names.append(t)
+    return names[:limit]
+
+
+async def _suggest_activities(db: Session, child: models.Child, conversation: models.ChatConversation,
+                              now: datetime) -> schemas.ChatSendResponse:
+    """The activity tile's fast path. One short prompt (name, age, the names
+    of what the child already does, the rule) and one tool, instead of the
+    whole chat prompt, thread and memory: it doesn't need them, and less to
+    read is a quicker answer. The thread still records it, so a follow-up in
+    chat sees what was suggested."""
+    age = _age(child, now.date())
+    done = _done_lately(db, child.id, now)
+    prompt = (
+        f"You suggest habits for {child.name}" + (f", age {age}" if age is not None else "") + ". "
+        + ACTIVITY_RULE.format(name=child.name)
+        + (f" {child.name} already does: {', '.join(done)}." if done else "")
+    )
+    draft_tool = next(t for t in _TOOLS if t["name"] == "draft_task")
+    try:
+        text, calls = await generate_all(prompt, [{"role": "user", "text": "Suggest something to do instead of screen time."}],
+                                         tools=[draft_tool])
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Chat request failed: {e}")
+    calls = [c for c in calls if c.name == "draft_task"][:3]
+    replies = await _replies(db, child, text, calls, now.date()) if calls else [(text or "...", None, None)]
+    if len(replies) > 1 and replies[0][1] == "draft_task":
+        replies[0] = (f"A few habits that fit {child.name}:", replies[0][1], replies[0][2])
+    return _send_response(_store_replies(db, child, conversation, replies, "chat"))
+
+
+# What each tile shortcut asks. These are what the model asked anyway, every
+# time, after 4-5 seconds: a tile's sentence never says what or when.
+SHORTCUT_QUESTIONS = {
+    "add_task": "What should {name} do, and when?",
+    "add_event": "What's going on {name}'s calendar, and when?",
+}
+
+
+def _shortcut_reply(db: Session, child: models.Child, conversation: models.ChatConversation,
+                    shortcut: str) -> schemas.ChatSendResponse:
+    """A tile's first question, without calling the model.
+
+    Stored as an ordinary ask_follow_up, so the thread reads the same and the
+    model sees the question when the parent answers it. No memory extraction:
+    the tile's fixed sentence teaches nothing about the child.
+    """
+    question = SHORTCUT_QUESTIONS[shortcut].format(name=child.name)
+    rows = _store_replies(db, child, conversation, [(question, "ask_follow_up", {"question": question})], "chat")
+    return _send_response(rows)
+
+
+def _drop_reply_to_last_message(db: Session, conversation: models.ChatConversation, agent: str) -> str:
+    """For "Try again": remove the reply to the parent's last message, and
+    anything memory learned from it, so the thread keeps one answer per
+    question rather than every attempt. Returns that message's text.
+    Drafts already turned into tasks or events stay: those were the parent's
+    own taps, and live in their own tables.
+    """
+    last = db.query(models.ChatMessage).filter(
+        models.ChatMessage.conversation_id == conversation.id,
+        models.ChatMessage.role == "user",
+        models.ChatMessage.agent == agent,
+    ).order_by(models.ChatMessage.created_at.desc()).first()
+    if last is None:
+        raise HTTPException(status_code=400, detail="There's no message to try again")
+    replies = db.query(models.ChatMessage).filter(
+        models.ChatMessage.conversation_id == conversation.id,
+        models.ChatMessage.role != "user",
+        models.ChatMessage.created_at >= last.created_at,
+        models.ChatMessage.id != last.id,
+    ).all()
+    ids = [r.id for r in replies]
+    if ids:
+        db.query(models.ChildMemory).filter(
+            models.ChildMemory.source_message_id.in_(ids)
+        ).delete(synchronize_session=False)
+        for r in replies:
+            db.delete(r)
+    return last.text
+
+
+def _store_replies(db: Session, child: models.Child, conversation: models.ChatConversation,
+                   replies: list[tuple[str, str | None, dict | None]], agent: str) -> list[models.ChatMessage]:
+    # Stamped here rather than left to the column default: Postgres's now()
+    # is the transaction's start, so every card would share one timestamp
+    # and come back from the history in no particular order.
+    stamp = datetime.now(timezone.utc)
+    rows = [models.ChatMessage(child_id=child.id, conversation_id=conversation.id, role="assistant",
+                               text=reply_text, tool_call=name, agent=agent,
+                               tool_args=_stringify_tool_args(args) if name else None,
+                               created_at=stamp + timedelta(microseconds=i))
+            for i, (reply_text, name, args) in enumerate(replies)]
+    db.add_all(rows)
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    return rows
+
+
+def _send_response(rows: list[models.ChatMessage]) -> schemas.ChatSendResponse:
+    response = schemas.ChatSendResponse.model_validate(rows[0])
+    response.extra_messages = [schemas.ChatMessageResponse.model_validate(r) for r in rows[1:]]
+    return response
+
+
+# Until the YouTube agent exists, its turns get this honest answer instead.
+YOUTUBE_NOT_READY = "The YouTube agent isn't set up yet, so I can't look for videos right now."
+
+
+async def _youtube_turn(db: Session, child: models.Child, conversation: models.ChatConversation,
+                        now: datetime) -> schemas.ChatSendResponse:
+    """One turn of the YouTube agent, inside this thread.
+
+    It's given its own short memory (agent_sessions.youtube_context), never
+    the main chat's. And its turns don't feed chat's long-term memory
+    (memory.py): what it should remember between sessions is outcomes,
+    which are its own data.
+
+    The agent itself lives in the youtube_agent package, built separately
+    (docs/youtube-agent-handoff.md). It exports
+    `async def respond(db, child, context, now) -> list[(text, tool_call, tool_args)]`
+    with the same shape as _replies: one entry per message, the first with
+    the text. Like every assistant here, it drafts; the parent's tap writes.
+    """
+    from agent_sessions import youtube_context
+    try:
+        from youtube_agent import respond
+    except ModuleNotFoundError as e:
+        if e.name != "youtube_agent":
+            raise
+        respond = None
+
+    if respond is None:
+        replies = [(YOUTUBE_NOT_READY, None, None)]
+    else:
+        try:
+            replies = await respond(db, child, youtube_context(db, conversation.id), now)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"YouTube agent request failed: {e}")
+        replies = replies or [("...", None, None)]
+    return _send_response(_store_replies(db, child, conversation, replies, "youtube"))
+
+
+async def _replies(db: Session, child: models.Child, text: str | None, calls: list[FunctionCall],
+                   today: date) -> list[tuple[str, str | None, dict | None]]:
+    """What to store for one model reply: (text, tool name, args) per
+    message, in order. Usually one; one per card when the parent asked for
+    several things at once.
+
+    A question wins over cards. If the model asked one, or any draft is
+    missing something only the parent can say (when, mostly), the reply is
+    that one question and no cards — half the request as cards and half as
+    a question would leave the parent unsure what's been set up. The model
+    redrafts everything from the parent's answer.
+    """
+    if not calls:
+        return [(text or "...", None, None)]
+
+    drafts, seen = [], set()
+    for call in calls:
+        args = dict(call.args or {})
+        key = (call.name, repr(sorted(args.items())))
+        if key in seen:  # the same card twice is the model repeating itself
+            continue
+        seen.add(key)
+        if call.name in tool_calls.SPEAKS_FOR_ITSELF:
+            question = (args.get("question") or "").strip() or tool_calls.DEFAULT_REPLY
+            return [(question, call.name, args)]
+        check = tool_calls.FOLLOW_UPS.get(call.name)
+        question = check(args, child.name, today) if check else None
+        if question:
+            return [(question, "ask_follow_up", {"question": question})]
+        drafts.append((call.name, args))
+
+    out = []
+    for name, args in drafts:
+        out.append((tool_calls.REPLIES.get(name, tool_calls.DEFAULT_REPLY), name, args))
+
+    if len(out) > 1:
+        # One line above the cards, not the same canned line repeated under
+        # each.
+        canned = set(tool_calls.REPLIES.values()) | {tool_calls.DEFAULT_REPLY}
+        out = [(t if t not in canned else "", n, a) for t, n, a in out]
+        if not out[0][0]:
+            out[0] = (f"Here are {len(out)} things to add — check each one before you add it.",
+                      out[0][1], out[0][2])
+    return out
