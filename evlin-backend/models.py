@@ -145,7 +145,9 @@ class Task(Base):
 
 class Occurrence(Base):
     __tablename__ = "occurrences"
-    __table_args__ = {"schema": "app"}
+    # One per task per day (main.py's occurrences_task_day_uniq).
+    __table_args__ = (UniqueConstraint("task_id", "due_date", name="occurrences_task_day_uniq"),
+                      {"schema": "app"})
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id = Column(UUID(as_uuid=True), ForeignKey("app.tasks.id", ondelete="CASCADE"), nullable=False)

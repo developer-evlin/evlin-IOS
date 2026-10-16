@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from uuid import UUID
 from datetime import date, datetime, timedelta, timezone
@@ -61,15 +62,23 @@ def _generate_occurrences_for_date(child_id: UUID, target_date: date, db: Sessio
             models.Occurrence.task_id == task.id,
             models.Occurrence.due_date == target_date
         ).first()
-        if not existing:
-            db.add(models.Occurrence(
-                task_id=task.id,
-                child_id=child_id,
-                due_date=target_date,
-                due_time=task.due_time,
-                status="pending",
-                gates_apps=task.gates_apps,
-            ))
+        if existing:
+            continue
+        # Another request (the same sync's policy fetch, the other phone)
+        # can make the same one between the check and the insert: the
+        # unique index refuses the second, and this one is simply skipped.
+        try:
+            with db.begin_nested():
+                db.add(models.Occurrence(
+                    task_id=task.id,
+                    child_id=child_id,
+                    due_date=target_date,
+                    due_time=task.due_time,
+                    status="pending",
+                    gates_apps=task.gates_apps,
+                ))
+        except IntegrityError:
+            pass
     db.commit()
 
 @router.get("/children/{child_id}/occurrences", response_model=list[schemas.OccurrenceResponse])

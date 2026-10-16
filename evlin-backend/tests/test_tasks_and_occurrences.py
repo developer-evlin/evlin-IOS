@@ -382,3 +382,49 @@ def test_a_new_task_for_today_locks_the_phone_again(client, db_session):
     # One for today closes it.
     client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={"title": "Now", "recurrence": "daily"})
     assert client.get(f"/children/{c.id}/state", headers=auth("pa")).json()["task_gate_override"] is False
+
+
+
+def test_a_task_gets_one_occurrence_per_day_even_when_two_requests_race(db_session, monkeypatch):
+    """The occurrences list and the policy, fetched together in one sync,
+    both make today's occurrences. When the other request inserts between
+    this one's check and insert, the unique index refuses the second and it
+    is skipped: one occurrence, the other request's, not two."""
+    from sqlalchemy.exc import IntegrityError
+    import routers.occurrences as occ
+
+    parent = make_parent(db_session, "race")
+    child = make_child(db_session, parent)
+    task = models.Task(child_id=child.id, title="Read", recurrence="daily", gates_apps=True,
+                       submission_kind="none", bucket="anytime", active=True)
+    db_session.add(task)
+    db_session.commit()
+    today = date.today()
+
+    # A second row for the same task and day is refused outright.
+    db_session.add(models.Occurrence(task_id=task.id, child_id=child.id, due_date=today,
+                                     status="approved", gates_apps=True))
+    db_session.commit()
+    db_session.add(models.Occurrence(task_id=task.id, child_id=child.id, due_date=today,
+                                     status="pending", gates_apps=True))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+    # The race: this request's check saw nothing (the other's row landed
+    # just after it), so it tries to insert, and must carry on.
+    real_query = db_session.query
+    def query_that_misses_the_other_row(*args, **kw):
+        q = real_query(*args, **kw)
+        if args and args[0] is models.Occurrence:
+            class Missed:
+                def filter(self, *a, **k): return self
+                def first(self): return None
+            return Missed()
+        return q
+    monkeypatch.setattr(db_session, "query", query_that_misses_the_other_row)
+    occ._generate_occurrences_for_date(child.id, today, db_session)
+    monkeypatch.undo()
+
+    rows = db_session.query(models.Occurrence).filter_by(task_id=task.id, due_date=today).all()
+    assert [r.status for r in rows] == ["approved"]

@@ -380,6 +380,30 @@ _MIGRATIONS = [
     "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS review_note text",
     # Never used; kids' plans live in app.events.
     "DROP TABLE IF EXISTS app.event_proposals",
+    # One occurrence per task per day. Two requests in the same sync (the
+    # occurrences list and the policy) both made today's occurrences, check
+    # then insert, so a task could end up with two: one approved, one still
+    # pending, and the phone stayed locked. Existing pairs are merged into
+    # the furthest along (approved, then sent in, then sent back, then to
+    # do), their photos moved onto it; then the index keeps it one.
+    """UPDATE app.submissions s SET occurrence_id = r.keep_id
+        FROM (SELECT id, first_value(id) OVER (
+                PARTITION BY task_id, due_date
+                ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'submitted' THEN 1
+                                     WHEN 'rejected' THEN 2 ELSE 3 END,
+                         completed_at DESC NULLS LAST, id) AS keep_id
+              FROM app.occurrences) r
+        WHERE s.occurrence_id = r.id AND r.id <> r.keep_id""",
+    """DELETE FROM app.occurrences o
+        USING (SELECT id, first_value(id) OVER (
+                 PARTITION BY task_id, due_date
+                 ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'submitted' THEN 1
+                                      WHEN 'rejected' THEN 2 ELSE 3 END,
+                          completed_at DESC NULLS LAST, id) AS keep_id
+               FROM app.occurrences) r
+        WHERE o.id = r.id AND r.id <> r.keep_id""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS occurrences_task_day_uniq
+        ON app.occurrences(task_id, due_date)""",
 ]
 
 
