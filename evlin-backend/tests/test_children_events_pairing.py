@@ -435,3 +435,31 @@ def test_the_parents_phone_fills_an_empty_child_timezone_but_never_replaces_one(
     r = client.put(f"/children/{c.id}", headers=auth("tz"), json={"timezone": "Europe/London"})
     assert r.json()["timezone"] == "America/Los_Angeles"
     assert client.put(f"/children/{c.id}", headers=auth("tz"), json={"timezone": "Mars/Base"}).status_code == 422
+
+
+def test_same_kid_pairing_twice_reuses_the_child(client, db_session):
+    # Both phones stepped back and paired again: the second pairing must not
+    # make a second child with the same name (it did, for a real family).
+    p = make_parent(db_session, "pa")
+    first = _request(client, "Khatnaa")
+    client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": first["code"]})
+    old_token = _status(client, first).json()["access_token"]
+
+    second = _request(client, "khatnaa ")
+    claimed = client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": second["code"]})
+    assert claimed.status_code == 200, claimed.text
+    new_token = _status(client, second).json()["access_token"]
+
+    assert db_session.query(models.ParentChild).filter_by(parent_id=p.id).count() == 1
+    assert client.get("/device/me", headers=auth(new_token)).status_code == 200
+    assert client.get("/device/me", headers=auth(old_token)).status_code == 401  # replaced
+
+
+def test_a_different_kid_still_gets_their_own_child(client, db_session):
+    p = make_parent(db_session, "pa")
+    for name in ("Khatnaa", "Temuulen"):
+        req = _request(client, name)
+        client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req["code"]})
+        _status(client, req)
+    names = sorted(c["name"] for c in client.get("/children", headers=auth("pa")).json())
+    assert names == ["Khatnaa", "Temuulen"]

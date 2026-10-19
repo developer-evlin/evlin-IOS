@@ -544,13 +544,26 @@ def claim_pairing(request: Request, body: schemas.PairingClaimRequest,
     elif body.new_child:
         child = _create_placeholder_child(db, current_parent, kid_name or "Your Child")
     else:
-        # Reuse a child that has no device yet (e.g. profile made earlier), else make one.
+        # The same kid pairing again (both phones stepped back and paired a
+        # second time, or a new phone): the name typed on the kid's phone
+        # matches a child already in this family. Reuse that child, whose
+        # old device token the collect step replaces, rather than making a
+        # second "khatnaa" with no tasks that the parent then sees twice.
         child = None
-        for link in db.query(models.ParentChild).filter(models.ParentChild.parent_id == current_parent.id).all():
-            has_device = db.query(models.Device).filter(models.Device.child_id == link.child_id, models.Device.revoked_at == None).first()  # noqa: E711
-            if not has_device:
-                child = db.query(models.Child).filter(models.Child.id == link.child_id).first()
-                break
+        if kid_name:
+            same_name = [c for c in db.query(models.Child).join(
+                models.ParentChild, models.ParentChild.child_id == models.Child.id).filter(
+                models.ParentChild.parent_id == current_parent.id).all()
+                if (c.name or "").strip().lower() == kid_name.strip().lower()]
+            if len(same_name) == 1:
+                child = same_name[0]
+        # Else a child that has no device yet (e.g. profile made earlier), else make one.
+        if child is None:
+            for link in db.query(models.ParentChild).filter(models.ParentChild.parent_id == current_parent.id).all():
+                has_device = db.query(models.Device).filter(models.Device.child_id == link.child_id, models.Device.revoked_at == None).first()  # noqa: E711
+                if not has_device:
+                    child = db.query(models.Child).filter(models.Child.id == link.child_id).first()
+                    break
         if child is None:
             child = _create_placeholder_child(db, current_parent, kid_name or "Your Child")
 
