@@ -36,7 +36,7 @@ services:
       - key: EMAIL_FROM
         sync: false
       - key: APPLE_BUNDLE_ID
-        value: com.evlin.app
+        value: com.evlin.ios
       - key: APPLE_TEAM_ID
         sync: false
       - key: APPLE_KEY_ID

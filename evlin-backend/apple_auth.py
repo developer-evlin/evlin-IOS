@@ -44,7 +44,7 @@ _jwks_client = PyJWKClient(APPLE_KEYS_URL)
 
 
 def bundle_id() -> str:
-    return os.getenv("APPLE_BUNDLE_ID", "com.evlin.app")
+    return os.getenv("APPLE_BUNDLE_ID", "com.evlin.ios")
 
 
 def _private_key() -> Optional[str]:

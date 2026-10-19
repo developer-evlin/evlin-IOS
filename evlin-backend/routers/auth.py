@@ -14,7 +14,7 @@ import jwt
 from jwt import PyJWKClient
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 from supabase_auth.errors import AuthApiError
 from database import get_db
 import models, schemas
@@ -48,7 +48,17 @@ limiter = Limiter(key_func=client_ip)
 # ---------------------------------------------------------------------------
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+# One client shared by every request, so it must hold no one's session. By
+# default supabase-py keeps the last session it handled (a sign-in, a
+# refresh) and renews it on a timer just before it expires: here, on the
+# server, with the refresh token it had just handed to a phone. The phone's
+# copy was then spent, its next refresh looked like a stolen token being
+# reused, and Supabase revoked the whole session: the parent was signed out
+# a few hours after every sign-in. Sessions are the app's to renew, through
+# /auth/refresh, and only there.
+_CLIENT_OPTIONS = ClientOptions(auto_refresh_token=False, persist_session=False)
+supabase: Client = (create_client(SUPABASE_URL, SUPABASE_KEY, options=_CLIENT_OPTIONS)
+                    if SUPABASE_URL and SUPABASE_KEY else None)
 
 security = HTTPBearer()
 

@@ -231,7 +231,7 @@ def apple_keys(monkeypatch):
 
 def _apple_token(key=APPLE_KEY, **overrides):
     now = int(time.time())
-    claims = {"iss": apple_auth.APPLE_ISSUER, "aud": "com.evlin.app", "sub": "apple-user-1",
+    claims = {"iss": apple_auth.APPLE_ISSUER, "aud": "com.evlin.ios", "sub": "apple-user-1",
               "iat": now, "exp": now + 600, "nonce": apple_auth.hash_nonce(NONCE),
               "email": "relay@privaterelay.appleid.com"}
     claims.update(overrides)
@@ -307,5 +307,5 @@ def test_code_exchange_refuses_another_users_code(monkeypatch):
     secret = posted["client_secret"]
     assert jwt.get_unverified_header(secret)["kid"] == "KEY1234567"
     claims = jwt.decode(secret, key.public_key(), algorithms=["ES256"], audience=apple_auth.APPLE_ISSUER)
-    assert claims["iss"] == "TEAM123456" and claims["sub"] == "com.evlin.app"
+    assert claims["iss"] == "TEAM123456" and claims["sub"] == "com.evlin.ios"
     assert claims["exp"] - claims["iat"] <= 300
