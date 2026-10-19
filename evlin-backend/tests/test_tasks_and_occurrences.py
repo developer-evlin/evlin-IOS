@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from datetime import date, datetime, timezone
 
@@ -326,20 +327,20 @@ def test_icon_is_stored_and_returned_but_optional(client, db_session):
     without = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={"title": "x"}).json()
     assert without["icon"] is None
     with_icon = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
-                             json={"title": "y", "icon": "pawprint.fill"}).json()
-    assert with_icon["icon"] == "pawprint.fill"
+                             json={"title": "y", "icon": "🐾"}).json()
+    assert with_icon["icon"] == "🐾"
 
 
 def test_icon_update_is_partial_like_category(client, db_session):
     p = make_parent(db_session, "pa")
     c = make_child(db_session, p)
     t = client.post(f"/children/{c.id}/tasks", headers=auth("pa"),
-                     json={"title": "x", "icon": "star.fill"}).json()
+                     json={"title": "x", "icon": "⭐"}).json()
     renamed = client.put(f"/tasks/{t['id']}", headers=auth("pa"), json={"title": "renamed"}).json()
-    assert renamed["icon"] == "star.fill"  # untouched when the update omits it
+    assert renamed["icon"] == "⭐"  # untouched when the update omits it
     changed = client.put(f"/tasks/{t['id']}", headers=auth("pa"),
-                          json={"title": "renamed", "icon": "moon.fill"}).json()
-    assert changed["icon"] == "moon.fill"
+                          json={"title": "renamed", "icon": "🌙"}).json()
+    assert changed["icon"] == "🌙"
 
 
 def test_update_clears_due_time_only_when_sent_as_null(client, db_session):
@@ -428,3 +429,68 @@ def test_a_task_gets_one_occurrence_per_day_even_when_two_requests_race(db_sessi
 
     rows = db_session.query(models.Occurrence).filter_by(task_id=task.id, due_date=today).all()
     assert [r.status for r in rows] == ["approved"]
+
+
+def test_taking_back_an_approval_of_a_task_never_sent_in_puts_it_back_to_do(client, db_session):
+    """The parent ticked a to-do done themselves, then changed their mind:
+    the task is plain "to do" again, with no redo note for the kid to read
+    as "sent back", and the bonus that approval paid is taken back."""
+    c, occ = _occurrence(client, db_session)
+    task_id = client.get(f"/children/{c.id}/tasks", headers=auth("pa")).json()[0]["id"]
+    client.put(f"/tasks/{task_id}", headers=auth("pa"),
+               json={"title": "d", "recurrence": "daily", "bonus_minutes": 15})
+
+    assert client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("pa")).json()["status"] == "approved"
+    r = client.put(f"/occurrences/{occ['id']}/status", headers=auth("pa"),
+                   json={"status": "rejected", "rejection_note": ""}).json()
+    assert r["status"] == "pending" and r["rejection_note"] is None and r["approved_at"] is None
+
+    kid_view = client.get(f"/children/{c.id}/occurrences?target_date=2026-09-20", headers=auth("dev-kid")).json()[0]
+    assert kid_view["status"] == "pending" and kid_view["rejection_note"] is None
+    assert client.get(f"/children/{c.id}/time-grants", headers=auth("pa")).json()["granted_minutes"] == 0
+
+    # Approving again pays the bonus again, once.
+    client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("pa"))
+    assert client.get(f"/children/{c.id}/time-grants", headers=auth("pa")).json()["granted_minutes"] == 15
+
+
+def test_taking_back_an_approval_of_a_task_that_was_sent_in_is_a_redo(client, db_session):
+    c, occ = _occurrence(client, db_session)
+    client.post(f"/tasks/occurrences/{occ['id']}/submit", headers=auth("dev-kid"), json={})
+    client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("pa"))
+    r = client.put(f"/occurrences/{occ['id']}/status", headers=auth("pa"),
+                   json={"status": "rejected", "rejection_note": "do it again"}).json()
+    assert r["status"] == "rejected" and r["rejection_note"] == "do it again"
+
+
+def test_unapproving_a_task_that_was_sent_in_puts_it_back_waiting_for_review(client, db_session):
+    """Unticking an approved task the kid sent in: it's waiting for review
+    again, as it was, with what they sent kept and no redo note."""
+    c, occ = _occurrence(client, db_session)
+    client.post(f"/tasks/occurrences/{occ['id']}/submit", headers=auth("dev-kid"), json={})
+    db_session.add(models.Submission(occurrence_id=uuid.UUID(occ["id"]), kind="photo", r2_key="k/1.jpg", content_type="image/jpeg", status="uploaded"))
+    db_session.commit()
+    client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("pa"))
+
+    r = client.post(f"/tasks/occurrences/{occ['id']}/unapprove", headers=auth("pa")).json()
+    assert r["status"] == "submitted" and r["rejection_note"] is None and r["approved_at"] is None
+    assert db_session.query(models.Submission).filter_by(occurrence_id=uuid.UUID(occ["id"])).count() == 1
+
+
+def test_unapproving_a_task_never_sent_in_puts_it_back_to_do(client, db_session):
+    c, occ = _occurrence(client, db_session)
+    client.post(f"/tasks/occurrences/{occ['id']}/approve", headers=auth("pa"))
+    assert client.post(f"/tasks/occurrences/{occ['id']}/unapprove", headers=auth("pa")).json()["status"] == "pending"
+    # Not approved: unapproving changes nothing.
+    assert client.post(f"/tasks/occurrences/{occ['id']}/unapprove", headers=auth("pa")).json()["status"] == "pending"
+
+
+@pytest.mark.parametrize("icon,ok", [("🛏️", True), ("🪥", True), ("👨‍👩‍👧", True), ("", True),
+                                      ("bed", False), ("🛏️ bed", False), ("12", False)])
+def test_a_task_icon_is_one_emoji(client, db_session, icon, ok):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    r = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={"title": "Make the bed", "icon": icon})
+    assert (r.status_code == 200) == ok
+    if ok:
+        assert r.json()["icon"] == (icon or None)

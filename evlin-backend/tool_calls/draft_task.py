@@ -39,6 +39,16 @@ TOOL = {
             },
             "gates_apps": {"type": "BOOLEAN", "description": "Whether not doing it should keep apps locked. Default true."},
             "bonus_minutes": {"type": "INTEGER", "description": "Extra screen-time minutes for finishing it, 0 if the parent didn't say."},
+            "emoji": {
+                "type": "STRING",
+                "description": (
+                    "The single emoji shown beside this task on the child's phone. Pick the one a 6-12 year old "
+                    "would instantly read as this task: the object or the action itself, not a mood or a face. "
+                    "Any emoji in Unicode, as specific as possible: 🦷 brushing teeth, 🧦 sorting socks, 🐠 feeding "
+                    "the fish, 🎻 violin practice, 🧩 a puzzle, 🌱 watering the seedlings. Use ⭐ only when nothing "
+                    "fits. Exactly one emoji, no words."
+                ),
+            },
         },
         "required": ["title"],
     },

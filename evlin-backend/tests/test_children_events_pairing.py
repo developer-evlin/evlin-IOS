@@ -423,3 +423,15 @@ def test_a_retried_event_or_plan_create_with_the_phones_id_saves_once(client, db
     b = make_parent(db_session, "pb")
     theirs = make_child(db_session, b)
     assert client.post("/events", headers=auth("pb"), json={**ev, "child_id": str(theirs.id)}).status_code == 409
+
+
+def test_the_parents_phone_fills_an_empty_child_timezone_but_never_replaces_one(client, db_session):
+    """Until the kid's device reports its zone, the parent's phone stands in
+    for it; once there's one, the parent's can't overwrite it."""
+    p = make_parent(db_session, "tz")
+    c = make_child(db_session, p)
+    r = client.put(f"/children/{c.id}", headers=auth("tz"), json={"timezone": "America/Los_Angeles"})
+    assert r.status_code == 200 and r.json()["timezone"] == "America/Los_Angeles"
+    r = client.put(f"/children/{c.id}", headers=auth("tz"), json={"timezone": "Europe/London"})
+    assert r.json()["timezone"] == "America/Los_Angeles"
+    assert client.put(f"/children/{c.id}", headers=auth("tz"), json={"timezone": "Mars/Base"}).status_code == 422

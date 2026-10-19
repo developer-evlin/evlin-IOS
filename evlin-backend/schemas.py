@@ -48,10 +48,32 @@ class ChildResponse(ChildBase):
     class Config:
         from_attributes = True
 
+def _real_zone(v: Optional[str]) -> Optional[str]:
+    """A zone the server can't resolve would make every "is it active now"
+    check for this child quietly wrong, so it's refused."""
+    if v is None:
+        return v
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        ZoneInfo(v)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError(f"unknown timezone {v!r}")
+    return v
+
+
 class ChildUpdate(BaseModel):
     name: Optional[str] = None
     color_index: Optional[int] = None
     birth_year: Optional[int] = None
+    # The parent phone's own zone, used only while the child has none
+    # (update_child): the kid's device, which reports its own on every
+    # sync, always has the last word.
+    timezone: Optional[str] = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _real_zone(cls, v):
+        return _real_zone(v)
 
 class PairingRequest(BaseModel):
     """Sent by the kid's device to start pairing."""
@@ -115,6 +137,19 @@ class TaskCreate(TaskBase):
         if not v or not v.strip():
             raise ValueError("title must not be blank")
         return v.strip()
+
+    @field_validator("icon")
+    @classmethod
+    def _one_emoji(cls, v):
+        """The task's emoji, shown beside it on the kid's phone: one emoji
+        (a ZWJ family or flag is several code points), never text. Blank
+        means none."""
+        if v is None or not v.strip():
+            return None
+        v = v.strip()
+        if len(v) > 16 or any(c.isascii() and c.isalnum() for c in v) or not any(ord(c) > 0x238C for c in v):
+            raise ValueError("icon must be a single emoji")
+        return v
 
 class TaskResponse(TaskBase):
     # ORM rows hold time/date objects; the API exposes them as strings.
@@ -358,16 +393,7 @@ class DeviceUpdate(BaseModel):
     @field_validator("timezone")
     @classmethod
     def _real_zone(cls, v):
-        # A zone the server can't resolve would make every "is it active
-        # now" check for this child quietly wrong, so it's refused here.
-        if v is None:
-            return v
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-        try:
-            ZoneInfo(v)
-        except (ZoneInfoNotFoundError, ValueError):
-            raise ValueError(f"unknown timezone {v!r}")
-        return v
+        return _real_zone(v)
 
 
 class AppBlockCreate(BaseModel):

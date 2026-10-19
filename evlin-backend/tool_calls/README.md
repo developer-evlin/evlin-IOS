@@ -4,7 +4,7 @@ The tools the chat assistant can use. It has exactly three, one file each:
 
 | Tool | File | What it does | Card it opens |
 |---|---|---|---|
-| `draft_task` | [draft_task.py](draft_task.py) | Assigns a task: title, instructions, date, time, recurrence, whether it gates apps, bonus minutes | Add Task |
+| `draft_task` | [draft_task.py](draft_task.py) | Assigns a task: title, emoji, instructions, date, time, recurrence, whether it gates apps, bonus minutes | Add Task |
 | `draft_event` | [draft_event.py](draft_event.py) | Puts something on the child's calendar: title, date, start/end, recurrence | Add Event |
 | `ask_follow_up` | [ask_follow_up.py](ask_follow_up.py) | Asks one question when a request is too vague to draft | None; the question is the message |
 
@@ -26,6 +26,28 @@ question, the server asks that instead of showing any card. `draft_task`
 asks when a one-off has no day, and `draft_event` asks when there's no day
 or start time, so the model can't quietly pick a date. `today` is the
 child's local date.
+
+## Emoji
+
+Every task has one emoji (`tasks.icon`), shown beside it on the kid's
+phone. When the assistant drafts a task it picks it (`draft_task`'s
+`emoji`), from all of Unicode:
+
+> Pick the single emoji a 6-12 year old would instantly read as this task:
+> the object or the action itself, not a mood or a face. As specific as
+> possible (🦷 brushing teeth, 🧦 sorting socks, 🐠 feeding the fish, 🎻
+> violin practice). ⭐ only when nothing fits. Exactly one emoji, no words.
+
+Its replies use emoji the way Notion's assistant does (the system prompt in
+`routers/chat.py`): one leading emoji for what it's doing (📝 a task, 📅 an
+event, ❓ a question, 💡 a suggestion) and a task's emoji beside its name,
+never a row of them.
+
+A task the parent types gets one on the phone when it's created
+(`Evlin/Data/EmojiSuggest.swift`: Unicode's own emoji names and keywords,
+plus chore synonyms); renaming it re-guesses unless the agent picked it.
+Parents never see the emoji, only the kid's list does. The server only
+checks it's a single emoji (`schemas.TaskCreate`).
 
 ## Removed
 

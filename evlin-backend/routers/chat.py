@@ -89,6 +89,13 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
     # The chat shows replies as plain text, so a markdown list with bold
     # labels reads as a wall. The app already lists what Evlin can do, with
     # icons, behind the ? button.
+    # Emoji the way Notion's assistant uses them: one that says what's
+    # happening, and beside each task's name, never as decoration. A task
+    # drafted with draft_task carries its own emoji for the child's phone.
+    lines.append("Write with emoji the way Notion's assistant does: start each reply with one emoji that says what "
+                  "you're doing (📝 drafting a task, 📅 an event, ❓ asking, 💡 suggesting), and put a task's emoji "
+                  "beside its name when you mention it. One or two per reply, never a row of them, never mid-word. "
+                  "Every draft_task gets an emoji for the child's phone: the most specific one for the task.")
     lines.append("Keep replies short and conversational: one to three sentences, no bullet lists, headings or bold labels. "
                   "If asked what you can do, say in one sentence that you draft tasks and calendar events "
                   "for the parent to confirm, and that the ? button at the top of the chat lists everything.")

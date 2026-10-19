@@ -181,8 +181,53 @@ def _resolve_app_blocks(task: models.Task | None, db: Session) -> None:
         block.resolved_at = datetime.now(timezone.utc)
 
 
+def _sent_in(occurrence: models.Occurrence, db: Session) -> bool:
+    """Whether the kid sent this in (as opposed to a parent ticking it done
+    with nothing from the kid)."""
+    return occurrence.completed_at is not None or db.query(models.Submission).filter(
+        models.Submission.occurrence_id == occurrence.id).first() is not None
+
+
+def _undo_approval(occurrence: models.Occurrence, task: models.Task | None,
+                   parent: models.Parent, db: Session) -> None:
+    """Takes an approval back, leaving the task as it was before it: waiting
+    for review if the kid had sent it in (what they sent is kept), plain
+    "to do" if they hadn't. What approving did is undone too: the bonus
+    minutes come back off (a balancing ledger row, not a deletion), and an
+    app block the approval lifted is in force again. Doesn't commit —
+    _review owns that."""
+    was_approved = occurrence.status == "approved"
+    approved_at = occurrence.approved_at
+    occurrence.status = "submitted" if _sent_in(occurrence, db) else "pending"
+    occurrence.rejection_note = None
+    occurrence.approved_at = None
+    occurrence.approved_by = None
+    if not was_approved:
+        return
+    paid = sum(g.minutes for g in db.query(models.TimeGrant).filter(
+        models.TimeGrant.source_ref_id == occurrence.id,
+        models.TimeGrant.source.in_(("task_bonus", "task_bonus_undone")),
+    ).all())
+    if paid:
+        award_time_grant(
+            db, occurrence.child_id, -paid, source="task_bonus_undone",
+            reason=f"Task: {task.title if task else ''} (approval undone)",
+            granted_by_parent_id=parent.id, source_ref_id=occurrence.id,
+        )
+    if task and approved_at:
+        for block in db.query(models.AppBlock).filter(
+            models.AppBlock.until_task_id == task.id,
+            models.AppBlock.resolved == True,  # noqa: E712
+            models.AppBlock.resolved_reason == "task_approved",
+            models.AppBlock.resolved_at >= approved_at,
+        ).all():
+            block.resolved = False
+            block.resolved_reason = None
+            block.resolved_at = None
+
+
 def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Session,
-            rejection_note: str | None = None):
+            rejection_note: str | None = None, undo: bool = False):
     """The one place a parent's review of an occurrence is applied.
 
     Every approval side effect hangs off here rather than off a route, so
@@ -194,7 +239,12 @@ def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Sess
     task = db.query(models.Task).filter(models.Task.id == occurrence.task_id).first()
     discarded_keys: list[str] = []
 
-    if approved:
+    if undo:
+        # Taking an approval back (the parent unticked it): the task returns
+        # to how it was, with nothing for the kid to read as sent back.
+        if occurrence.status == "approved":
+            _undo_approval(occurrence, task, parent, db)
+    elif approved:
         # Every side effect below is a one-time payout: a second approval
         # used to award the bonus again.
         if occurrence.status == "approved":
@@ -204,6 +254,12 @@ def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Sess
         occurrence.approved_by = parent.id
         _award_task_bonus(occurrence, task, parent, db)
         _resolve_app_blocks(task, db)
+    elif not occurrence.bypass_requested and not _sent_in(occurrence, db):
+        # Nothing was ever sent in: the parent ticked it done themselves and
+        # is taking that back. That's an undo, not a redo: the task goes
+        # back to plain "to do", with no note and nothing for the kid to read
+        # as "sent back", and what the approval did is reversed.
+        _undo_approval(occurrence, task, parent, db)
     else:
         occurrence.status = "rejected"
         occurrence.rejection_note = rejection_note
@@ -234,6 +290,14 @@ def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Sess
 def approve_occurrence(occurrence_id: UUID, current_parent: models.Parent = Depends(get_current_parent),
                        db: Session = Depends(get_db)):
     return _review(occurrence_id, True, current_parent, db)
+
+
+@router.post("/tasks/occurrences/{occurrence_id}/unapprove", response_model=schemas.OccurrenceResponse)
+def unapprove_occurrence(occurrence_id: UUID, current_parent: models.Parent = Depends(get_current_parent),
+                         db: Session = Depends(get_db)):
+    """Takes an approval back: the task is as it was before it (see
+    _undo_approval). Not approved: nothing changes."""
+    return _review(occurrence_id, False, current_parent, db, undo=True)
 
 
 @router.post("/tasks/occurrences/{occurrence_id}/reject", response_model=schemas.OccurrenceResponse)

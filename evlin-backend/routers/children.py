@@ -82,6 +82,11 @@ def update_child(child_id: UUID, update: schemas.ChildUpdate, current_parent: mo
         child.color_index = update.color_index
     if update.birth_year is not None:
         child.birth_year = update.birth_year
+    # Only fills an empty one: until the kid's device has reported its zone,
+    # the parent's phone stands in for it (a family nearly always shares
+    # one), so "today" on the server isn't UTC's.
+    if update.timezone is not None and child.timezone is None:
+        child.timezone = update.timezone
     db.commit()
     db.refresh(child)
     child.is_paired = db.query(models.Device).filter(models.Device.child_id == child.id).count() > 0
