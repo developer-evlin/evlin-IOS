@@ -119,8 +119,31 @@ def _unavailable(e: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail="Sign-in is unavailable for a moment. Try again.")
 
 
+def _parent_for_session_token(db: Session, token: str) -> Optional[models.Parent]:
+    """The parent a phone's own session token belongs to (models.ParentSession),
+    or None. A read only: nothing is stamped on use, since a read that writes
+    would announce a live update."""
+    row = db.query(models.ParentSession).filter(
+        models.ParentSession.token_hash == hash_token(token),
+        models.ParentSession.revoked_at == None,  # noqa: E711
+    ).first()
+    if not row:
+        return None
+    return db.query(models.Parent).filter(models.Parent.id == row.parent_id).first()
+
+
 def get_current_parent(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> models.Parent:
-    """Dependency to verify the Supabase JWT token and return the current Parent."""
+    """The signed-in parent: from the phone's own session token, or from a
+    Supabase access token (right after sign-in, and older app versions)."""
+    token = credentials.credentials
+    if token.count(".") != 2:
+        # Not a JWT, so a session token. Decided here, in our own database,
+        # with no call to Supabase: an outage can't sign anyone out.
+        parent = _parent_for_session_token(db, token)
+        if not parent:
+            raise HTTPException(status_code=401, detail="Signed out on this phone")
+        return parent
+
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not configured")
 
@@ -348,6 +371,32 @@ def accept_terms(
     db.commit()
     db.refresh(current_parent)
     return current_parent
+
+
+@router.post("/session", response_model=schemas.ParentSessionResponse)
+def start_parent_session(current_parent: models.Parent = Depends(get_current_parent),
+                         db: Session = Depends(get_db)):
+    """Trades the sign-in (a Supabase access token) for this phone's own
+    session token, which keeps the parent signed in until they sign out."""
+    token = secrets.token_urlsafe(32)
+    db.add(models.ParentSession(parent_id=current_parent.id, token_hash=hash_token(token)))
+    db.commit()
+    return {"session_token": token}
+
+
+@router.post("/logout")
+def end_parent_session(credentials: HTTPAuthorizationCredentials = Depends(security),
+                       db: Session = Depends(get_db)):
+    """Sign out on this phone: its session token stops working. Other phones
+    stay signed in."""
+    row = db.query(models.ParentSession).filter(
+        models.ParentSession.token_hash == hash_token(credentials.credentials),
+        models.ParentSession.revoked_at == None,  # noqa: E711
+    ).first()
+    if row:
+        row.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+    return {"detail": "Signed out"}
 
 
 @router.post("/refresh", response_model=schemas.RefreshResponse)

@@ -84,6 +84,21 @@ class Device(Base):
     paired_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     revoked_at = Column(DateTime(timezone=True))
 
+class ParentSession(Base):
+    """A parent's phone, signed in. Like a kid's device token: issued once
+    after sign-in (POST /auth/session), stored hashed, never expires and is
+    never renewed. It ends only on Sign out (POST /auth/logout) or when the
+    account is deleted, so a parent signs in once per phone. Supabase still
+    proves who they are at sign-in; it isn't what keeps them signed in."""
+    __tablename__ = "parent_sessions"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(String, nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    revoked_at = Column(DateTime(timezone=True))
+
 class PairingCode(Base):
     __tablename__ = "pairing_codes"
     __table_args__ = {"schema": "app"}

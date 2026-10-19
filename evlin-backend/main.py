@@ -404,6 +404,15 @@ _MIGRATIONS = [
         WHERE o.id = r.id AND r.id <> r.keep_id""",
     """CREATE UNIQUE INDEX IF NOT EXISTS occurrences_task_day_uniq
         ON app.occurrences(task_id, due_date)""",
+    # A parent's phone stays signed in on its own token (models.ParentSession).
+    """CREATE TABLE IF NOT EXISTS app.parent_sessions (
+        id uuid PRIMARY KEY,
+        parent_id uuid NOT NULL REFERENCES app.parents(id) ON DELETE CASCADE,
+        token_hash text NOT NULL UNIQUE,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        revoked_at timestamptz
+    )""",
+    """CREATE INDEX IF NOT EXISTS parent_sessions_parent_idx ON app.parent_sessions(parent_id)""",
 ]
 
 
@@ -473,7 +482,7 @@ _EXPECTED_COLUMNS = [
     ("app.app_blocks", "app_id"), ("app.app_blocks", "schedule_days"),
     ("app.child_video_profiles", "allowed_categories"), ("app.video_queue_items", "local_date"),
     ("app.email_verifications", "code_hash"), ("app.parents", "apple_refresh_token_enc"),
-    ("app.chat_messages", "agent"),
+    ("app.chat_messages", "agent"), ("app.parent_sessions", "token_hash"),
 ]
 
 
