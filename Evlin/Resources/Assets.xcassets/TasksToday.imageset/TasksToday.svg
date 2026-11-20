@@ -1,0 +1,30 @@
+<svg width="240" height="240" viewBox="0 0 240 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- The sun, rising behind the list -->
+  <g stroke="#FFD45C" stroke-width="7" stroke-linecap="round">
+    <path d="M208 62H218M197.5 87.5L204.5 94.5M172 98V108M146.5 87.5L139.5 94.5M136 62H126M146.5 36.5L139.5 29.5M172 26V16M197.5 36.5L204.5 29.5"/>
+  </g>
+  <circle cx="172" cy="62" r="26" fill="url(#sun)"/>
+  <!-- Today's list: a raised card, tilted -->
+  <g transform="rotate(-6 112 137)">
+    <rect x="46" y="69" width="132" height="150" rx="24" fill="#CDEFC6"/>
+    <rect x="46" y="62" width="132" height="150" rx="24" fill="#FFFFFF" stroke="#E1F3DE" stroke-width="2"/>
+    <rect x="86" y="53" width="52" height="18" rx="9" fill="#3FCE64"/>
+    <circle cx="112" cy="62" r="4" fill="#FFFFFF"/>
+    <circle cx="78" cy="104" r="14" fill="#3FCE64"/>
+    <path d="M71 104L76 109L85 99" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="102" y="97" width="56" height="14" rx="7" fill="#C4ECBE"/>
+    <circle cx="78" cy="144" r="14" fill="#3FCE64"/>
+    <path d="M71 144L76 149L85 139" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="102" y="137" width="44" height="14" rx="7" fill="#C4ECBE"/>
+    <circle cx="78" cy="184" r="12" stroke="#D6E9D3" stroke-width="4"/>
+    <rect x="102" y="177" width="60" height="14" rx="7" fill="#E9EFE8"/>
+  </g>
+  <!-- Sparkles -->
+  <path d="M34 71Q34 82 45 82Q34 82 34 93Q34 82 23 82Q34 82 34 71Z" fill="#FFC94A"/>
+  <path d="M210 168Q210 176 218 176Q210 176 210 184Q210 176 202 176Q210 176 210 168Z" fill="#6BD96A"/>
+  <defs>
+    <linearGradient id="sun" x1="146" y1="36" x2="198" y2="88" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE58A"/><stop offset="1" stop-color="#FFB938"/>
+    </linearGradient>
+  </defs>
+</svg>

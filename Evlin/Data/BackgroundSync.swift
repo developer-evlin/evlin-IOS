@@ -12,7 +12,7 @@ import UIKit
 ///   it's "every so often", never a guaranteed interval. The live stream
 ///   and the 15-second check do the rest while the app is open.
 enum BackgroundSync {
-    static let refreshID = "com.evlin.app.refresh"
+    static let refreshID = "com.evlin.ios.refresh"
 
     /// Asks for the next wake-up, about 15 minutes out at the earliest.
     static func scheduleRefresh() {

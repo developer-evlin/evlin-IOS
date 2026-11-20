@@ -55,7 +55,7 @@ struct ChildProfileStep: View {
             content: {
                 VStack(spacing: 13) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("NAME").onboardingV2FieldLabel()
+                        Text("Name").onboardingV2FieldLabel()
                         OnboardingV2FieldBox {
                             TextField("Your child's name", text: $name)
                                 .font(Evlin.Typography.font(isRegular ? 19 : 16, weight: .semibold))
@@ -70,14 +70,14 @@ struct ChildProfileStep: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("AGE RANGE").onboardingV2FieldLabel()
+                        Text("Age").onboardingV2FieldLabel()
                         OnboardingV2Segmented(options: ageRangeOptions, selectedIndex: $ageRangeIndex)
                             .onChange(of: ageRangeIndex, initial: true) { _, i in
                                 ageRange = ageRangeOptions[i]
                             }
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("GENDER").onboardingV2FieldLabel()
+                        Text("Gender").onboardingV2FieldLabel()
                         OnboardingV2Segmented(options: genderOptions.map(\.label), selectedIndex: $genderIndex)
                             .onChange(of: genderIndex, initial: true) { _, i in
                                 gender = genderOptions[i].key
@@ -111,7 +111,7 @@ struct ChildShowCodeStep: View {
         OnboardingV2ScreenContainer(
             embeddedRole: .child,
             phase: "2 · Pair",
-            stepIndex: 4,
+            stepIndex: 1,
             stepTotal: childTotal,
             title: "",
             subtitle: nil,
@@ -122,9 +122,6 @@ struct ChildShowCodeStep: View {
                         Text("Parents: Connect This Device")
                             .onboardingV2TitleL()
                             .fontWeight(.bold)
-                            .multilineTextAlignment(.center)
-                        Text("Parents: Open Evlin on your phone, then scan this QR code or enter the 6-digit code below.")
-                            .onboardingV2Body()
                             .multilineTextAlignment(.center)
                     }
 
@@ -160,6 +157,25 @@ struct ChildShowCodeStep: View {
 
     @MainActor
     private func run() async {
+        if DemoPairBridge.isOn {
+            // Two simulators linked by `scripts/demo-pair.sh`: wait for the
+            // parent's phone to type this code.
+            code = DemoPairBridge.startPairing()
+            while !Task.isCancelled {
+                if DemoPairBridge.read()?.paired == true { onConnected(); return }
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
+            return
+        }
+        if DemoMode.isBuild {
+            code = "482913"
+            // Walking through onboarding: a parent "scans" after a moment.
+            if DemoMode.previewsOnboarding {
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                if !Task.isCancelled { onConnected() }
+            }
+            return
+        }
         while !Task.isCancelled {
             do {
                 let request = try await APIClient.shared.requestPairing(childName: childName)
@@ -199,7 +215,7 @@ struct ChildConnectedStep: View {
         OnboardingV2ScreenContainer(
             embeddedRole: .child,
             phase: "2 · Pair",
-            stepIndex: 5,
+            stepIndex: 2,
             stepTotal: childTotal,
             title: "",
             subtitle: nil,
@@ -207,11 +223,9 @@ struct ChildConnectedStep: View {
             content: {
                 VStack(spacing: 16) {
                     Spacer(minLength: 8)
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 30, weight: .bold))
-                        .foregroundStyle(OnboardingV2Theme.Palette.onPrimary)
-                        .frame(width: 62, height: 62)
-                        .background(Circle().fill(kidGreen))
+                    // The same leaf approved badge as the parent's Connected.
+                    LeafApprovedBadge(size: 128)
+                    Text("Connected").onboardingV2TitleL()
                     Spacer(minLength: 8)
                 }
                 .frame(maxWidth: .infinity)
@@ -237,6 +251,7 @@ struct ChildScreenTimeStep: View {
 
     private enum Stage: Equatable { case initial, requesting, granted, denied(String) }
     @State private var stage: Stage = .initial
+    @State private var showingSimulatorAuthorization = false
     // Was `= AuthorizationCenter.shared.authorizationStatus` — a live read
     // of FamilyControls' system authorization state used directly as this
     // @State's default value, which runs synchronously while SwiftUI is
@@ -263,17 +278,42 @@ struct ChildScreenTimeStep: View {
             subtitle: nil,
             onBack: onBack,
             content: {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    ScreenTimeGrantLottieView(size: 190)
-                        .frame(maxWidth: .infinity)
-                    Spacer(minLength: 0)
-                    stageCard
+                GeometryReader { geometry in
+                    let landscape = geometry.size.width > geometry.size.height
+                    let artSize = min(landscape ? geometry.size.height * 0.48 : geometry.size.width * 0.44,
+                                      landscape ? 360 : 320)
+
+                    Group {
+                        if landscape {
+                            HStack(spacing: min(geometry.size.width * 0.08, 96)) {
+                                illustration(size: artSize)
+                                    .frame(maxWidth: geometry.size.width * 0.38)
+                                stageCard(isLandscape: true)
+                                    .frame(maxWidth: 580)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.horizontal, 48)
+                        } else {
+                            VStack(spacing: 28) {
+                                Spacer(minLength: 16)
+                                illustration(size: artSize)
+                                stageCard(isLandscape: false)
+                                    .frame(maxWidth: 640)
+                                Spacer(minLength: 16)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.horizontal, 32)
+                        }
+                    }
                 }
             },
-            footer: {            }
+            footer: { screenTimeAction }
         )
         .animation(.easeOut(duration: 0.2), value: stage)
+        .alert("Allow Screen Time Access?", isPresented: $showingSimulatorAuthorization) {
+            Button("Don't Allow", role: .cancel) {}
+            Button("Allow", action: onContinue)
+        }
         .task {
             // Read on the main actor (where AuthorizationCenter lives) so
             // there is no cross-actor hop and no unsafeForcedSync. The
@@ -288,39 +328,45 @@ struct ChildScreenTimeStep: View {
         }
     }
 
+    // Before access is given: a small copy of Apple's Screen Time alert with
+    // a finger tapping Continue, so the parent knows what to press when the
+    // real one appears (as Opal does). After: nothing, just
+    // the check and "Access granted" below.
     @ViewBuilder
-    private var stageCard: some View {
-        VStack(spacing: 0) {
+    private func illustration(size: CGFloat) -> some View {
+        if stage != .granted {
+            OnboardingV2SystemAlertHint.screenTime(width: min(size * 1.15, 340))
+        }
+    }
+
+    @ViewBuilder
+    private func stageCard(isLandscape: Bool) -> some View {
+        VStack(alignment: isLandscape ? .leading : .center, spacing: 14) {
             switch stage {
             case .initial, .requesting:
                 Text("Evlin Needs Screen Time Access")
                     .onboardingV2TitleL()
-                    .multilineTextAlignment(.center)
-                    .padding(.bottom, 6)
-                OnboardingV2PrimaryButton(stage == .requesting ? "Requesting…" : "Grant", role: .child) {
-                    Task { await requestScreenTime() }
-                }
-                .disabled(stage == .requesting)
-                .padding(.top, 20)
+                    .multilineTextAlignment(isLandscape ? .leading : .center)
+                Text("On the next screen, tap Continue.")
+                    .onboardingV2Body()
+                    .multilineTextAlignment(isLandscape ? .leading : .center)
             case .granted:
-                VStack(spacing: 14) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(kidGreen)
-                    Text("Access granted!")
-                        .onboardingV2TitleL()
-                    OnboardingV2PrimaryButton("Continue", role: .child, action: onContinue)
-                }
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 42))
+                    .foregroundStyle(kidGreen)
+                Text("Access granted")
+                    .onboardingV2TitleL()
+                    .multilineTextAlignment(isLandscape ? .leading : .center)
             case .denied(let message):
-                VStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 34))
-                        .foregroundStyle(OnboardingV2Theme.Palette.tertiary)
-                    Text("Access not granted")
-                        .onboardingV2TitleL()
-                    Text(message)
-                        .onboardingV2Body()
-                        .multilineTextAlignment(.center)
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(OnboardingV2Theme.Palette.tertiary)
+                Text("Access not granted")
+                    .onboardingV2TitleL()
+                    .multilineTextAlignment(isLandscape ? .leading : .center)
+                Text(message)
+                    .onboardingV2Body()
+                    .multilineTextAlignment(isLandscape ? .leading : .center)
                     // Really retries AuthorizationCenter — this used to just
                     // force `stage = .granted` without asking again, so a
                     // real denial (or a "set a device passcode first"
@@ -334,21 +380,36 @@ struct ChildScreenTimeStep: View {
                     // Simulator — this makes that failure honest instead of
                     // papering over it, so kid-side Simulator testing may
                     // need a real device for this one step.
-                    OnboardingV2PrimaryButton("Try Again", systemImage: "arrow.clockwise", role: .child) {
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: isLandscape ? .leading : .center)
+    }
+
+    @ViewBuilder
+    private var screenTimeAction: some View {
+        Group {
+            switch stage {
+            case .initial, .requesting:
+                if DemoMode.previewsOnboarding {
+                    OnboardingV2PrimaryButton("Grant", role: .child) {
+                        showingSimulatorAuthorization = true
+                    }
+                } else {
+                    OnboardingV2PrimaryButton(stage == .requesting ? "Requesting…" : "Grant", role: .child) {
                         Task { await requestScreenTime() }
                     }
-                    .padding(.top, 8)
+                    .disabled(stage == .requesting)
+                }
+            case .granted:
+                OnboardingV2PrimaryButton("Continue", role: .child, action: onContinue)
+            case .denied:
+                OnboardingV2PrimaryButton("Try Again", systemImage: "arrow.clockwise", role: .child) {
+                    Task { await requestScreenTime() }
                 }
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 20)
-        .padding(.bottom, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(OnboardingV2Theme.Palette.surfaceLowest)
-                .shadow(color: Color.black.opacity(0.18), radius: 20, x: 0, y: -10)
-        )
+        .frame(maxWidth: 600)
+        .frame(maxWidth: .infinity)
     }
 
     @MainActor
@@ -379,7 +440,6 @@ struct ChildScreenTimeStep: View {
 struct ChildNotificationsStep: View {
     let onContinue: () -> Void
     var onBack: (() -> Void)? = nil
-
     @State private var requesting = false
 
     var body: some View {
@@ -394,28 +454,16 @@ struct ChildNotificationsStep: View {
             content: {
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    NotificationsLottieView(size: 190)
-                        .frame(maxWidth: .infinity)
+                    OnboardingV2NotificationPrompt()
                     Spacer(minLength: 0)
                     VStack(spacing: 0) {
-                        Text("\u{201C}Evlin\u{201D} Would Like to\nSend You Notifications")
-                            .onboardingV2TitleL()
-                            .multilineTextAlignment(.center)
-                            .padding(.top, 6)
                         OnboardingV2PrimaryButton("Allow", role: .child) {
                             Task { await requestThenAdvance() }
                         }
                         .disabled(requesting)
-                        .padding(.top, 20)
+                        .frame(maxWidth: 600)
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.top, 20)
-                    .padding(.bottom, 16)
-                    .background(
-                        RoundedRectangle(cornerRadius: 26, style: .continuous)
-                            .fill(OnboardingV2Theme.Palette.surfaceLowest)
-                            .shadow(color: Color.black.opacity(0.18), radius: 20, x: 0, y: -10)
-                    )
+                    .frame(maxWidth: .infinity)
                 }
             },
             footer: {            }
@@ -455,6 +503,7 @@ struct ChildLockableHubStep: View {
     // substitute — while still not permanently dead-ending here in an
     // environment that can't report back what was picked.
     @State private var pickerOpenedOnce = false
+    @Environment(\.horizontalSizeClass) private var hSizeClass
 
     private var totalSelected: Int {
         guard let selection else { return 0 }
@@ -463,84 +512,163 @@ struct ChildLockableHubStep: View {
             + selection.webDomainTokens.count
     }
 
-    private var canContinue: Bool { totalSelected > 0 || pickerOpenedOnce }
+    // One button, which moves on with the step: it opens the picker until
+    // something is picked, then reads Continue. What was picked shows in a
+    // card above it, with Change to open the picker again.
+    private var hasPicked: Bool {
+        #if targetEnvironment(simulator)
+        // The picker reports nothing back on the Simulator, so opening it
+        // has to count, or setup can't go on there.
+        return totalSelected > 0 || pickerOpenedOnce
+        #else
+        return totalSelected > 0
+        #endif
+    }
+
+    private func openPicker() {
+        if selection == nil { selection = FamilyActivitySelection() }
+        showPicker = true
+        pickerOpenedOnce = true
+    }
+
+    private var selectionSummary: String {
+        guard let selection else { return "" }
+        var parts: [String] = []
+        let apps = selection.applicationTokens.count
+        let categories = selection.categoryTokens.count
+        let sites = selection.webDomainTokens.count
+        if apps > 0 { parts.append(apps == 1 ? "1 app" : "\(apps) apps") }
+        if categories > 0 { parts.append(categories == 1 ? "1 category" : "\(categories) categories") }
+        if sites > 0 { parts.append(sites == 1 ? "1 website" : "\(sites) websites") }
+        return parts.joined(separator: ", ")
+    }
 
     var body: some View {
         OnboardingV2ScreenContainer(
             embeddedRole: .child,
             phase: "4 · Lockable",
-            stepIndex: 10,
+            stepIndex: 8,
             stepTotal: childTotal,
             title: "",
             subtitle: nil,
             onBack: onBack,
             content: {
-                VStack(spacing: 16) {
-                    Image(systemName: "lock.app.dashed")
-                        .font(.system(size: 38, weight: .medium))
-                        .foregroundStyle(kidGreen)
-                        .frame(width: 72, height: 72)
-                        .background(
-                            Circle().fill(OnboardingV2Theme.Palette.secondaryContainer)
-                        )
+                VStack(spacing: 20) {
+                    LockingAppsArt()
+                        .frame(width: hSizeClass == .regular ? 300 : 220, height: hSizeClass == .regular ? 300 : 220)
+                        .accessibilityHidden(true)
 
                     Text("Choose Apps to Lock")
                         .onboardingV2TitleL()
                         .multilineTextAlignment(.center)
-                    Text("Pick which apps your parent can lock and unlock from their phone.")
-                        .onboardingV2Body()
-                        .multilineTextAlignment(.center)
 
-                    // Selection summary
-                    OnboardingV2Card {
-                        if totalSelected == 0 {
-                            HStack(spacing: 10) {
-                                Image(systemName: "hand.tap.fill")
-                                    .font(.system(size: 20))
-                                    .foregroundStyle(OnboardingV2Theme.Palette.outline)
-                                Text("Tap the button below to pick apps")
-                                    .onboardingV2Body()
-                            }
-                        } else {
-                            HStack(spacing: 10) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 20))
-                                    .foregroundStyle(kidGreen)
-                                Text("\(totalSelected) item\(totalSelected == 1 ? "" : "s") selected")
-                                    .font(Evlin.Typography.font(14, weight: .semibold))
-                                    .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
-                                Spacer()
-                                Button("Change") { if selection == nil { selection = FamilyActivitySelection() }; showPicker = true; pickerOpenedOnce = true }
-                                    .font(OnboardingV2Theme.Typography.bodyXS)
-                                    .foregroundStyle(kidGreen)
-                            }
+                    // What was picked, on one line, with Change beside it.
+                    if hasPicked {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(kidGreen)
+                            Text(totalSelected > 0 ? selectionSummary : "Apps chosen")
+                                .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
+                            Button("Change", action: openPicker)
+                                .fontWeight(.bold)
+                                .foregroundStyle(kidGreen)
+                                .padding(.leading, 4)
                         }
-                    }
-
-                    if totalSelected == 0 {
-                        OnboardingV2PrimaryButton("Choose Apps & Categories", role: .child) {
-                            if selection == nil { selection = FamilyActivitySelection() }
-                            showPicker = true
-                            pickerOpenedOnce = true
-                        }
+                        .font(Evlin.Typography.font(16, weight: .semibold))
+                        .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity)
+                .animation(.easeOut(duration: 0.2), value: hasPicked)
             },
             footer: {
-                OnboardingV2PrimaryButton("Continue", role: .child, action: onContinue)
-                    .disabled(!canContinue)
+                if hasPicked {
+                    OnboardingV2PrimaryButton("Continue", role: .child, action: onContinue)
+                } else {
+                    OnboardingV2PrimaryButton("Choose Apps & Categories", role: .child, action: openPicker)
+                }
             }
         )
         .familyActivityPicker(
-            headerText: "Select apps your parent can manage",
-            footerText: "You can change these later.",
             isPresented: $showPicker,
             selection: Binding(
                 get: { selection ?? FamilyActivitySelection() },
                 set: { selection = $0 }
             )
         )
+    }
+}
+
+/// A grid of app tiles popping in one after another, then small padlocks
+/// dropping onto some of them as those apps dim: what this step does.
+/// Flat 2D shapes, played once; Reduce Motion shows it finished.
+private struct LockingAppsArt: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var tilesIn = false
+    @State private var locksIn = false
+
+    private static let apps: [(icon: String, color: String)] = [
+        ("gamecontroller.fill", "A86BFF"), ("play.rectangle.fill", "FF5A5F"), ("music.note", "FF8A3D"),
+        ("message.fill", "3FCE64"), ("camera.fill", "4D9CFF"), ("paintbrush.pointed.fill", "FF6B9A"),
+        ("book.fill", "14B8A6"), ("globe", "4D9CFF"), ("star.fill", "FFC93C"),
+    ]
+    /// Which tiles get a lock.
+    private static let locked: Set<Int> = [0, 1, 4, 5, 7]
+
+    var body: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
+            let gap = side * 0.06
+            let tile = (side - gap * 2) / 3
+            ZStack(alignment: .topLeading) {
+                ForEach(0..<Self.apps.count, id: \.self) { i in
+                    let row = i / 3, col = i % 3
+                    let isLocked = Self.locked.contains(i)
+                    let lockOrder = Array(Self.locked.sorted()).firstIndex(of: i) ?? 0
+                    RoundedRectangle(cornerRadius: tile * 0.26, style: .continuous)
+                        .fill(Color(hex: Self.apps[i].color))
+                        .overlay(
+                            Image(systemName: Self.apps[i].icon)
+                                .font(.system(size: tile * 0.4, weight: .bold))
+                                .foregroundStyle(.white)
+                        )
+                        .saturation(isLocked && locksIn ? 0.35 : 1)
+                        .opacity(isLocked && locksIn ? 0.7 : 1)
+                        .animation(.easeOut(duration: 0.3).delay(0.75 + Double(lockOrder) * 0.12), value: locksIn)
+                        .overlay(alignment: .bottomTrailing) {
+                            if isLocked {
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: tile * 0.22, weight: .heavy))
+                                    .foregroundStyle(.white)
+                                    .frame(width: tile * 0.42, height: tile * 0.42)
+                                    .background(Circle().fill(Color(hex: "25924A")))
+                                    .overlay(Circle().strokeBorder(.white, lineWidth: tile * 0.05))
+                                    .offset(x: tile * 0.12, y: tile * 0.12)
+                                    .scaleEffect(locksIn ? 1 : 0.1)
+                                    .offset(y: locksIn ? 0 : -tile * 0.5)
+                                    .opacity(locksIn ? 1 : 0)
+                                    .animation(.spring(duration: 0.35, bounce: 0.5).delay(0.75 + Double(lockOrder) * 0.12), value: locksIn)
+                            }
+                        }
+                        .frame(width: tile, height: tile)
+                        .scaleEffect(tilesIn ? 1 : 0.2)
+                        .opacity(tilesIn ? 1 : 0)
+                        .animation(.spring(duration: 0.4, bounce: 0.4).delay(Double(i) * 0.05), value: tilesIn)
+                        .offset(x: CGFloat(col) * (tile + gap), y: CGFloat(row) * (tile + gap))
+                }
+            }
+            .frame(width: side, height: side, alignment: .topLeading)
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .onAppear {
+            if reduceMotion {
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { tilesIn = true; locksIn = true }
+            } else {
+                tilesIn = true
+                locksIn = true
+            }
+        }
     }
 }
 
@@ -554,123 +682,555 @@ struct ChildFamilySharingAskStep: View {
     let onNo: () -> Void
     var onBack: (() -> Void)? = nil
 
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
+    @State private var tapCount = 0
+
     var body: some View {
         OnboardingV2ScreenContainer(
             embeddedRole: .child,
-            phase: "5 · Safety",
-            stepIndex: 10,
+            phase: "3 · Safety",
+            stepIndex: 4,
             stepTotal: childTotal,
-            title: "Do you use Family Sharing?",
-            subtitle: "If your child is part of your Apple Family Sharing group, Screen Time changes already need your approval — you can skip setting a PIN in this app.",
+            title: "",
+            subtitle: nil,
             onBack: onBack,
-            content: { EmptyView() },
-            footer: {
-                VStack(spacing: 10) {
-                    OnboardingV2PrimaryButton("Yes, we use Family Sharing", role: .child, action: onYes)
-                    OnboardingV2SecondaryButton("No, set up without it", action: onNo)
+            content: {
+                // The mark, bigger, right beside the question in two calm
+                // lines, the pair centred (2026-11-15, the user's call; the
+                // mark above a left-aligned question before). On a phone,
+                // with no room beside it, the mark sits above, centred.
+                Group {
+                    if isRegular {
+                        HStack(spacing: 32) {
+                            FamilyMark(size: 150, animated: false)
+                            question
+                                .font(Typography.font(36, weight: .semibold))
+                                .tracking(-0.4)
+                                .lineSpacing(6)
+                                .multilineTextAlignment(.leading)
+                        }
+                    } else {
+                        VStack(spacing: 22) {
+                            FamilyMark(size: 104, animated: false)
+                            question
+                                .font(Typography.font(24, weight: .semibold))
+                                .tracking(-0.2)
+                                .lineSpacing(4)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            },
+            // Yes and No side by side at the foot of the page, where
+            // Continue sits, round-ended pills: Yes solid green, No soft grey
+            // (2026-11-16, the user's calls; both the same bright green just
+            // before; stacked Yes over No just
+            // before; centred under the question with Yes an outlined
+            // button, 2026-11-15, before that).
+            footer: {
+                HStack(spacing: isRegular ? 16 : 12) {
+                    answer("Yes", primary: true, action: onYes)
+                    answer("No", primary: false, action: onNo)
+                }
+                .frame(maxWidth: OnboardingV2Theme.Metrics.ctaMaxWidth)
+                .frame(maxWidth: .infinity)
             }
         )
     }
+
+    /// The user's sentence (2026-11-14), in two lines: semibold, a soft
+    /// charcoal, open tracking (2026-11-15, the user's call: "too harsh";
+    /// bold, 56 / 32pt, tight, near-black before).
+    private var question: some View {
+        Text(isRegular ? "Do you use Family Sharing to control\nyour children’s screen time?"
+                       : "Do you use Family Sharing to control your children’s screen time?")
+            .foregroundStyle(Color(light: "34373D", dark: "E6E8EC", warm: "E6E8EC"))
+            .lineLimit(isRegular ? 2 : 4)
+            .minimumScaleFactor(0.7)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // The answers, side by side at the foot of the page, each the size,
+    // corners and type of Continue (2026-11-15, the user's calls; soft grey
+    // pills, side by side at the foot, full-width cards with an arrow, and
+    // rows between hairlines, before).
+    private var answerShape: Capsule { Capsule(style: .continuous) }
+
+    /// Yes, the primary: a fresh mid green, #34B85A, solid with white
+    /// words (setup's #3FCE64 was tried the same day and was harsher).
+    /// No, the secondary: a bright warm grey, #F5F5F1, a breath under the
+    /// page, with a firm #CFCFC8 edge so it reads clearly, and the
+    /// heading's dark #2C2C2E (the user's call: brighter; #EDEDE8 just
+    /// before, and #F0F0EC with a faint #DCDCD6 edge before that). Both semibold
+    /// (2026-11-16, the user's call: brighter and easier on the eyes; just
+    /// before, Yes the main app's deeper #2FA84F and No #EAEAE6 with no
+    /// edge, heavy words; Apple's cool #EFEFF4 with #34373D before that) (2026-11-16, the user's call: two identical
+    /// bright pills side by side strained the eyes and made a wrong tap
+    /// easy, and the electric green vibrated on the off-white). Both were
+    /// a punchy #22D163 just before (2026-11-15: "make the Yes and No
+    /// brighter"); before that No was the solid one and Yes the page's
+    /// colour with a green edge (a vivid mint, a paler mint, the setup
+    /// picks' sage, a light grey and the Child's pastel #A4E3AA before).
+    /// The app's one button green since 2026-11-16 (#34B85A before).
+    private static let yesFill = OnboardingV2Theme.Palette.button
+    private static let noFill = Color(light: "F5F5F1", dark: "2A2E35", warm: "2A2E35")
+    private static let noInk = Color(light: "2C2C2E", dark: "E6E8EC", warm: "E6E8EC")
+    private static let noEdge = Color(light: "CFCFC8", dark: "353A42", warm: "353A42")
+
+    private func answer(_ title: String, primary: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            tapCount += 1
+            action()
+        } label: {
+            // Just the word (2026-11-09: "We already use it" and "Set up
+            // without it" under them were removed).
+            // Semibold, not heavy: thick white letters on a strong fill
+            // tired the eyes (2026-11-16).
+            Text(title)
+                .font(Typography.font(isRegular ? 21 : 15, weight: .semibold))
+                .foregroundStyle(primary ? Color.white : Self.noInk)
+                .frame(maxWidth: .infinity)
+                .frame(height: isRegular ? OnboardingV2Theme.Metrics.ctaHeightRegular : OnboardingV2Theme.Metrics.ctaHeightCompact)
+                .background(primary ? Self.yesFill : Self.noFill, in: answerShape)
+                .overlay(answerShape.strokeBorder(primary ? .clear : Self.noEdge, lineWidth: 1))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(FamilySharingAnswerStyle())
+        .sensoryFeedback(.selection, trigger: tapCount)
+    }
 }
 
-// MARK: - 12c · Lock choice (no Family Sharing yet)
+/// A Yes / No button: dims a touch while pressed.
+private struct FamilySharingAnswerStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.8 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
 
-// Families without Family Sharing pick how Evlin gets locked in. The PIN is
-// the fast path, but it's only as safe as the four digits — a kid who sees
-// or guesses it can switch Evlin off or delete it. Family Sharing puts the
-// approval on the parent's own phone, so it's offered first.
+// MARK: - 12c · No Family Sharing yet
+
+// Shown to families who said they don't use Family Sharing. Read like a
+// short article with a plain title, a lead paragraph, then four short
+// headings. Setting it up is the main button; the Screen Time PIN stays as
+// the quick way through.
 struct ChildLockChoiceStep: View {
     let kidName: String
     let onFamilySharing: () -> Void
     let onPIN: () -> Void
     var onBack: (() -> Void)? = nil
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    @State private var showQuickWarning = false
+
+    private var isRegular: Bool { hSizeClass == .regular }
 
     private var kid: String {
         let trimmed = kidName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "your kid" : trimmed
+        return trimmed.isEmpty ? "your child" : trimmed
+    }
+
+    private struct Section: Identifiable {
+        let id: Int
+        let icon: String
+        /// The tile, as Apple draws that feature's icon in Settings.
+        let tile: [Color]
+        let heading: String
+        let detail: String?
+    }
+
+    private var sections: [Section] {
+        [
+            Section(id: 0, icon: "app.badge.checkmark.fill",
+                    tile: [Color(hex: "1EC2FB"), Color(hex: "1572F6")],
+                    heading: "You approve every download",
+                    detail: nil),
+            Section(id: 1, icon: "trash.slash.fill",
+                    tile: [Color(hex: "FF6A60"), Color(hex: "FF3B30")],
+                    heading: "Apps stay where you put them",
+                    detail: nil),
+            Section(id: 2, icon: "hourglass",
+                    tile: [Color(hex: "7D7AF0"), Color(hex: "5452D8")],
+                    heading: "Screen Time can't be switched off",
+                    detail: nil),
+            // "Worth having with or without Evlin" was a fourth, removed
+            // 2026-11-12 (the user's call).
+        ]
     }
 
     var body: some View {
         OnboardingV2ScreenContainer(
             embeddedRole: .child,
-            phase: "5 · Safety",
-            stepIndex: 10,
+            phase: "3 · Safety",
+            stepIndex: 5,
             stepTotal: childTotal,
-            title: "How should we lock Evlin in?",
-            subtitle: "Something has to stop \(kid) from turning Evlin off. Pick one.",
+            title: "",
+            subtitle: nil,
             onBack: onBack,
             content: {
-                VStack(alignment: .leading, spacing: Spacing.lg) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        OnboardingV2Badge("More reliable", style: .success)
-                        OnboardingV2ChoiceCard(
-                            emoji: "👨‍👩‍👧",
-                            title: "Set up Family Sharing",
-                            subtitle: "Changes need your approval from your own iPhone. Takes about 10 minutes.",
-                            selected: false,
-                            role: .child,
-                            action: onFamilySharing
-                        )
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        OnboardingV2Badge("Quick, but risky", style: .warn)
-                        OnboardingV2ChoiceCard(
-                            emoji: "🔢",
-                            title: "Screen Time PIN",
-                            subtitle: "Done in a minute. But if \(kid) sees or guesses the PIN, they can turn Evlin off or delete it.",
-                            selected: false,
-                            role: .child,
-                            action: onPIN
-                        )
+                article
+                    .frame(maxWidth: 600, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+            },
+            footer: {
+                VStack(spacing: 10) {
+                    OnboardingV2PrimaryButton("Set up Family Sharing", role: .child, action: onFamilySharing)
+                    // "Quick setup" with a warning sign, and a warning before
+                    // it goes on (2026-11-10, the user's call; "Maybe later"
+                    // went straight to the PIN before).
+                    OnboardingV2SecondaryButton("Quick setup",
+                                                systemImage: "exclamationmark.triangle.fill",
+                                                imageTint: QuickSetupWarning.amber) {
+                        showQuickWarning = true
                     }
                 }
-            },
-            footer: { EmptyView() }
+            }
         )
+        .sheet(isPresented: $showQuickWarning) {
+            QuickSetupWarning(
+                onFamilySharing: { showQuickWarning = false; onFamilySharing() },
+                onContinue: { showQuickWarning = false; onPIN() }
+            )
+            .presentationDetents([.height(isRegular ? 440 : 400)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(OnboardingV2Theme.Palette.paper)
+            .fittedOnIPad()
+        }
+    }
+
+    private var article: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FamilyMark(size: isRegular ? 78 : 66, animated: false)
+                .padding(.bottom, isRegular ? 24 : 20)
+            Text("Set up Family Sharing")
+                // A little bigger (2026-11-12, the user's ask; 35 / 29 before).
+                .font(Typography.font(isRegular ? 39 : 31, weight: .bold))
+                .tracking(-0.4)
+                .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
+                .padding(.bottom, 10)
+            Text("Family Sharing is provided by Apple and is free to use. Its protections can help your family even if you stop using Evlin.")
+                // A little bigger (2026-11-12; 22 / 20 before).
+                .font(Typography.font(isRegular ? 25 : 21, weight: .regular))
+                .lineSpacing(4)
+                .foregroundStyle(OnboardingV2Theme.Palette.onSurface.opacity(0.82))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, isRegular ? 30 : 24)
+            VStack(alignment: .leading, spacing: isRegular ? 26 : 22) {
+                ForEach(sections) { section($0) }
+            }
+        }
+    }
+
+    private func section(_ s: Section) -> some View {
+        let tile = isRegular ? 38.0 : 34.0
+        return HStack(alignment: .top, spacing: 14) {
+            Image(systemName: s.icon)
+                .font(.system(size: isRegular ? 18 : 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: tile, height: tile)
+                .background(LinearGradient(colors: s.tile, startPoint: .top, endPoint: .bottom),
+                            in: RoundedRectangle(cornerRadius: tile * 0.225, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(s.heading)
+                    .font(Typography.font(isRegular ? 19 : 17.5, weight: .semibold))
+                    .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
+                if let detail = s.detail {
+                    Text(detail)
+                        .font(Typography.font(isRegular ? 16 : 15, weight: .regular))
+                        .lineSpacing(3)
+                        .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, isRegular ? 6 : 5)
+        }
+    }
+}
+
+/// Quick setup's warning, a half card: without Family Sharing kids can get
+/// around the safety features. Set up Family Sharing goes to its steps;
+/// Continue anyway goes on to the Screen Time PIN.
+struct QuickSetupWarning: View {
+    let onFamilySharing: () -> Void
+    let onContinue: () -> Void
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
+
+    static let amber = Color(light: "E08A1E", warm: "F2AE6C")
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Self.amber)
+                .frame(width: 48, height: 48)
+                .background(Self.amber.opacity(0.16), in: Circle())
+            Text("Reduce the risk of bypasses")
+                .font(Typography.font(isRegular ? 24 : 21, weight: .bold))
+                .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
+            Text("Without Family Sharing, children may be able to bypass some protections on their device. Family Sharing adds safeguards that can reduce that risk. It's Apple's free service, and you can keep using it with Screen Time or another parental-control app even if Evlin isn't the right fit for your family.")
+                .font(Typography.font(isRegular ? 20 : 19, weight: .regular))
+                .lineSpacing(5)
+                .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 6) {
+                OnboardingV2PrimaryButton("Set up Family Sharing", role: .child, action: onFamilySharing)
+                Button(action: onContinue) {
+                    Text("Continue anyway")
+                        .font(Typography.font(isRegular ? 17 : 15.5, weight: .semibold))
+                        .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 6)
+        }
+        .padding(.horizontal, isRegular ? 36 : 24)
+        .padding(.top, 28)
+        .padding(.bottom, isRegular ? 24 : 12)
+        .frame(maxWidth: 600, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
+private extension View {
+    /// On the iPad a sheet is a centred form; fit it to the card's height
+    /// (iOS 18) rather than leave a tall empty panel.
+    @ViewBuilder func fittedOnIPad() -> some View {
+        if #available(iOS 18.0, *) {
+            presentationSizing(.form.fitted(horizontal: false, vertical: true))
+        } else {
+            self
+        }
     }
 }
 
 // MARK: - 12d · Family Sharing setup
 
 // Only instructions: there's no API to check Family Sharing membership, so
-// "I've set it up" is taken on trust, same as the PIN step. The PIN stays
-// reachable from here for a parent who gets halfway and gives up.
+// "I've set it up" is taken on trust, same as the PIN step. No PIN option
+// here (removed 2026-11-11, the user's call): the PIN is Quick setup's, on
+// the page before.
 struct ChildFamilySharingSetupStep: View {
     let kidName: String
     let onDone: () -> Void
-    let onUsePIN: () -> Void
     var onBack: (() -> Void)? = nil
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
+    /// First what to do on the parent's iPhone, then back here on the iPad
+    /// (2026-11-09, the user's sequence).
+    @State private var onIPad = false
+    /// When Back last returned to the account steps.
+    @State private var backAt: Date?
+    /// Back in Evlin after Open Settings on the sign-in page.
+    @State private var signInCameBack = false
+    /// Open Settings was tapped: only a return after it counts (2026-11-12:
+    /// any return, Control Center included, showed "signed in" too soon).
+    @State private var wentToSettings = false
+    @Environment(\.scenePhase) private var scenePhase
 
     private var kid: String {
         let trimmed = kidName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "your kid" : trimmed
+        return trimmed.isEmpty ? "your child" : trimmed
     }
 
     var body: some View {
         OnboardingV2ScreenContainer(
             embeddedRole: .child,
-            phase: "5 · Safety",
-            stepIndex: 10,
+            phase: "3 · Safety",
+            stepIndex: 5,
             stepTotal: childTotal,
-            title: "Set up Family Sharing",
-            subtitle: "Do this on your own iPhone, then come back here.",
-            onBack: onBack,
-            content: {
-                VStack(alignment: .leading, spacing: Spacing.lg) {
-                    OnboardingV2NumberedStep(number: 1, text: "On your iPhone, open Settings → your name → Family")
-                    OnboardingV2NumberedStep(number: 2, text: "Tap Add Member and add \(kid) (create a child account if they don't have one)")
-                    OnboardingV2NumberedStep(number: 3, text: "Make sure this device is signed in with \(kid)'s Apple Account")
-                    OnboardingV2NumberedStep(number: 4, text: "In Family, tap \(kid) → Screen Time and turn it on")
+            title: "",
+            subtitle: nil,
+            onBack: {
+                if onIPad {
+                    withAnimation(.smooth(duration: 0.3)) { onIPad = false }
+                } else {
+                    FamilySharingHandOff.kidLeaves()
+                    onBack?()
                 }
+            },
+            // The steps are a list (2026-11-12): its bar stays in view.
+            scrollBar: true,
+            content: {
+                Group {
+                    if onIPad { lookAtIPhone } else { createAccount }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, isRegular ? 24 : 16)
             },
             footer: {
                 VStack(spacing: 10) {
-                    OnboardingV2PrimaryButton("I've set it up", role: .child, action: onDone)
-                    OnboardingV2SecondaryButton("Use a PIN instead", action: onUsePIN)
+                    if onIPad {
+                        signInButtons
+                    } else {
+                        // The steps scroll above it (2026-11-12, the user's
+                        // call); "Done, next step" and Back turning a
+                        // carousel one step at a time came before.
+                        OnboardingV2PrimaryButton("I've created the account", role: .child) {
+                            withAnimation(.smooth(duration: 0.3)) { onIPad = true }
+                        }
+                    }
                 }
             }
         )
+        // The parent's phone follows: on the account steps it offers Open
+        // Settings and "I've created the account"; at step 2 it shows the
+        // sign-in steps.
+        .onAppear { if !onIPad { FamilySharingHandOff.kidCreatingAccount() } }
+        // Back from Settings on the sign-in page: the account's signed in.
+        .onChange(of: scenePhase) { old, now in
+            // Leaving Evlin any way counts, not only through Open Settings
+            // (2026-11-13, the user's catch: going home and into Settings by
+            // hand left only Open Settings here). Control Center never
+            // reaches the background, so it still doesn't count.
+            // Having left Evlin (Open Settings, or home to Settings by hand),
+            // coming back turns the one button into "Mia's account is signed
+            // in"; it still waits for the tap (2026-11-13, the user's call).
+            // Control Center never reaches the background, so it doesn't count.
+            if now == .background, onIPad { wentToSettings = true }
+            if now == .active, old != .active, onIPad, wentToSettings {
+                withAnimation(.smooth(duration: 0.3)) { signInCameBack = true }
+            }
+        }
+        .onChange(of: onIPad) { _, now in
+            signInCameBack = false
+            wentToSettings = false
+            if now { FamilySharingHandOff.kidAccountCreated() } else {
+                backAt = Date()
+                FamilySharingHandOff.kidCreatingAccount()
+            }
+        }
+        // "I've created the account" tapped on the parent's phone moves this
+        // on too (2026-11-11, the user's call: either device's tap).
+        .task(id: onIPad) {
+            guard !onIPad else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: DemoPairBridge.isOn ? 700_000_000 : 2_000_000_000)
+                guard !Task.isCancelled, !onIPad else { return }
+                // Just back from step 2, the server may still have the old
+                // stage for a moment.
+                if let backAt, Date().timeIntervalSince(backAt) < 8 { continue }
+                if await FamilySharingHandOff.kidReadsStage() == .accountCreated {
+                    withAnimation(.smooth(duration: 0.3)) { onIPad = true }
+                    return
+                }
+            }
+        }
+    }
+
+    /// Step 1, on the iPad: how the parent makes the child's Apple Account
+    /// on their iPhone, played here (2026-11-10, the user's words: follow
+    /// these steps, Settings, Family, create a child account).
+    // One calm line of instructions over it (2026-11-10, the user's ask:
+    // follow the steps, swipe through them).
+    private var createAccount: some View {
+        VStack(spacing: 14) {
+            // Their own phone, not this iPad, and out of Evlin (2026-11-10, the
+            // user's call: "Follow these steps on your iPhone" wasn't clear).
+            // Grab the phone and leave Evlin there (2026-11-11, the user's
+            // wording; "Do these steps on your own iPhone." before).
+            // "your iPhone" stands out: it's the parent's phone, not this
+            // device (2026-11-12, the user's ask).
+            // Words only: which phone, and why (2026-11-13, the user's
+            // wording; a pill and then an iPad → iPhone drawing over it
+            // were tried the same day and removed).
+            // "your iPhone" bold and green, the steps' own green (2026-11-13,
+            // the user's call: highlight it).
+            hint("Grab **your iPhone**—not your child’s device—and follow the instructions shown below.", accent: true)
+            FamilySharingStepList(kidName: kid)
+                .padding(.top, isRegular ? 12 : 6)
+        }
+        .padding(.top, isRegular ? 4 : 8)
+    }
+
+    /// Step 2, once the account's made: this page holds still, no
+    /// animation, and the parent's iPhone, waiting in Evlin, shows how to
+    /// sign this iPad in with the new account (2026-11-11, the user's call;
+    /// the iPad played its own sign-in steps before).
+    // Sign in here, in Settings, following the iPhone's steps; plain
+    // orders, no "Not sure how?" (2026-11-11, the user's wording; "Grab your iPhone" /
+    // "Open Evlin on it to see how to sign this iPad in" before).
+    private var lookAtIPhone: some View {
+        // The same two steps as the parent's iPhone, under one line: the
+        // child's account, not the parent's own (2026-11-12, the user's
+        // call; a gear, "Sign this iPad in" and a line before).
+        VStack(spacing: 14) {
+            // Sign out of any other account first; "not your own" confused
+            // parents (2026-11-12, the user's call).
+            // Signing out is step 1's (2026-11-12); coming back is said first,
+            // so it's known before leaving for Settings (2026-11-13).
+            hint("Sign this iPad in as **\(kid)**, then come back to Evlin.")
+            FamilySharingStepList(kidName: kid, part: .iPad, onThatDevice: true)
+                .padding(.top, isRegular ? 12 : 6)
+        }
+        .padding(.top, isRegular ? 4 : 8)
+    }
+
+    private var signedInWords: String {
+        // No name known: not "Your child's account …" (2026-11-12).
+        kid == "your child" ? "The child account is signed in"
+            : "\(kid.prefix(1).uppercased() + kid.dropFirst())'s account is signed in"
+    }
+
+    private func signedIn() {
+        // The parent's phone hears it and says so (2026-11-12).
+        FamilySharingHandOff.kidSignedIn()
+        onDone()
+    }
+
+    /// Step 2's one button (2026-11-13, the user's call): Open Settings,
+    /// which becomes "Mia's account is signed in" once the parent has left
+    /// Evlin and come back. Tried the same day: both side by side; coming
+    /// back moving on by itself. Apps can only open their own page in
+    /// Settings (its other pages are private URLs, which App Review
+    /// rejects): from there the parent taps "Settings" at the top left,
+    /// then Sign in.
+    private var signInButtons: some View {
+        ZStack {
+            if signInCameBack {
+                OnboardingV2PrimaryButton(signedInWords, role: .child, action: signedIn)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                OnboardingV2PrimaryButton("Open Settings", systemImage: "gearshape", role: .child, action: openSettings)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.smooth(duration: 0.3), value: signInCameBack)
+    }
+
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        wentToSettings = true
+        UIApplication.shared.open(url)
+    }
+
+    /// A line of plain orders; its **bold** words in the page's own ink.
+    private func hint(_ text: String, accent: Bool = false) -> some View {
+        Text(hintStyled(text, accent: accent))
+            // Bigger (2026-11-10, the user's call; 18 / 15.5 before).
+            .font(Typography.font(isRegular ? 24 : 18, weight: .medium))
+            .lineSpacing(4)
+            .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+            .multilineTextAlignment(.center)
+            // Wide enough on the iPad for each sentence on its own line.
+            .frame(maxWidth: isRegular ? 720 : 520)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 20)
+    }
+
+    private func hintStyled(_ text: String, accent: Bool = false) -> AttributedString {
+        var a = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+        for run in a.runs where run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true {
+            a[run.range].font = Typography.font(isRegular ? 24 : 18, weight: .bold)
+            a[run.range].foregroundColor = accent ? OnboardingV2Theme.Palette.secondary : OnboardingV2Theme.Palette.onSurface
+        }
+        return a
     }
 }
 
@@ -693,21 +1253,13 @@ struct ChildOnboardingReadyStep: View {
             // huge empty gap before the button.
             if !isRegular { Spacer() }
 
-            Circle()
-                .fill(OnboardingV2Theme.Palette.secondaryContainer)
-                .frame(width: isRegular ? 84 : 64, height: isRegular ? 84 : 64)
-                .overlay(
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: isRegular ? 36 : 28, weight: .bold))
-                        .foregroundStyle(kidGreen)
-                )
+            // The growing leaf, as on the parent's Habits lane: earth rises, the
+            // plant shoots up and opens in its ring (2026-11-09).
+            GoalsEmptyStart(action: onEnter, wordsShown: false,
+                            plantSize: isRegular ? 210 : 170, gap: KidTheme.background)
 
             VStack(spacing: Spacing.lg) {
                 Text("All set!").onboardingV2TitleXL()
-                Text("Waiting for commands from your parent's Evlin.")
-                    .onboardingV2Body()
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, Spacing.xl)
             }
 
             if !isRegular { Spacer() }
@@ -719,6 +1271,49 @@ struct ChildOnboardingReadyStep: View {
         .padding(Spacing.xl)
         .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(OnboardingV2Theme.Palette.surface)
+        // E-paper, warm by night, as the rest of the kid's setup (it was the
+        // parent's page colour: black by night).
+        .background(EPaperBackground())
+    }
+}
+
+
+/// Our own family mark for the Family Sharing question (2026-11-08): a soft
+/// round badge with two adults holding a child's hands (an SF Symbol; Apple's
+/// own Family Sharing artwork isn't ours to copy). It grows in, then the
+/// family gives a small bounce.
+struct FamilyMark: View {
+    var size: CGFloat
+    /// Grows in and bounces; off on both Family Sharing pages, where it
+    /// just sits there (2026-11-09).
+    var animated = true
+    @State private var shown = false
+    @State private var bounce = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        // Family Sharing as iOS shows it in Settings: Apple's family symbol
+        // in blue on a white tile (2026-11-09, the user's call; a green round
+        // badge before). Built from the SF Symbol: Apple's icon file itself
+        // isn't copied into the app.
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
+                .fill(LinearGradient(colors: [Color(hex: "FFFFFF"), Color(hex: "F2F2F7")],
+                                     startPoint: .top, endPoint: .bottom))
+            Image(systemName: "figure.2.and.child.holdinghands")
+                .font(.system(size: size * 0.48, weight: .semibold))
+                .foregroundStyle(Color(hex: "0A84FF"))
+                .symbolEffect(.bounce, value: bounce)
+        }
+        .frame(width: size, height: size)
+        .shadow(color: .black.opacity(0.2), radius: size * 0.14, y: size * 0.06)
+        .scaleEffect(shown ? 1 : 0.6)
+        .opacity(shown ? 1 : 0)
+        .accessibilityHidden(true)
+        .onAppear {
+            if reduceMotion || !animated { shown = true; return }
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.65)) { shown = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { bounce += 1 }
+        }
     }
 }

@@ -21,17 +21,18 @@ enum OnboardingV2Step: Equatable, CaseIterable {
     case parentWaitingForKid
     case parentDone
 
-    // Kid chain
+    // Kid chain, in order: the kid's profile and pairing, then how Evlin is
+    // locked in (Family Sharing, or a PIN), then the permissions and apps.
     case childProfile
     case childShowCode
     case childConnected
-    case childScreenTime
-    case childNotifications
-    case childLockableHub
     case childFamilySharingAsk
     case childLockChoice
     case childFamilySharingSetup
     case childSafetyLock
+    case childScreenTime
+    case childNotifications
+    case childLockableHub
     case childReady
 }
 
@@ -62,11 +63,18 @@ struct OnboardingV2Coordinator: View {
         // does lose. The token is checked in `confirmStillPaired`.
         let paired = role == .child && SessionManager.shared.childDeviceToken != nil
         _resumedPairing = State(initialValue: paired)
-        _step = State(initialValue: role == .parent ? .parentSignIn : (paired ? .childScreenTime : .childProfile))
+        let parentStart = DemoMode.parentOnboardingStep
+            ?? (DemoMode.previewsOnboarding ? .parentProfile : .parentSignIn)
+        _step = State(initialValue: role == .parent ? parentStart : (paired ? .childScreenTime : Self.kidFirstStep))
+        if role == .child, let start = DemoMode.kidOnboardingStep { _step = State(initialValue: start) }
     }
 
     /// The kid chain started past pairing, with the device token it had.
     @State private var resumedPairing: Bool
+    /// Where Screen Time's Back goes: the page the child's device came
+    /// from (2026-11-13, the user's catch: after the Family Sharing account
+    /// steps it went to "Do you use Family Sharing?").
+    @State private var screenTimeBack: OnboardingV2Step = .childFamilySharingAsk
 
     /// Asks the server whether the saved device token still works. Unpaired
     /// (401): forget it and pair again. Offline: carry on, the next sync asks.
@@ -80,8 +88,14 @@ struct OnboardingV2Coordinator: View {
             SessionManager.shared.childDeviceToken = nil
             SessionManager.shared.activeChildId = nil
             resumedPairing = false
-            go(.childProfile)
+            go(Self.kidFirstStep)
         } catch {}
+    }
+
+    /// The kid's first setup step: the code, or the name first until the
+    /// server takes the name after pairing (ServerSupport.nameAfterPairing).
+    private static var kidFirstStep: OnboardingV2Step {
+        ServerSupport.nameAfterPairing ? .childShowCode : .childProfile
     }
 
     // MARK: Threaded state (parent chain)
@@ -150,7 +164,7 @@ struct OnboardingV2Coordinator: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Opaque edge to edge, so the screen underneath doesn't show
                 // through the safe areas while the two overlap mid-push.
-                .background(OnboardingV2Theme.Palette.surface.ignoresSafeArea())
+                .background(EPaperBackground())
                 // Later steps sit above earlier ones, so going forward the
                 // new screen covers the old, and going back the old one
                 // slides off the top of the new.
@@ -179,11 +193,15 @@ struct OnboardingV2Coordinator: View {
         // MARK: - Parent chain
 
         case .parentSignIn:
-            ParentSignInStep(parentName: $parentName, onSignedIn: { hasKids in 
+            // Already paired: through the waiting step (instant once the
+            // kid's device has finished its setup), so closing the app can't
+            // skip it. Otherwise on with setup, asking for the parent's name
+            // only if the sign-in didn't bring one.
+            ParentSignInStep(parentName: $parentName, onSignedIn: { hasKids, hasName in
                 if hasKids {
-                    go(.parentDone)
+                    go(.parentWaitingForKid)
                 } else {
-                    go(.parentProfile)
+                    go(hasName ? .parentBetaAgreement : .parentProfile)
                 }
             }, onBack: onExitToModePicker)
 
@@ -194,29 +212,36 @@ struct OnboardingV2Coordinator: View {
                 onBack: { go(.parentSignIn) }
             )
 
+        // The parent's order (2026-11-10, the user's call): sign up, the
+        // agreement, notifications, then pairing, so pairing is the last
+        // thing before the parent goes over to the child's device.
         case .parentBetaAgreement:
             ParentBetaAgreementStep(
-                onContinue: { go(.parentPairScan) },
+                onContinue: { go(.parentNotificationsAsk) },
                 onBack: { go(.parentProfile) }
+            )
+
+        case .parentNotificationsAsk:
+            ParentNotificationsAskStep(
+                onContinue: {
+                    // The Demo walkthrough skips the scan, unless two
+                    // simulators are linked to pair for real (`DemoPairBridge`).
+                    if DemoMode.previewsOnboarding && !DemoPairBridge.isOn { kidName = "Mia"; go(.parentWaitingForKid) } else { go(.parentPairScan) }
+                },
+                onBack: { go(.parentBetaAgreement) }
             )
 
         case .parentPairScan:
             ParentScanCodeStep(
-                onPaired: { name in kidName = name; go(.parentConnected) },
-                onBack: { go(.parentBetaAgreement) }
+                onPaired: { name in kidName = name; go(.parentWaitingForKid) },
+                onBack: { go(.parentNotificationsAsk) }
             )
 
         case .parentConnected:
             ParentConnectedStep(
                 kidName: kidName,
-                onContinue: { go(.parentNotificationsAsk) },
-                onBack: { go(.parentPairScan) }
-            )
-
-        case .parentNotificationsAsk:
-            ParentNotificationsAskStep(
                 onContinue: { go(.parentWaitingForKid) },
-                onBack: { go(.parentConnected) }
+                onBack: { go(.parentPairScan) }
             )
 
         case .parentWaitingForKid:
@@ -225,8 +250,7 @@ struct OnboardingV2Coordinator: View {
             // straight to done once the kid's device is ready.
             ParentWaitingForKidStep(
                 kidName: kidName,
-                onReady: { go(.parentDone) },
-                onBack: { go(.parentNotificationsAsk) }
+                onReady: { go(.parentDone) }
             )
 
         case .parentDone:
@@ -234,33 +258,55 @@ struct OnboardingV2Coordinator: View {
 
         // MARK: - Kid chain
 
+        // The kid's setup pairs first (the QR), then asks who's using the
+        // iPad (2026-11-09, the user's call): the name goes to the server
+        // from here, the code having been asked for without one.
+        case .childShowCode:
+            // Until the server takes the name from the kid's device after
+            // pairing (ServerSupport.nameAfterPairing), the name is asked
+            // first and goes with the pairing request instead.
+            ChildShowCodeStep(
+                childName: ServerSupport.nameAfterPairing ? ""
+                    : childName.trimmingCharacters(in: .whitespacesAndNewlines),
+                onConnected: { go(.childConnected) },
+                onBack: ServerSupport.nameAfterPairing ? onExitToModePicker : { go(.childProfile) }
+            )
+
+        // Paired is a one-way door (2026-11-12, the user's call): no Back on
+        // Connected or the name step after it. Back went to the QR, which
+        // started a new pairing the parent's phone, already moved on, never
+        // claimed, so both got stuck.
+        case .childConnected:
+            ChildConnectedStep(
+                onContinue: { go(ServerSupport.nameAfterPairing ? .childProfile : .childFamilySharingAsk) }
+            )
+
         case .childProfile:
             ChildProfileStep(
                 name: $childName,
                 ageRange: $childAgeRange,
                 gender: $childGender,
-                onContinue: { go(.childShowCode) },
-                onBack: onExitToModePicker
-            )
-
-        case .childShowCode:
-            ChildShowCodeStep(
-                childName: childName,
-                onConnected: { go(.childConnected) },
-                onBack: { go(.childProfile) }
-            )
-
-        case .childConnected:
-            ChildConnectedStep(
-                onContinue: { go(.childScreenTime) },
-                onBack: { go(.childShowCode) }
+                onContinue: {
+                    let name = childName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard ServerSupport.nameAfterPairing else {
+                        // Asked before pairing: the code step sends it.
+                        go(.childShowCode)
+                        return
+                    }
+                    if !DemoMode.isBuild, !name.isEmpty {
+                        Outbox.send(APIClient.Write.nameMyChild(name), label: "\(name)'s name")
+                    }
+                    DemoPairBridge.update { $0.kidName = name }
+                    go(.childFamilySharingAsk)
+                },
+                onBack: ServerSupport.nameAfterPairing ? nil : onExitToModePicker
             )
 
         case .childScreenTime:
             ChildScreenTimeStep(
                 onContinue: { go(.childNotifications) },
                 // Resumed: there's no pairing to go back to.
-                onBack: resumedPairing ? onExitToModePicker : { go(.childConnected) }
+                onBack: resumedPairing ? onExitToModePicker : { go(screenTimeBack) }
             )
 
         case .childNotifications:
@@ -271,19 +317,24 @@ struct OnboardingV2Coordinator: View {
 
         case .childLockableHub:
             ChildLockableHubStep(
-                onContinue: { go(.childFamilySharingAsk) },
+                onContinue: {
+                    DemoPairBridge.update { $0.kidDone = true }
+                    go(.childReady)
+                },
                 onBack: { go(.childNotifications) }
             )
 
         case .childFamilySharingAsk:
-            // A Family Sharing child account already can't change its own
-            // Screen Time settings without the organizer's approval — the
-            // in-app PIN step exists only to cover families that aren't
-            // set up that way, so this branch skips it entirely.
+            // Right after pairing. A Family Sharing child account already
+            // can't change its own Screen Time settings without the
+            // organizer's approval, so that branch goes straight on; the
+            // others are offered Family Sharing, or a Screen Time PIN.
             ChildFamilySharingAskStep(
-                onYes: { go(.childReady) },
+                onYes: { screenTimeBack = .childFamilySharingAsk; go(.childScreenTime) },
                 onNo: { go(.childLockChoice) },
-                onBack: { go(.childLockableHub) }
+                // Paired is a one-way door: with the name asked before
+                // pairing, the step before this one is Connected.
+                onBack: ServerSupport.nameAfterPairing ? { go(.childProfile) } : nil
             )
 
         case .childLockChoice:
@@ -297,8 +348,7 @@ struct OnboardingV2Coordinator: View {
         case .childFamilySharingSetup:
             ChildFamilySharingSetupStep(
                 kidName: childName,
-                onDone: { go(.childReady) },
-                onUsePIN: { go(.childSafetyLock) },
+                onDone: { screenTimeBack = .childFamilySharingSetup; go(.childScreenTime) },
                 onBack: { go(.childLockChoice) }
             )
 
@@ -307,11 +357,11 @@ struct OnboardingV2Coordinator: View {
             // the Screen Time passcode is set ON the kid's own phone.
             ParentSetPasscodeV2Step(
                 kidName: childName,
-                onContinue: { go(.childReady) },
+                onContinue: { screenTimeBack = .childSafetyLock; go(.childScreenTime) },
                 onBack: { go(.childLockChoice) },
                 role: .child,
-                phase: "5 · Safety",
-                stepIndex: 10,
+                phase: "3 · Safety",
+                stepIndex: 5,
                 dotsCurrent: 7,
                 total: 9
             )

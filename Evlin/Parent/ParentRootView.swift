@@ -3,27 +3,52 @@ import SwiftUI
 struct ParentRootView: View {
     var onSwitchMode: () -> Void
     var onSignOut: (() -> Void)? = nil
-    @State private var tab = 0
+
+    @State private var tab = DemoMode.parentTab ?? 0
+    @ObservedObject private var goals = GoalStore.shared
+    @ObservedObject private var spotlight = FirstLockSpotlight.shared
+    @ObservedObject private var habitTour = HabitTour.shared
 
     var body: some View {
         TabView(selection: $tab) {
             ScreenHome()
+                .withConnectionPill()
+                // The tab bar floats over any overlay: hidden while the
+                // first lock's spotlight dims the app.
+                .toolbar(spotlight.lock == nil && !habitTour.showing ? .automatic : .hidden, for: .tabBar)
                 .tabItem { Image(systemName: "house.fill").accessibilityLabel("Home") }
                 .tag(0)
-            ScreenCalendar(isActive: tab == 1)
-                .tabItem { Image(systemName: "calendar").accessibilityLabel("Calendar") }
-                .tag(1)
             ScreenChat()
+                .withConnectionPill()
                 .tabItem { Image(systemName: "bubble.left.fill").accessibilityLabel("Chat") }
                 .tag(2)
-            ScreenLibrary()
-                .tabItem { Image(systemName: "books.vertical.fill").accessibilityLabel("Library") }
-                .tag(4)
-            ScreenSettings(onSwitchMode: onSwitchMode, onSignOut: onSignOut)
-                .tabItem { Image(systemName: "gearshape.fill").accessibilityLabel("Settings") }
+            // The child's profile: screen time, blocked apps, downtime and
+            // adding tasks as big buttons. Settings is behind its gear.
+            ScreenChildProfile(onSwitchMode: onSwitchMode, onSignOut: onSignOut)
+                .withConnectionPill()
+                // A clock: the tab is the child's screen time (2026-11-12, the
+                // user's call; an hourglass, and a person in a circle, before).
+                .tabItem { Image(systemName: "clock.fill").accessibilityLabel("Screen time") }
                 .tag(3)
         }
         .tint(EColor.primary)
+        // The bar in the page's cream, not the system's near-white.
+        .toolbarBackground(EColor.surface, for: .tabBar)
+        // The first lock's spotlight, over the tabs too.
+        .overlay { FirstLockSpotlightView() }
+        // The first habit's tour, over the tabs too.
+        .overlay { HabitTourView() }
+        #if EVLIN_DEMO
+        .overlay { if DemoMode.parentOpen == "artgallery" { HabitArtGallery() } }
+        #endif
+        .background(UnlockTrustWatcher())
+        .background(MilestoneCelebrationWatcher())
+        // A goal reached: the parent's choice of what's next opens New habit.
+        .sheet(item: $goals.nextHabit) { next in
+            if let child = FamilyStore.children.first(where: { $0.id == next.childId }) {
+                NewGoalSheet(child: child, again: next.again)
+            }
+        }
         // Any background save that failed (approve, lock, rule edit, …).
         .alert("Couldn't save", isPresented: Binding(
             get: { SyncState.shared.writeError != nil },
@@ -33,37 +58,7 @@ struct ParentRootView: View {
         } message: {
             Text(SyncState.shared.writeError ?? "")
         }
-        // A read/sync failure — used to only ever reach a console `print`,
-        // so a parent could be looking at stale or placeholder data with
-        // zero indication anything was wrong. A banner, not an alert: a
-        // background poll retries on every foreground and every 15s while
-        // a screen is open, so a modal for each failed attempt would be
-        // its own kind of broken UX. Clears itself the moment any sync
-        // succeeds (see SyncState.syncError's own doc comment).
-        .overlay(alignment: .top) { syncErrorBanner }
-    }
-
-    @ViewBuilder
-    private var syncErrorBanner: some View {
-        if let message = SyncState.shared.syncError {
-            HStack(spacing: 10) {
-                Image(systemName: "wifi.exclamationmark")
-                Text(message).font(.footnote).lineLimit(2)
-                Spacer(minLength: 8)
-                Button("Retry") { Task { await AppSync.shared.syncBackendData() } }
-                    .font(.footnote.weight(.semibold))
-                Button { SyncState.shared.syncError = nil } label: {
-                    Image(systemName: "xmark")
-                }
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(EColor.danger, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .transition(.move(edge: .top).combined(with: .opacity))
-            .animation(.easeOut(duration: 0.2), value: SyncState.shared.syncError)
-        }
+        // Offline, or Evlin not answering: each tab shows a quiet grey pill
+        // at its top (withConnectionPill, ConnectionStatus).
     }
 }

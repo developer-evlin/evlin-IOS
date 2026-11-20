@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import Sentry
 
 enum AppMode: String, CaseIterable, Identifiable {
     case parent, tablet
@@ -21,11 +23,35 @@ struct RootView: View {
     @State private var parentOnboarded: Bool
     @State private var childOnboarded: Bool
     @State private var signedOutNotice = false
+    /// Why the last sign-out happened (APIClient's 401 handling).
+    @State private var signedOutReason: String?
     // Brief brand splash before the mode picker, matching the reference
     // flow's full-bleed logo screen ahead of onboarding.
     @State private var showSplash = true
     // Filled by the parent's pairing poll (see ParentScanCodeStep).
     @State private var pairedKidName: String?
+    /// Settings > Appearance: Cream or Dark.
+    @AppStorage(Appearance.key) private var appearance: Appearance = .cream
+
+    /// The parent's app (its opening screen included, so Dark opens dark,
+    /// 2026-11-07) follows Appearance; everything else is Cream.
+    private var lookScheme: ColorScheme? {
+        if mode == .parent && parentOnboarded { return appearance.scheme }
+        // The kid's side follows the iPad's own light or dark: cream
+        // e-paper, or a warm night e-paper (`WarmNight`), never black
+        // (2026-11-09, the user's call).
+        if mode == .tablet { return nil }
+        // Setting up (onboarding, the start screen): the device's own light
+        // or dark, since most parents set up at night (2026-11-08).
+        return nil
+    }
+
+    private static func applyLook(_ scheme: ColorScheme?) {
+        let style: UIUserInterfaceStyle = scheme == .dark ? .dark : (scheme == .light ? .light : .unspecified)
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows { window.overrideUserInterfaceStyle = style }
+        }
+    }
 
     enum Saved {
         static let mode = "evlin.mode"
@@ -34,15 +60,36 @@ struct RootView: View {
     }
 
     init() {
+        #if EVLIN_DEMO
+        if DemoMode.isOn {
+            DemoMode.seedIfOn()
+        }
+        #endif
         let saved = Self.savedSession()
         _parentOnboarded = State(initialValue: saved.parent)
         _childOnboarded = State(initialValue: saved.child)
-        _mode = State(initialValue: saved.mode)
+        let previewMode: AppMode? = DemoMode.kidOnboardingStep != nil ? .tablet
+            : (DemoMode.parentOnboardingStep != nil ? .parent : (DemoMode.isOn ? (DemoMode.isKid ? .tablet : .parent) : saved.mode))
+        _mode = State(initialValue: previewMode)
+        Self.setWarmNight(previewMode)
+    }
+
+    /// The warm night (`WarmNight`) for the kid's side, and for an iPad that
+    /// hasn't picked a side yet (most iPads are the kid's).
+    private static func setWarmNight(_ m: AppMode?) {
+        WarmNight.on = m == .tablet || (m == nil && UIDevice.current.userInterfaceIdiom == .pad)
     }
 
     /// Who was signed in last time, from the Keychain and UserDefaults, and
     /// the role to reopen straight into.
     static func savedSession() -> (parent: Bool, child: Bool, mode: AppMode?) {
+        #if EVLIN_DEMO
+        if DemoMode.isOn {
+            // Set up already, unless a launch flag opens setup at a step.
+            return DemoMode.isKid ? (false, DemoMode.kidOnboardingStep == nil, .tablet)
+                                  : (DemoMode.parentOnboardingStep == nil, false, .parent)
+        }
+        #endif
         let d = UserDefaults.standard
         let s = SessionManager.shared
         let parentOK = s.hasParentSession && d.bool(forKey: Saved.parent)
@@ -54,6 +101,12 @@ struct RootView: View {
         if !s.hasParentSession, s.hasChildSession, !childOK, last == nil {
             return (parentOK, false, .tablet)
         }
+        // Signed in but setup not finished (closed while pairing a kid, say):
+        // back to the parent side, where onboarding skips the sign-in step.
+        // A parent signs in once; only Sign out asks again.
+        if s.hasParentSession, !parentOK, last != .tablet {
+            return (false, childOK, .parent)
+        }
         return (parentOK, childOK, (last == .parent && parentOK) || (last == .tablet && childOK) ? last : nil)
     }
 
@@ -62,6 +115,9 @@ struct RootView: View {
     /// while nobody is in: a sign-out cleared the Keychain, so it can't come
     /// back this way.
     private func restoreSessionIfMissed() {
+        #if EVLIN_DEMO
+        if DemoMode.isOn { return }
+        #endif
         guard !parentOnboarded, !childOnboarded, mode == nil else { return }
         SessionManager.shared.reloadMissingFromKeychain()
         let saved = Self.savedSession()
@@ -87,6 +143,9 @@ struct RootView: View {
     /// The backend refused the stored login/device token for good: forget
     /// everything local and start over from the mode picker.
     private func signOutBecauseSessionEnded() {
+        #if EVLIN_DEMO
+        if DemoMode.isOn { return }
+        #endif
         SessionManager.shared.clear()
         FamilyStore.clear()
         parentOnboarded = false
@@ -113,6 +172,15 @@ struct RootView: View {
                             role: .parent,
                             onExitToModePicker: { mode = nil },
                             onComplete: {
+                                #if EVLIN_DEMO
+                                if DemoMode.previewsOnboarding {
+                                    // A new family: the child alone, no tasks.
+                                    let name = DemoPairBridge.read()?.kidName ?? pairedKidName
+                                    DemoMode.startNewFamily(kidName: (name?.isEmpty == false ? name : nil) ?? "Mia")
+                                    parentOnboarded = true
+                                    return
+                                }
+                                #endif
                                 // Show the app as soon as sign-in/setup is done.
                                 // First-run SwiftData creation and the full sync
                                 // can take long enough to make this button feel
@@ -138,6 +206,15 @@ struct RootView: View {
                             role: .child,
                             onExitToModePicker: { mode = nil },
                             onComplete: { 
+                                #if EVLIN_DEMO
+                                if DemoMode.previewsOnboarding {
+                                    // The paired child alone: none of the sample family.
+                                    let name = DemoPairBridge.read()?.kidName
+                                    DemoMode.startNewFamily(kidName: (name?.isEmpty == false ? name : nil) ?? "Mia", asParent: false)
+                                    childOnboarded = true
+                                    return
+                                }
+                                #endif
                                 childOnboarded = true 
                                 Task { await AppSync.shared.syncBackendData() }
                             }
@@ -147,10 +224,19 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: mode)
+        // The one place the look is set: the parent's app follows Appearance;
+        // everything else (the kid's side, onboarding, the start screens)
+        // is always Cream.
+        // On the window itself, so sheets already open (Settings, where it's
+        // changed) switch too, and Auto goes back to following the phone.
+        .onChange(of: lookScheme, initial: true) { _, scheme in Self.applyLook(scheme) }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("EvlinKidPaired"))) { note in
             if let name = note.object as? String, !name.isEmpty { pairedKidName = name }
         }
-        .onChange(of: mode) { _, new in UserDefaults.standard.set(new?.rawValue, forKey: Saved.mode) }
+        .onChange(of: mode) { _, new in
+            Self.setWarmNight(new)
+            UserDefaults.standard.set(new?.rawValue, forKey: Saved.mode)
+        }
         .onChange(of: parentOnboarded) { _, new in
             UserDefaults.standard.set(new, forKey: Saved.parent)
             updateLiveUpdates()
@@ -159,13 +245,23 @@ struct RootView: View {
             UserDefaults.standard.set(new, forKey: Saved.child)
             updateLiveUpdates()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .evlinSessionExpired)) { _ in
-            if parentOnboarded || childOnboarded { signOutBecauseSessionEnded() }
+        .onReceive(NotificationCenter.default.publisher(for: .evlinSessionExpired)) { note in
+            guard parentOnboarded || childOnboarded else { return }
+            let reason = note.object as? String ?? "unknown"
+            signedOutReason = reason
+            // Every sign-out reaches Sentry with its cause, TestFlight
+            // builds included, so one that shouldn't happen can be traced.
+            SentrySDK.capture(message: "Signed out: \(reason)")
+            signOutBecauseSessionEnded()
         }
         .alert("You've been signed out", isPresented: $signedOutNotice) {
             Button("OK", role: .cancel) {}
         } message: {
+            #if DEBUG
+            Text("Your session ended. Please sign in again.\n\n\(signedOutReason ?? "")")
+            #else
             Text("Your session ended. Please sign in again.")
+            #endif
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
             restoreSessionIfMissed()
@@ -217,6 +313,7 @@ struct RootView: View {
             while (parentOnboarded || childOnboarded)
                     && !SyncState.shared.hasFreshChildren
                     && !SyncState.shared.hasFinishedFirstSync
+                    && !DemoMode.isOn
                     && Date().timeIntervalSince(started) < 2.5 {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
@@ -226,22 +323,69 @@ struct RootView: View {
     }
 }
 
-// Brand splash: the app icon's artwork centred on white, with a thin pulsing
-// green loading bar near the bottom. White rather than the dark brand ink,
-// which fought the icon's bright green.
+// Brand splash: our leaf centred on the page, with a thin pulsing green
+// loading bar near the bottom.
+/// The opening splash and the start screen's page: the app's off-white,
+/// #FAF9F6, by day (2026-11-14, the user's call; a cool grey, #F3F4F6, and
+/// Alabaster, #EDEAE0, earlier that day); the blue charcoal at night.
+enum StartPage {
+    static let background = Color(light: "FAF9F6", dark: "1C1F24", warm: "1C1F24")
+    /// The Child button: the soft mint, a little brighter, with darker
+    /// words to read easily (2026-11-14; Brand.mint #D0F1C9 / #21392A with
+    /// #182C20 / #CDEFD6 words before).
+    static let childFill = Color(light: "A4E3AA", dark: "2F563B", warm: "2F563B")
+    static let childInk = Color(light: "0F3A1E", dark: "EAF7EC", warm: "EAF7EC")
+    /// The Parent button: setup's soft mid green, #34B85A (#3A9257 at
+    /// night), as the Family Sharing question's Yes (2026-11-16, the
+    /// user's call; the mascot #3FCE64, `Brand.emerald`, before).
+    static let parentFill = OnboardingV2Theme.Palette.button
+    /// The Child button since 2026-11-16 (the user's layout): outlined, the
+    /// page's own colour with a deep-green edge and deep-green words (the
+    /// mint #A4E3AA with #0F3A1E words before; a cream fill with a green
+    /// edge was tried and reverted on 2026-11-14, before this layout).
+    static let childEdge = Color(light: "2E7D32", dark: "6FDC8C", warm: "6FDC8C")
+    /// A faint soft glow behind the leaf.
+    static let glow = Color(light: "000000", dark: "FFFFFF", warm: "FFFFFF")
+}
+
+/// A start screen button's face (2026-11-16, the user's layout): Parent
+/// solid in setup's soft green with white words, Child outlined in deep
+/// green; both semibold, narrower than the page, a little rounded.
+private struct StartModeLabel: View {
+    var mode: AppMode
+    var isRegular: Bool
+
+    var body: some View {
+        let parent = mode == .parent
+        // Setup's button shape, so Parent feels the same as Continue with
+        // Email (2026-11-16, the user's call; 52pt tall with corners 20, and
+        // 14 before that, the same day).
+        let m = OnboardingV2Theme.Metrics.self
+        let shape = RoundedRectangle(cornerRadius: isRegular ? m.ctaCornerRadius + 10 : m.ctaCornerRadius, style: .continuous)
+        return Text(mode.label)
+            .font(Typography.font(isRegular ? 26 : 17, weight: .semibold))
+            .foregroundStyle(parent ? Color.white : StartPage.childEdge)
+            .frame(maxWidth: .infinity)
+            .frame(height: isRegular ? m.ctaHeightRegular : m.ctaHeightCompact)
+            .background(parent ? StartPage.parentFill : StartPage.background, in: shape)
+            .overlay(shape.strokeBorder(parent ? Color.clear : StartPage.childEdge, lineWidth: 1.5))
+            .contentShape(shape)
+    }
+}
+
 struct SplashScreenView: View {
     @State private var pulse = false
 
     var body: some View {
         ZStack {
-            Color.white.ignoresSafeArea()
+            Rectangle().fill(StartPage.background).ignoresSafeArea()
 
-            // The app icon's own artwork, so the app opens on the same mark
-            // the parent tapped on the home screen.
-            Image("AppLogo")
+            // Our leaf on its own, as on the start screen (2026-11-12, the
+            // user's call; the app icon's green tile before).
+            Image("LeafMark")
                 .resizable()
-                .frame(width: 96, height: 96)
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .scaledToFit()
+                .frame(height: 104)
 
             VStack {
                 Spacer()
@@ -282,61 +426,66 @@ struct ModePickerView: View {
     private var isRegular: Bool { hSizeClass == .regular }
 
     var body: some View {
-        VStack(spacing: 28) {
-            // Flexible Spacers here read fine on an iPhone's short screen
-            // (the logo sits a beat above center, buttons pinned near the
-            // bottom) but on an iPad's much taller canvas they absorb all
-            // of the extra height instead, stranding the logo near the top
-            // and the buttons at the very bottom with a huge empty gap
-            // between — so on regular width this drops them for fixed
-            // spacing and lets the outer frame center the whole compact
-            // block instead. See OnboardingV2ScreenContainer's identical
-            // fix for the reasoning in full.
-            if !isRegular { Spacer() }
-            // Same artwork as the app icon.
-            Image("AppLogo")
+        // One group centred on the page (2026-11-16, the user's layout):
+        // the leaf on a faint soft glow, the name and the line under it,
+        // then Parent and Child right under them, narrower than the page.
+        // The buttons sat at the foot of the page, full width, before.
+        VStack(spacing: 0) {
+            Spacer()
+            // Our leaf on its own, `evlin-leaf.svg` (2026-11-12, the user's
+            // call; the green-tile app icon before, with a green shadow that
+            // glowed on the dark page).
+            Image("LeafMark")
                 .resizable()
-                .frame(width: isRegular ? 160 : 112, height: isRegular ? 160 : 112)
-                .clipShape(RoundedRectangle(cornerRadius: isRegular ? 36 : 26, style: .continuous))
-                .shadow(color: Brand.greenDeep.opacity(0.3), radius: 24, y: 10)
+                .scaledToFit()
+                .frame(height: isRegular ? 150 : 104)
+                .background {
+                    Circle()
+                        .fill(RadialGradient(colors: [StartPage.glow.opacity(0.045), StartPage.glow.opacity(0)],
+                                             center: .center, startRadius: 0, endRadius: isRegular ? 230 : 160))
+                        .frame(width: isRegular ? 460 : 320, height: isRegular ? 460 : 320)
+                        .offset(y: isRegular ? 50 : 36)
+                        .allowsHitTesting(false)
+                }
 
             // Bold with tightened tracking: ExtraBold at default spacing
-            // crowded its letters at this size.
+            // crowded its letters at this size. (A serif wordmark was tried
+            // and undone, 2026-11-08: the name was fine as it was.)
             VStack(spacing: 6) {
                 Text("Evlin")
                     .font(Typography.font(isRegular ? 46 : 34, weight: .bold))
                     .tracking(isRegular ? -1.1 : -0.8)
                     .foregroundStyle(Brand.ink)
+                // The app's philosophy, the user's words: keep it.
                 Text("Ever learning, ever kind.")
                     .font(Typography.font(isRegular ? 20 : 17, weight: .medium))
                     .foregroundStyle(Brand.inkSoft)
             }
+            .padding(.top, isRegular ? 28 : 20)
 
-            if !isRegular { Spacer() }
-
-            VStack(spacing: 12) {
+            VStack(spacing: isRegular ? 14 : 12) {
                 ForEach(AppMode.allCases) { m in
                     Button {
                         mode = m
                     } label: {
-                        // Centred, on the same axis as the logo and title above.
-                        Text(m.label)
-                            .font(Typography.font(isRegular ? 21 : 16, weight: .bold))
-                            .foregroundStyle(m == .parent ? .white : Brand.emeraldInk)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: isRegular ? 78 : 58)
-                            .background(m == .parent ? Brand.emerald : Brand.mint)
-                            .clipShape(RoundedRectangle(cornerRadius: isRegular ? 24 : 18, style: .continuous))
+                        StartModeLabel(mode: m, isRegular: isRegular)
                     }
                     .buttonStyle(.plain)
                 }
             }
+            // Wider on the iPad (2026-11-16, the user's call; 420 before).
+            .frame(maxWidth: isRegular ? 560 : 300)
             .padding(.horizontal, 24)
-            .padding(.bottom, 40)
-            .padding(.top, isRegular ? Spacing.section : 0)
-            .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity)
+            .padding(.top, isRegular ? 56 : 44)
+            Spacer()
+            Spacer()
+                .frame(maxHeight: isRegular ? 60 : 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Brand.cream)
+        // The app's cream by day, as the opening splash, with no grain
+        // (2026-11-14, the user's call: the onboarding's e-paper, #F1EFE9,
+        // read grey); the setup's blue charcoal at night.
+        .background(StartPage.background.ignoresSafeArea())
+        .sensoryFeedback(.selection, trigger: mode)
     }
 }

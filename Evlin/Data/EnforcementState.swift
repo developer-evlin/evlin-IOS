@@ -120,33 +120,41 @@ extension LocalStore {
         let dayKey = CalendarSync.isoDay(day)
         let blocked = Array(Set(blockedNow(childId: childId, at: day).compactMap(\.appId)))
 
-        if let policy = cachedPolicy(childId: childId), policy.localDate == dayKey {
-            return EnforcementState(
-                lockReasons: policy.lockReasons.compactMap(EnforcementState.LockReason.init(policyName:)),
-                minutesToday: policy.allowanceMinutes,
-                blockedAppIDs: blocked
-            )
-        }
-
         let state = cachedChildState(childId: childId)
-
-        var reasons: [EnforcementState.LockReason] = []
 
         // Today's tasks come from the saved task rules (repeat days, start
         // date), the way the server decides them (CalendarSync.applies), not
         // only from today's saved occurrences: on a new day with no
         // connection and the app not opened, there are none yet, and the
         // phone would have unlocked. An occurrence, where there is one, says
-        // how far the task has got. Only tasks that gate apps count. Reads
-        // only, so a separate process (a Screen Time extension) can use it.
+        // how far the task has got. Only tasks that gate apps count. With
+        // Instant unlock, sent in is enough. Reads only, so a separate
+        // process (a Screen Time extension) can use it.
+        let instantUnlock = state?.instantUnlock ?? false
         let occurrences = cachedOccurrences(childId: childId, dueDate: dayKey)
         let occurrenceByTask = Dictionary(occurrences.map { ($0.taskId, $0) }, uniquingKeysWith: { a, _ in a })
         let gatingUnfinished = cachedTasks(childId: childId).contains { task in
             guard task.gatesApps else { return false }
             let occurrence = occurrenceByTask[task.id]
             guard occurrence != nil || CalendarSync.applies(task, on: day) else { return false }
+            if instantUnlock && occurrence?.status == "submitted" { return false }
             return occurrence?.status != "approved"
         }
+
+        if let policy = cachedPolicy(childId: childId), policy.localDate == dayKey {
+            var reasons = policy.lockReasons.compactMap(EnforcementState.LockReason.init(policyName:))
+            // Sent in a moment ago, or offline: open now, without waiting
+            // for the server's next answer.
+            if instantUnlock && !gatingUnfinished { reasons.removeAll { $0 == .unfinishedTasks } }
+            return EnforcementState(
+                lockReasons: reasons,
+                minutesToday: policy.allowanceMinutes,
+                blockedAppIDs: blocked
+            )
+        }
+
+        var reasons: [EnforcementState.LockReason] = []
+
         if gatingUnfinished && !(state?.taskGateOverride ?? false) {
             reasons.append(.unfinishedTasks)
         }

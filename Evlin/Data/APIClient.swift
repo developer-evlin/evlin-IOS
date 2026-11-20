@@ -67,8 +67,13 @@ extension Error {
 class APIClient {
     static let shared = APIClient()
     
-    // Switch to your Render URL:
+    // The Demo build gets an address that can't resolve (`.invalid` is
+    // reserved), so nothing it does can reach the real server.
+    #if EVLIN_DEMO
+    let baseURL = "https://demo.invalid"
+    #else
     let baseURL = "https://evlin-ios.onrender.com"
+    #endif
 
     // 15-second request timeout so unreachable backends fail fast instead
     // of hanging for the default 60 seconds, which freezes the UI. Settable
@@ -111,7 +116,9 @@ class APIClient {
     func verifySignup(email: String, password: String, code: String) async throws -> Bool {
         let data = try await sendAnonymous("POST", "/auth/signup/verify",
                                            body: ["email": email, "password": password, "code": code])
-        return storeParentSession(data)
+        guard storeParentSession(data) else { return false }
+        await startParentSession()
+        return true
     }
 
     /// Sign in with Apple. `nonce` is the raw value whose SHA-256 went into
@@ -122,7 +129,9 @@ class APIClient {
         if let authorizationCode { body["authorization_code"] = authorizationCode }
         if let fullName, !fullName.isEmpty { body["full_name"] = fullName }
         let data = try await sendAnonymous("POST", "/auth/apple", body: body)
-        return storeParentSession(data)
+        guard storeParentSession(data) else { return false }
+        await startParentSession()
+        return true
     }
 
     private func storeParentSession(_ data: Data) -> Bool {
@@ -137,11 +146,60 @@ class APIClient {
         _ = try await sendAnonymous("POST", "/auth/verify-parent", body: ["access_token": token])
         SessionManager.shared.parentAccessToken = token
         SessionManager.shared.parentRefreshToken = refreshToken
+        await startParentSession()
         return true
     }
 
     func login(email: String, password: String) async throws -> Bool {
-        storeParentSession(try await sendAnonymous("POST", "/auth/login", body: ["email": email, "password": password]))
+        guard storeParentSession(try await sendAnonymous("POST", "/auth/login", body: ["email": email, "password": password]))
+        else { return false }
+        await startParentSession()
+        return true
+    }
+
+    private var sessionStartInFlight: Task<Void, Never>?
+    /// Internal so the tests can stand in for a server without the route.
+    var sessionStartRetryAfter = Date.distantPast
+
+    /// Trades the Supabase sign-in for the phone's own session token, which
+    /// keeps the parent signed in until they sign out: nothing to renew,
+    /// nothing for Supabase to revoke. Runs after every sign-in, and on the
+    /// next request for a parent signed in before this existed. A failure
+    /// (offline, a server without /auth/session yet) keeps the Supabase
+    /// tokens and tries again ten minutes later.
+    func startParentSession() async {
+        let s = SessionManager.shared
+        guard s.parentSessionToken == nil, s.parentAccessToken != nil else { return }
+        if let inFlight = sessionStartInFlight { return await inFlight.value }
+        guard Date() >= sessionStartRetryAfter else { return }
+        let task = Task { @MainActor in
+            await refreshParentTokenIfExpiring()
+            var data = try? await sendOnce("POST", "/auth/session", body: nil)
+            if data == nil, await refreshParentToken() == .refreshed {
+                data = try? await sendOnce("POST", "/auth/session", body: nil)
+            }
+            guard let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let session = json["session_token"] as? String else {
+                sessionStartRetryAfter = Date().addingTimeInterval(600)
+                return
+            }
+            s.parentSessionToken = session
+            s.parentAccessToken = nil
+            s.parentRefreshToken = nil
+        }
+        sessionStartInFlight = task
+        await task.value
+        sessionStartInFlight = nil
+    }
+
+    /// Sign out on the server (best effort: the phone forgets the token
+    /// either way).
+    func endParentSession(_ token: String) async {
+        var request = URLRequest(url: URL(string: "\(baseURL)/auth/logout")!)
+        request.httpMethod = "POST"
+        request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        _ = try? await session.data(for: request)
     }
 
     func deleteAccount() async throws {
@@ -155,7 +213,9 @@ class APIClient {
     /// Kid's device: start pairing. Show `code` as text and a QR, then poll
     /// `pairingStatus`. `secret` proves later that this device is the one that asked.
     func requestPairing(childName: String?) async throws -> PairingRequestResult {
-        var body: [String: Any] = ["platform": "ios"]
+        // "ipad" or "iphone", so the parent's phone can name the child's
+        // device (2026-11-13; "ios" before).
+        var body: [String: Any] = ["platform": DeviceKind.current]
         if let childName, !childName.isEmpty { body["child_name"] = childName }
         let json = try JSONSerialization.jsonObject(with: try await sendAnonymous("POST", "/auth/pairing/request", body: body)) as? [String: Any]
         guard let code = json?["code"] as? String, let secret = json?["secret"] as? String else {
@@ -254,13 +314,27 @@ class APIClient {
 
     private func send(_ method: String, _ path: String, bodyData body: Data?,
                       signOutOnUnauthorized: Bool = true, timeout: TimeInterval? = nil) async throws -> Data {
+        // The Demo build never talks to the server (DemoMode). Sync and the
+        // outbox already stop short; this catches the screens that call the
+        // API themselves (chat's thread list did), whose stand-in token the
+        // server answered with a 401 that signed the demo out.
+        if DemoMode.isBuild { throw URLError(.notConnectedToInternet) }
+        // A parent still on Supabase tokens (signed in before session tokens
+        // existed) moves onto one here, once.
+        await startParentSession()
         await refreshParentTokenIfExpiring()
         do {
             return try await sendOnce(method, path, body: body, timeout: timeout)
         } catch let failure as APIFailure where failure.status == 401 {
             guard signOutOnUnauthorized else { throw failure }
-            let hadParent = SessionManager.shared.parentAccessToken != nil
-            if hadParent {
+            let s = SessionManager.shared
+            if s.parentSessionToken != nil {
+                // The phone's own session. It's refused only after Sign out
+                // or account deletion, but a 401 from one route proves
+                // nothing on its own: ask the route that answers only "is
+                // this phone still signed in".
+                guard await parentSessionEnded() else { throw failure }
+            } else if s.parentAccessToken != nil {
                 // Supabase access tokens last about an hour: trade the refresh
                 // token for a new one and retry once.
                 switch await refreshParentToken() {
@@ -268,12 +342,57 @@ class APIClient {
                 case .unreachable: throw failure // don't sign out over a network blip
                 case .rejected: break
                 }
+            } else if SessionManager.shared.childDeviceToken != nil {
+                // A kid's phone stays paired until the parent unpairs it. A
+                // 401 from one route can be that route refusing device
+                // tokens, not the token being gone: ask the route that
+                // answers only "is this device still paired".
+                guard await kidDeviceUnpaired() else { throw failure }
             }
-            // Nothing left that could authenticate: sign out (the kid's device
-            // token is 401 only if it was revoked or the child was removed).
-            NotificationCenter.default.post(name: .evlinSessionExpired, object: nil)
+            // The reason travels with the notice (RootView shows it in debug
+            // builds and reports it), so a sign-out is never a mystery.
+            let who = s.isParent ? "parent" : "kid"
+            let reason = "\(who): \(method) \(path) answered 401 (\(failure.detail ?? "no detail"))"
+            NotificationCenter.default.post(name: .evlinSessionExpired, object: reason)
             throw failure
         }
+    }
+
+    /// True only when the server refuses this phone's session at /auth/me.
+    private func parentSessionEnded() async -> Bool {
+        do {
+            _ = try await sendOnce("GET", "/auth/me", body: nil)
+            return false
+        } catch let failure as APIFailure {
+            return failure.status == 401
+        } catch {
+            return false // offline: can't tell, so stay signed in
+        }
+    }
+
+    /// True only when the server refuses this device's token at /device/me,
+    /// which happens once the parent unpairs it or removes the child.
+    private func kidDeviceUnpaired() async -> Bool {
+        do {
+            _ = try await sendOnce("GET", "/device/me", body: nil)
+            return false
+        } catch let failure as APIFailure {
+            return failure.status == 401
+        } catch {
+            return false // offline: can't tell, so stay paired
+        }
+    }
+
+    /// Whether a refused refresh means the session is really over. Supabase
+    /// names the reason ("Invalid Refresh Token: Already Used", "Refresh
+    /// Token Not Found", "Session Expired", "User not found"). Anything else
+    /// in a 401 is the server failing to reach Supabase: the server running
+    /// before the fix in routers/auth.py answered those with 401 as well.
+    static func refreshTokenRefused(_ detail: String?) -> Bool {
+        guard let detail = detail?.lowercased() else { return false }
+        return ["refresh token", "refresh_token", "session expired", "session not found",
+                "session_not_found", "user not found", "user_not_found"]
+            .contains { detail.contains($0) }
     }
 
     private func sendOnce(_ method: String, _ path: String, body: Data?,
@@ -304,10 +423,32 @@ class APIClient {
     /// so a parent coming back after an hour away doesn't send a round of
     /// requests that all 401 first. A failure here is left to the 401 path.
     func refreshParentTokenIfExpiring() async {
-        guard let token = SessionManager.shared.parentAccessToken,
+        guard SessionManager.shared.parentSessionToken == nil,
+              let token = SessionManager.shared.parentAccessToken,
               let expiry = Self.expiry(ofJWT: token),
               expiry.timeIntervalSinceNow < 60 else { return }
         await refreshParentToken()
+    }
+
+    /// The person's name in a Supabase access token (`user_metadata`, which
+    /// Google sign-in fills from the Google account), read without checking
+    /// the signature: it only pre-fills the parent's name.
+    static func name(inJWT token: String) -> String? {
+        guard let claims = claims(ofJWT: token),
+              let meta = claims["user_metadata"] as? [String: Any] else { return nil }
+        for key in ["full_name", "name"] {
+            if let n = (meta[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty { return n }
+        }
+        return nil
+    }
+
+    private static func claims(ofJWT token: String) -> [String: Any]? {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return nil }
+        var base64 = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     /// The `exp` claim of a JWT, read without checking the signature (the
@@ -341,10 +482,13 @@ class APIClient {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let access = json["access_token"] as? String else {
                 // Only the server saying the refresh token is no good ends
-                // the session (it answers 401 for that and nothing else). A
-                // 503, a 429 or a proxy's error page keeps the tokens to try
-                // again, the way other apps keep you signed in offline.
-                return [401, 403].contains(http.statusCode) ? .rejected : .unreachable
+                // the session. A 503, a 429, a proxy's error page or a 401
+                // that's really an outage keeps the tokens to try again,
+                // the way other apps keep you signed in offline.
+                let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"]
+                let refused = [401, 403].contains(http.statusCode)
+                    && Self.refreshTokenRefused(detail.map { "\($0)" })
+                return refused ? .rejected : .unreachable
             }
             SessionManager.shared.parentAccessToken = access
             if let newRefresh = json["refresh_token"] as? String { SessionManager.shared.parentRefreshToken = newRefresh }
@@ -383,21 +527,18 @@ class APIClient {
         try await send(Write.updateMyName(name))
     }
 
-    // MARK: - Calendar events
+    // MARK: - Screen time access code (routers/access_codes.py)
 
-    private static let isoOut: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f
-    }()
+    /// The parent's code now: the one still good, or a new one.
+    func accessCode() async throws -> ApiAccessCode {
+        try decode(try await send("POST", "/access-code"))
+    }
 
-    func fetchEvents(childId: String, from: Date, to: Date) async throws -> [ApiEvent] {
-        let f = Self.isoOut
-        let q = "start_date=\(f.string(from: from))&end_date=\(f.string(from: to))"
-            .replacingOccurrences(of: "+", with: "%2B")
-        // A kid device reading its calendar never signs out over a 401: its
-        // token was just accepted by /device/me in the same sync, so a 401
-        // here only means a server from before kids could read events.
-        let isKidDevice = SessionManager.shared.parentAccessToken == nil
-        return try decode(try await send("GET", "/children/\(childId)/events?\(q)", signOutOnUnauthorized: !isKidDevice))
+    /// The child's device: whether a typed code opens its settings. Right,
+    /// the server uses it up.
+    func checkAccessCode(_ code: String) async throws -> Bool {
+        let answer: ApiAccessCodeCheck = try decode(try await send("POST", "/device/access-code", body: ["code": code]))
+        return answer.ok
     }
 
     // MARK: - Submissions (real photo evidence)
@@ -474,12 +615,14 @@ class APIClient {
     @discardableResult
     func sendChatMessage(childId: String, text: String, conversationId: String? = nil,
                          startNewConversation: Bool = false, agent: String = "chat",
-                         shortcut: String? = nil, regenerate: Bool = false) async throws -> ApiChatMessage {
+                         shortcut: String? = nil) async throws -> ApiChatMessage {
+        #if EVLIN_DEMO
+        if let demo = await DemoMode.chatReply(childId: childId, text: text, shortcut: shortcut) { return demo }
+        #endif
         // The parent's time zone, so "today" and "tomorrow" in chat are
         // theirs even before a kid's device has told the server its own.
         var body: [String: Any] = ["text": text, "agent": agent, "timezone": TimeZone.current.identifier]
         if let shortcut { body["shortcut"] = shortcut }
-        if regenerate { body["regenerate"] = true }
         if let conversationId { body["conversation_id"] = conversationId }
         if startNewConversation { body["new_conversation"] = true }
         // A reply waits on the model, which can take well past the 15 s
@@ -506,65 +649,16 @@ class APIClient {
 
     /// Kid device: what only the device knows about its child.
     @discardableResult
-    func updateMyDevice(timezone: String) async throws -> ApiChild {
-        try decode(try await send("PUT", "/device/me", body: ["timezone": timezone]))
+    /// The parent phone's zone for a child whose device hasn't reported
+    /// one yet; the server only takes it while the child has none.
+    func fillChildTimezone(childId: String, timezone: String) async throws {
+        _ = try await send("PUT", "/children/\(childId)", body: ["timezone": timezone])
     }
 
-    // MARK: - Today's videos
-
-    func fetchVideoProfile(childId: String) async throws -> ApiVideoProfile {
-        try decode(try await send("GET", "/children/\(childId)/video-profile"))
-    }
-
-    /// Partial: only the fields passed change.
-    @discardableResult
-    func updateVideoProfile(childId: String, allowedCategories: [String]? = nil,
-                            blockedKeywords: [String]? = nil,
-                            allowedChannels: [ApiVideoChannel]? = nil,
-                            blockedChannels: [ApiVideoChannel]? = nil,
-                            dailyMinutes: Int? = nil, maxVideoMinutes: Int? = nil) async throws -> ApiVideoProfile {
-        var body: [String: Any] = [:]
-        if let allowedCategories { body["allowed_categories"] = allowedCategories }
-        if let blockedKeywords { body["blocked_keywords"] = blockedKeywords }
-        if let allowedChannels { body["allowed_channels"] = allowedChannels.map { ["id": $0.id, "title": $0.title] } }
-        if let blockedChannels { body["blocked_channels"] = blockedChannels.map { ["id": $0.id, "title": $0.title] } }
-        if let dailyMinutes { body["daily_minutes"] = dailyMinutes }
-        if let maxVideoMinutes { body["max_video_minutes"] = maxVideoMinutes }
-        return try decode(try await send("PUT", "/children/\(childId)/video-profile", body: body))
-    }
-
-    /// Both sides: the parent's view of the list, and the child's player.
-    func fetchVideoQueue(childId: String) async throws -> ApiVideoQueue {
-        try decode(try await send("GET", "/children/\(childId)/video-queue"))
-    }
-
-    /// The parent's approval — the one way a video reaches the child.
-    /// `replace` swaps out whatever is still unwatched today.
-    @discardableResult
-    func addToVideoQueue(childId: String, videos: [VideoSuggestion], replace: Bool) async throws -> ApiVideoQueue {
-        let list: [[String: Any]] = videos.map {
-            ["video_id": $0.videoId, "title": $0.title, "channel_id": $0.channelId,
-             "channel_title": $0.channelTitle, "thumbnail_url": $0.thumbnailUrl,
-             "duration_seconds": $0.durationSeconds, "category": $0.category]
-        }
-        return try decode(try await send("POST", "/children/\(childId)/video-queue",
-                                         body: ["videos": list, "replace": replace]))
-    }
-
-    @discardableResult
-    func reorderVideoQueue(childId: String, itemIds: [String]) async throws -> ApiVideoQueue {
-        try decode(try await send("PUT", "/children/\(childId)/video-queue/order", body: ["item_ids": itemIds]))
-    }
-
-    func removeFromVideoQueue(itemId: String) async throws {
-        try await send("DELETE", "/video-queue/\(itemId)")
-    }
-
-    /// Kid device: seconds actually played. The server only moves it forward.
-    @discardableResult
-    func reportVideoProgress(itemId: String, watchedSeconds: Int, completed: Bool) async throws -> ApiVideoQueueItem {
-        try decode(try await send("POST", "/video-queue/\(itemId)/progress",
-                                  body: ["watched_seconds": watchedSeconds, "completed": completed]))
+    func updateMyDevice(timezone: String, setupComplete: Bool = false) async throws -> ApiChild {
+        var body: [String: Any] = ["timezone": timezone]
+        if setupComplete { body["setup_complete"] = true }
+        return try decode(try await send("PUT", "/device/me", body: body))
     }
 
     // MARK: - Policy
@@ -608,6 +702,12 @@ public class SessionManager {
 
     // Tokens live in the Keychain so the app survives being closed: a parent
     // stays signed in and a kid's phone stays paired.
+    /// The phone's own Evlin session (server: models.ParentSession). Never
+    /// expires and is never renewed: it ends only on Sign out or account
+    /// deletion. Once a parent has one, the Supabase tokens below are gone.
+    var parentSessionToken: String? { didSet { KeychainStore.set(parentSessionToken, for: "parentSession") } }
+    /// Supabase's tokens, only between signing in and getting the session
+    /// token above (or with a server that can't issue one yet).
     var parentAccessToken: String? { didSet { KeychainStore.set(parentAccessToken, for: "parentAccess") } }
     var parentRefreshToken: String? { didSet { KeychainStore.set(parentRefreshToken, for: "parentRefresh") } }
     var childDeviceToken: String? { didSet { KeychainStore.set(childDeviceToken, for: "childDevice") } }
@@ -618,6 +718,7 @@ public class SessionManager {
     var activeChildId: String? { didSet { KeychainStore.set(activeChildId, for: "activeChild") } }
 
     init() {
+        parentSessionToken = KeychainStore.get("parentSession")
         parentAccessToken = KeychainStore.get("parentAccess")
         parentRefreshToken = KeychainStore.get("parentRefresh")
         childDeviceToken = KeychainStore.get("childDevice")
@@ -629,6 +730,7 @@ public class SessionManager {
     /// so `init` read nothing, which looked like being signed out. Fills in
     /// whatever is missing once it opens; never replaces a value in memory.
     func reloadMissingFromKeychain() {
+        if parentSessionToken == nil, let v = KeychainStore.get("parentSession") { parentSessionToken = v }
         if parentAccessToken == nil, let v = KeychainStore.get("parentAccess") { parentAccessToken = v }
         if parentRefreshToken == nil, let v = KeychainStore.get("parentRefresh") { parentRefreshToken = v }
         if childDeviceToken == nil, let v = KeychainStore.get("childDevice") { childDeviceToken = v }
@@ -636,20 +738,73 @@ public class SessionManager {
     }
 
     var activeToken: String? {
-        return parentAccessToken ?? childDeviceToken
+        return parentSessionToken ?? parentAccessToken ?? childDeviceToken
     }
 
-    var hasParentSession: Bool { parentAccessToken != nil || parentRefreshToken != nil }
+    /// This phone is signed in as a parent (not a kid's paired device).
+    var isParent: Bool { parentSessionToken != nil || parentAccessToken != nil }
+    var hasParentSession: Bool { parentSessionToken != nil || parentAccessToken != nil || parentRefreshToken != nil }
     var hasChildSession: Bool { childDeviceToken != nil }
 
     func clear() {
         ParentProfile.shared.reset()
         Outbox.discardAll()
         LocalStore.shared.eraseAll()
+        // Signing out ends this phone's session on the server too, so the
+        // token is worthless even if it were copied off the phone.
+        if let session = parentSessionToken {
+            Task { await APIClient.shared.endParentSession(session) }
+        }
+        parentSessionToken = nil
         parentAccessToken = nil
         parentRefreshToken = nil
         childDeviceToken = nil
         activeChildId = nil
     }
 
+}
+
+// MARK: - What the deployed server supports
+
+/// Features whose screens are built but whose server side isn't deployed yet.
+/// The Demo app never talks to the server, so it shows them all; the real
+/// app (Debug and Release) shows each only once the backend that stores it
+/// is live, so a parent never sets something the server silently drops.
+///
+/// After deploying the backend, flip the matching line to `true` (or the
+/// whole set) and build the app. Checked against the live server on
+/// 2026-11-17 (its /openapi.json): none of these were there.
+enum ServerSupport {
+    #if EVLIN_DEMO
+    private static let demo = true
+    #else
+    private static let demo = false
+    #endif
+
+    /// Chat drafts app blocks (`draft_app_block`, the `block_app` shortcut).
+    /// Off: Chat's "Block an app" opens the Block an app sheet, as Profile's does.
+    static let chatBlocks = demo
+
+    /// Downtime on some days, or different hours by day
+    /// (`downtime_days`, `downtime_schedule`). Off: Every Day only.
+    static let downtimeByDay = demo
+
+    /// Instant unlock (`child_state.instant_unlock`). Off: the row is hidden.
+    static let instantUnlock = demo
+
+    /// The kid's name sent from their device after pairing (`PUT /device/me`
+    /// `name`). Off: the kid's device asks the name before showing its code,
+    /// and it travels with the pairing request, which the live server takes.
+    static let nameAfterPairing = demo
+
+    /// The two devices passing Family Sharing setup between them
+    /// (`devices.setup_stage`, `PUT /children/{id}/setup-stage`). Off: each
+    /// device carries on by its own taps.
+    static let familySharingHandOff = demo
+    /// Editing or deleting one day of a repeating task, or the rest of it
+    /// (`ApiTask.skippedDates`, `repeatUntil`; `POST /tasks/{id}/cut` and
+    /// `/split`). On everywhere since 2026-11-19: needs the backend
+    /// deployed before an app build (a server without those routes answers
+    /// 404, the write is dropped, and the edit is undone by the next sync).
+    static let taskSeriesEdits = true
 }

@@ -34,10 +34,19 @@ struct ChildTask: Identifiable, Equatable {
     // (mock/local-only tasks that never reach the backend).
     var photoURLs: [String] = []
     var repeats: String = "none"
+    /// The kid has to send a photo to finish it (`submission_kind` "photo").
+    var needsPhoto: Bool = false
     // What the parent sent back on a Redo, from TaskReviewDeckView's compose
     // step — distinct from `note`, which is the kid's own note about their
     // submission.
     var redoNote: String? = nil
+    /// The kid sent this in (today), as opposed to a parent ticking it done
+    /// themselves. Taking back the approval of one never sent in is an
+    /// undo (back to "to do"), not a redo.
+    var sentIn: Bool = false
+    /// The task's emoji as stored (tasks.icon); nil means guess one from
+    /// the title (`shownEmoji`).
+    var emoji: String? = nil
     // A parent said no to the kid's ask to skip, with a note: the task is
     // back on for today, and this is what they wrote.
     var skipDeclinedNote: String? = nil
@@ -61,16 +70,22 @@ extension Array where Element == ChildTask {
 }
 
 extension ChildTask {
-    /// Tasks without a deadline first, newest first, so a task just added
-    /// lands at the top and stays there; then deadlines in time order.
-    /// Ties fall back to the name, so the order never shuffles.
+    /// The emoji a kid sees for this task: the one picked for it, else the
+    /// best guess from its title.
+    var shownEmoji: String { emoji.map(EmojiSuggest.displayForm) ?? EmojiSuggest.best(for: title) }
+
+    /// One order for every list: tasks without a deadline first, newest
+    /// first, so a task just added lands at the top and stays there; then
+    /// deadlines in time order. Never by name: tasks made in the same
+    /// second (as a batch) are told apart by id, which only keeps the order
+    /// steady between redraws.
     static func listOrder(_ a: ChildTask, _ b: ChildTask) -> Bool {
         let aTimed = a.dueLabel != nil, bTimed = b.dueLabel != nil
         if aTimed != bTimed { return !aTimed }
         if aTimed, let da = a.dueDate, let db = b.dueDate, da != db { return da < db }
         let ca = a.createdAt ?? .distantPast, cb = b.createdAt ?? .distantPast
         if ca != cb { return ca > cb }
-        return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
+        return a.id < b.id
     }
 }
 
@@ -87,12 +102,35 @@ struct ChildRule: Identifiable, Equatable {
     var on: Bool
     var downtimeFrom: Date = Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date()) ?? Date()
     var downtimeTo: Date = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
+    /// The weekdays downtime runs on ("mon".."sun"); empty means every day.
+    var downtimeDays: Set<String> = []
+    /// Each day's own hours, when they differ by day (Customize Days); a day
+    /// not in here uses `downtimeFrom`/`downtimeTo`. Empty: one set of hours.
+    var downtimeHours: [String: DowntimeHours] = [:]
+
+    /// Whether downtime runs on this weekday ("mon".."sun").
+    func downtimeRuns(on code: String) -> Bool { downtimeDays.isEmpty || downtimeDays.contains(code) }
+    /// The hours on this weekday.
+    func downtimeSpan(on code: String) -> DowntimeHours {
+        downtimeHours[code] ?? DowntimeHours(from: downtimeFrom, to: downtimeTo)
+    }
 
     private static let clockFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
     }()
     static func fmtClock(_ date: Date) -> String {
         clockFormatter.string(from: date)
+    }
+}
+
+/// One day's downtime: from (evening) to (morning).
+struct DowntimeHours: Equatable {
+    var from: Date
+    var to: Date
+
+    /// Minutes past midnight, for comparing two days' hours.
+    var minutes: [Int] {
+        [from, to].map { let c = Calendar.current.dateComponents([.hour, .minute], from: $0); return (c.hour ?? 0) * 60 + (c.minute ?? 0) }
     }
 }
 
@@ -125,8 +163,6 @@ final class TaskStore {
     /// Per child: every task that applies tomorrow (CalendarSync.applies).
     /// Kept apart from `today`: a daily task belongs to both days.
     private(set) var tomorrow: [String: [ChildTask]] = [:]
-    /// The displayed month's calendar (CalendarData.dataYear/dataMonth).
-    private(set) var calendar: [Int: [CalEvent]] = [:]
 
     /// Rebuilds from the database. Only assigns what changed, so a save that
     /// changed nothing on screen redraws nothing.
@@ -144,36 +180,10 @@ final class TaskStore {
             newToday[childId] = AppSync.makeTasks(apiTasks, occurrences: rows.map(\.apiShape), photos: photos)
             newTomorrow[childId] = CalendarSync.tomorrowTasks(from: apiTasks)
         }
-        if newToday != today { today = newToday }
+        if newToday != today {
+            today = newToday
+        }
         if newTomorrow != tomorrow { tomorrow = newTomorrow }
-
-        scheduleCalendarRebuild()
-    }
-
-    private var calendarRebuildPending = false
-
-    /// The month's calendar is rebuilt just after, not in the same instant:
-    /// a tap on Home (a tick, an approval) starts its animation in that
-    /// instant, and the calendar isn't on screen there. Several saves in a
-    /// row make one rebuild.
-    private func scheduleCalendarRebuild() {
-        guard !calendarRebuildPending else { return }
-        calendarRebuildPending = true
-        DispatchQueue.main.async { [self] in
-            calendarRebuildPending = false
-            rebuildCalendar()
-        }
-    }
-
-    /// The calendar now, for when it must be current straight away (the
-    /// displayed month changed).
-    func rebuildCalendar() {
-        let store = LocalStore.shared
-        let newCalendar = AppSync.buildCalendar(events: store.allCachedEvents(), tasks: store.cachedTasksByChild(), today: today)
-        if newCalendar != calendar {
-            calendar = newCalendar
-            CalendarData.rememberMonthDots()
-        }
     }
 
     static func tasks(for childId: String) -> [ChildTask] { shared.today[childId] ?? [] }
@@ -190,18 +200,21 @@ final class TaskStore {
     }
 
     /// Which of today's tasks a review deck opened on `taskId` swipes
-    /// through: the completed ones if it's completed; otherwise the ones
-    /// still needing something (late, waiting on the parent, to do), in the
-    /// order Home lists them. Empty if the task isn't today's.
+    /// through: the tapped task's own group, in the order Home lists them.
+    /// Waiting on the parent: only those, so the deck is just the reviewing
+    /// (each card has something to look at and a decision). Completed: the
+    /// completed ones. To do (late included): those. Empty if the task
+    /// isn't today's.
     static func reviewGroup(for childId: String, startingAt taskId: String) -> [String] {
         let today = tasks(for: childId).filter(\.isDueToday)
         guard let tapped = today.first(where: { $0.id == taskId }) else { return [] }
         let done: (ChildTask) -> Bool = { $0.state == .done || $0.state == .bypassed }
+        let waiting: (ChildTask) -> Bool = { $0.state == .review || $0.state == .bypass }
         if done(tapped) { return today.filter(done).map(\.id) }
+        if waiting(tapped) { return today.filter(waiting).map(\.id) }
         let late = today.filter { $0.state == .overdue }
-        let waiting = today.filter { $0.state == .review || $0.state == .bypass }
         let toDo = today.filter { $0.state == .pending }
-        return (late + waiting + toDo).map(\.id)
+        return (late + toDo).map(\.id)
     }
 
     // Takes the raw minutes rather than a whole Child — Child seeds its own

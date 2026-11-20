@@ -36,22 +36,32 @@ final class Child: Identifiable, ObservableObject {
     @Published var name: String
     @Published var age: Int
     @Published var dailyLimitMin: Int
+    /// A limit per weekday ("mon"..."sun" -> minutes) when the days
+    /// differ; empty when every day is dailyLimitMin. The server's
+    /// weekly_schedule, which it and the kid's phone already apply.
+    @Published var weeklySchedule: [String: Int] = [:]
     @Published var color: Color
     @Published var manualLock: Bool
     @Published var taskGateOverride: Bool
+    /// Work sent in opens the phone, without waiting for approval.
+    @Published var instantUnlock = false
     @Published var timeLeft: String
     @Published var timePct: Int
     @Published var usageTodayMin: Int
 
-    var tasksTotal: Int { TaskStore.tasks(for: id).count }
-    var tasksDone: Int { TaskStore.tasks(for: id).filter { $0.state == .done }.count }
+    // Today's tasks only. TaskStore's list also holds the child's tasks
+    // for other days (as "pending", parked on their next day), and counting
+    // those kept the phone locked after every one of today's was approved.
+    private var todaysTasks: [ChildTask] { TaskStore.tasks(for: id).filter(\.isDueToday) }
+    var tasksTotal: Int { todaysTasks.count }
+    var tasksDone: Int { todaysTasks.filter { $0.state == .done }.count }
     
     var status: ChildStatus {
         if manualLock { return .locked }
         if downtimeUntil != nil { return .downtime }
         
         if !taskGateOverride {
-            let pending = TaskStore.tasks(for: id).filter { $0.state == .pending || $0.state == .review }
+            let pending = todaysTasks.filter { $0.state == .pending || ($0.state == .review && !instantUnlock) }
             if !pending.isEmpty { return .lockedTasks }
         }
         
@@ -178,4 +188,52 @@ func formatMinutes(_ min: Int) -> String {
     if h == 0 { return "\(m)m" }
     if m == 0 { return "\(h)h" }
     return "\(h)h \(m)m"
+}
+
+/// A child's screen-time limit as the parent sets it: every day the same,
+/// or customised day by day. Stored as the server stores it: dailyLimitMin
+/// plus weekly_schedule (empty for every day, all seven days otherwise).
+/// Downtime's chosen days use the same weekday codes.
+enum ScreenTimeSchedule {
+    enum Mode: Hashable { case everyDay, customDays }
+
+    /// Monday first, as the server counts.
+    static let days = EnforcementCalculator.weekdayCodes
+    static let letters = ["M", "T", "W", "T", "F", "S", "S"]
+    static let names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    static let shortNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    /// Each day's limit, Monday first.
+    static func minutes(daily: Int, weekly: [String: Int]) -> [Int] {
+        days.map { weekly[$0] ?? daily }
+    }
+
+    static func mode(daily: Int, weekly: [String: Int]) -> Mode {
+        Set(minutes(daily: daily, weekly: weekly)).count == 1 ? .everyDay : .customDays
+    }
+
+    /// Today's place in the week, Monday = 0.
+    static var todayIndex: Int {
+        days.firstIndex(of: EnforcementCalculator.weekdayCode(for: Date())) ?? 0
+    }
+
+    /// "1h 30m a day", or "Custom days".
+    static func summary(daily: Int, weekly: [String: Int]) -> String {
+        let m = minutes(daily: daily, weekly: weekly)
+        return mode(daily: daily, weekly: weekly) == .everyDay ? "\(limitText(m[0])) a day" : "Custom days"
+    }
+
+    /// Chosen weekdays in words: "Every day", "Weekdays", "Weekends", or
+    /// "Mon, Wed, Fri". Empty or all seven is every day.
+    static func daysText(_ chosen: Set<String>) -> String {
+        if chosen.isEmpty || chosen.count == 7 { return "Every day" }
+        if chosen == Set(days.prefix(5)) { return "Weekdays" }
+        if chosen == Set(days.suffix(2)) { return "Weekends" }
+        return days.indices.filter { chosen.contains(days[$0]) }.map { shortNames[$0] }.joined(separator: ", ")
+    }
+
+    /// A day's limit in words: none is "None".
+    static func limitText(_ minutes: Int) -> String {
+        minutes <= 0 ? "None" : formatMinutes(minutes)
+    }
 }

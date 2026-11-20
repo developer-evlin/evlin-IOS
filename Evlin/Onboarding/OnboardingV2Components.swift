@@ -13,9 +13,10 @@ private struct OnboardingV2FieldLabelModifier: ViewModifier {
     @Environment(\.horizontalSizeClass) private var hSizeClass
     func body(content: Content) -> some View {
         content
-            .font(Evlin.Typography.font(hSizeClass == .regular ? 13 : 11, weight: .regular))
-            .tracking(0.4)
-            .foregroundStyle(OnboardingV2Theme.Palette.onSurfaceVariant)
+            // Readable at a glance (2026-11-09: 11pt grey capitals were hard
+            // on the eyes): sentence case, a size up, the page's ink.
+            .font(Evlin.Typography.font(hSizeClass == .regular ? 15 : 13.5, weight: .semibold))
+            .foregroundStyle(OnboardingV2Theme.Palette.onSurface.opacity(0.85))
     }
 }
 
@@ -33,6 +34,9 @@ struct OnboardingV2EditableField: View {
     var isSecure: Bool = false
     /// Lets iOS autofill, e.g. `.oneTimeCode` offers a code from Mail.
     var contentType: UITextContentType? = nil
+    /// Puts the cursor in the field, keyboard up, when it appears.
+    var autoFocus = false
+    @FocusState private var focused: Bool
     @Environment(\.horizontalSizeClass) private var hSizeClass
     private var isRegular: Bool { hSizeClass == .regular }
 
@@ -49,7 +53,8 @@ struct OnboardingV2EditableField: View {
                 }
             }
             .textContentType(contentType)
-            .font(Evlin.Typography.font(isRegular ? 19 : 16, weight: .semibold))
+            .focused($focused)
+            .font(Evlin.Typography.font(isRegular ? 19 : 17, weight: .semibold))
             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
             .tint(OnboardingV2Theme.Palette.primary)
             .autocorrectionDisabled()
@@ -58,13 +63,22 @@ struct OnboardingV2EditableField: View {
             .background(
                 RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.fieldCornerRadius,
                                  style: .continuous)
-                    .fill(OnboardingV2Theme.Palette.surfaceContainer)
+                    .fill(OnboardingV2Theme.Palette.fieldFill)
             )
+            // The same box as every other setup field (a pale cool grey with
+            // a faint edge vanished on the e-paper, 2026-11-09).
             .overlay(
                 RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.fieldCornerRadius,
                                  style: .continuous)
-                    .stroke(OnboardingV2Theme.Palette.outlineVariant, lineWidth: 1)
+                    .stroke(focused ? OnboardingV2Theme.Palette.primary : OnboardingV2Theme.Palette.fieldEdge,
+                            lineWidth: focused ? 1.5 : 1)
             )
+            .shadow(color: Color(hex: "6B5E4A").opacity(0.08), radius: 6, y: 2)
+            .animation(.easeOut(duration: 0.15), value: focused)
+        }
+        .onAppear {
+            guard autoFocus else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { focused = true }
         }
     }
 }
@@ -82,13 +96,14 @@ struct OnboardingV2FieldBox<Content: View>: View {
             .background(
                 RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.fieldCornerRadius,
                                  style: .continuous)
-                    .fill(OnboardingV2Theme.Palette.surfaceContainer)
+                    .fill(OnboardingV2Theme.Palette.fieldFill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.fieldCornerRadius,
                                  style: .continuous)
-                    .stroke(OnboardingV2Theme.Palette.outlineVariant, lineWidth: 1)
+                    .stroke(OnboardingV2Theme.Palette.fieldEdge, lineWidth: 1)
             )
+            .shadow(color: Color(hex: "6B5E4A").opacity(0.08), radius: 6, y: 2)
     }
 }
 
@@ -155,11 +170,15 @@ struct OnboardingV2Segmented: View {
 
             ZStack(alignment: .leading) {
                 Capsule(style: .continuous)
-                    .fill(OnboardingV2Theme.Palette.surfaceContainer)
+                    .fill(OnboardingV2Theme.Palette.choiceTrack)
 
+                // The pick: a deep forest green pill with white words, lifted
+                // off the bar by a faint shadow (at night a deep green pill
+                // with pale words, the shadow unseen).
                 Capsule(style: .continuous)
-                    .fill(Color.white)
-                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                    .fill(OnboardingV2Theme.Palette.choicePicked)
+                    .overlay(Capsule(style: .continuous).stroke(OnboardingV2Theme.Palette.choicePickedEdge, lineWidth: 0.75))
+                    .shadow(color: .black.opacity(0.08), radius: 4, y: 1.5)
                     .frame(width: max(0, segmentWidth - pillInset * 2), height: trackHeight - pillInset * 2)
                     .offset(x: segmentWidth * CGFloat(selectedIndex) + pillInset)
 
@@ -167,7 +186,7 @@ struct OnboardingV2Segmented: View {
                     ForEach(Array(options.enumerated()), id: \.offset) { i, label in
                         Text(label)
                             .font(OnboardingV2Theme.Typography.cta(hSizeClass == .regular))
-                            .foregroundStyle(selectedIndex == i ? OnboardingV2Theme.Palette.onSurface
+                            .foregroundStyle(selectedIndex == i ? OnboardingV2Theme.Palette.choicePickedText
                                                                  : OnboardingV2Theme.Palette.onSurfaceVariant)
                             .frame(width: segmentWidth, height: trackHeight)
                     }
@@ -218,9 +237,13 @@ struct OnboardingV2ChoiceCard: View {
     let selected: Bool
     let role: OnboardingV2Role
     let action: () -> Void
+    @State private var tapCount = 0
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            tapCount += 1
+            action()
+        } label: {
             HStack(spacing: 13) {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(OnboardingV2Theme.Palette.surfaceContainer)
@@ -257,6 +280,7 @@ struct OnboardingV2ChoiceCard: View {
                     x: 0, y: OnboardingV2Theme.Shadow.premiumY)
         }
         .buttonStyle(.plain)
+        .sensoryFeedback(.impact(weight: .light), trigger: tapCount)
     }
 }
 
@@ -313,14 +337,127 @@ struct OnboardingV2WaitingPill: View {
         }
         .font(OnboardingV2Theme.Typography.cta(hSizeClass == .regular))
         .foregroundStyle(OnboardingV2Theme.Palette.onPrimary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, hSizeClass == .regular ? OnboardingV2Theme.Metrics.ctaPaddingVertical + 14 : OnboardingV2Theme.Metrics.ctaPaddingVertical)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, OnboardingV2Theme.Metrics.ctaPaddingHorizontal)
         .background(
             RoundedRectangle(cornerRadius: OnboardingV2Theme.Metrics.ctaCornerRadius,
                              style: .continuous)
                 .fill(OnboardingV2Theme.Palette.primary.opacity(0.82))
         )
+        .frame(height: hSizeClass == .regular ? OnboardingV2Theme.Metrics.ctaHeightRegular : OnboardingV2Theme.Metrics.ctaHeightCompact)
+        .frame(maxWidth: OnboardingV2Theme.Metrics.ctaMaxWidth)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// A small copy of the alert iOS is about to show, with a finger tapping the
+/// button to press. Apple's wording and button order, so what appears next is
+/// what was just shown. Still with Reduce Motion.
+struct OnboardingV2SystemAlertHint: View {
+    let title: String
+    let message: String
+    let leftButton: String
+    let rightButton: String
+    /// Which of the two the finger taps.
+    let tapsLeft: Bool
+    var width: CGFloat = 300
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var tap = false
+
+    private let appleBlue = Color(hex: "0A84FF")
+
+    static func screenTime(width: CGFloat) -> Self {
+        Self(title: "\u{201C}Evlin\u{201D} Would Like to Access Screen Time",
+             message: "Providing \u{201C}Evlin\u{201D} access to Screen Time may allow it to see your activity data, restrict content, and limit the usage of apps and websites.",
+             leftButton: "Continue",
+             rightButton: "Don't Allow",
+             tapsLeft: true,
+             width: width)
+    }
+
+    static func notifications(width: CGFloat) -> Self {
+        Self(title: "\u{201C}Evlin\u{201D} Would Like to Send You Notifications",
+             message: "Notifications may include alerts, sounds, and icon badges. These can be configured in Settings.",
+             leftButton: "Don't Allow",
+             rightButton: "Allow",
+             tapsLeft: false,
+             width: width)
+    }
+
+    var body: some View {
+        let s = width / 300
+        VStack(spacing: 8 * s) {
+            Text(title)
+                .font(.system(size: 17 * s, weight: .semibold))
+                .foregroundStyle(Color.black)
+            Text(message)
+                .font(.system(size: 13 * s))
+                .foregroundStyle(Color.black.opacity(0.65))
+                .padding(.bottom, 8 * s)
+            HStack(spacing: 8 * s) {
+                alertButton(leftButton, isTarget: tapsLeft, scale: s)
+                alertButton(rightButton, isTarget: !tapsLeft, scale: s)
+            }
+        }
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(18 * s)
+        .frame(width: width)
+        .background(RoundedRectangle(cornerRadius: 26 * s, style: .continuous).fill(Color.white))
+        .shadow(color: .black.opacity(0.12), radius: 18 * s, y: 8 * s)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("On the next screen, tap \(tapsLeft ? leftButton : rightButton)")
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) { tap = true }
+        }
+    }
+
+    private func alertButton(_ label: String, isTarget: Bool, scale s: CGFloat) -> some View {
+        ZStack {
+            Capsule()
+                .fill(isTarget ? appleBlue : Color(hex: "E9E9EB"))
+                .frame(height: 42 * s)
+                .overlay(
+                    Text(label)
+                        .font(.system(size: 15 * s, weight: .semibold))
+                        .foregroundStyle(isTarget ? Color.white : Color.black)
+                )
+                .scaleEffect(isTarget && tap ? 0.96 : 1)
+            if isTarget {
+                // The finger, tapping beside the label so it can still be read.
+                Circle()
+                    .stroke(Color.white.opacity(tap ? 0 : 0.9), lineWidth: 2 * s)
+                    .frame(width: (tap ? 34 : 14) * s, height: (tap ? 34 : 14) * s)
+                    .offset(x: 46 * s)
+                Image(systemName: "hand.point.up.left.fill")
+                    .font(.system(size: 30 * s))
+                    .foregroundStyle(Color.white)
+                    .shadow(color: .black.opacity(0.35), radius: 4 * s, y: 2 * s)
+                    .offset(x: 58 * s, y: (tap ? 14 : 24) * s)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct OnboardingV2NotificationPrompt: View {
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+
+    private var hintWidth: CGFloat { hSizeClass == .regular ? 380 : 300 }
+
+    var body: some View {
+        VStack(spacing: hSizeClass == .regular ? 24 : 16) {
+            OnboardingV2SystemAlertHint.notifications(width: hintWidth)
+
+            // Just the title (2026-11-09: "Get a heads-up when something
+            // needs you." under it was removed).
+            Text("Stay in the loop")
+                .onboardingV2TitleXL()
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -329,20 +466,25 @@ struct OnboardingV2WaitingPill: View {
 struct OnboardingV2NumberedStep: View {
     let number: Int
     let text: String
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isRegular: Bool { hSizeClass == .regular }
 
+    // Bigger (2026-11-11, the user's call: 19pt on the iPad, 15 on a
+    // phone, were small and hard to read).
     var body: some View {
-        HStack(alignment: .top, spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
+        HStack(alignment: .center, spacing: isRegular ? 16 : 12) {
             Circle()
                 .fill(OnboardingV2Theme.Palette.primary)
-                .frame(width: 26, height: 26)
+                .frame(width: isRegular ? 38 : 30, height: isRegular ? 38 : 30)
                 .overlay(
                     Text("\(number)")
-                        .font(Evlin.Typography.font(13, weight: .bold))
+                        .font(Evlin.Typography.font(isRegular ? 19 : 15, weight: .bold))
                         .foregroundStyle(OnboardingV2Theme.Palette.onPrimary)
                 )
                 .fixedSize()
             Text(text)
-                .onboardingV2BodyStrong()
+                .font(Evlin.Typography.font(isRegular ? 24 : 18, weight: .semibold))
+                .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -464,29 +606,113 @@ struct OnboardingV2QRImage: View {
     var body: some View {
         Group {
             if let img = Self.makeQR(from: string) {
+                // The squares in the page's ink, straight on the page: no
+                // white tile (2026-11-14, the user's call). At night that's
+                // light squares on the charcoal; the code under it is there
+                // for a scanner that won't read the inverted one.
                 Image(uiImage: img)
                     .interpolation(.none)
                     .resizable()
+                    .renderingMode(.template)
                     .scaledToFit()
+                    .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
             } else {
                 ProgressView()
             }
         }
         .frame(width: side, height: side)
-        .padding(10)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // The quiet zone a scanner needs round the code, in the page's colour.
+        .padding(14)
     }
 
+    /// The code's squares opaque and the rest clear, to colour as a template.
     static func makeQR(from string: String) -> UIImage? {
         let context = CIContext()
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(string.utf8)
         filter.correctionLevel = "M"
-        guard let output = filter.outputImage else { return nil }
+        guard let qr = filter.outputImage else { return nil }
+        let invert = CIFilter.colorInvert()
+        invert.inputImage = qr
+        let mask = CIFilter.maskToAlpha()
+        mask.inputImage = invert.outputImage
+        guard let output = mask.outputImage else { return nil }
         let scaled = output.transformed(by: CGAffineTransform(scaleX: 12, y: 12))
         guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
         return UIImage(cgImage: cg)
     }
 }
 
+// MARK: - Leaf approved badge (Connected)
+
+/// Evlin's "approved" mark, on Connected on both sides (a plain green circle
+/// with a tick before 2026-11-08).
+struct LeafApprovedBadge: View {
+    var size: CGFloat = 120
+    @State private var grown = false
+    @State private var sealed = false
+    @State private var ticked = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Evlin's own leaf (`evlin-leaf.svg`, the `LeafMark` asset) with a white
+    // seal at its foot holding a green tick (2026-11-10, the user's call:
+    // our leaf on both sides, with an OK on it; a drawn single leaf with the
+    // tick across it before). The leaf grows in from its stem on a spring,
+    // the seal pops on, then the tick strokes in with a success haptic.
+    var body: some View {
+        let leafH = size * 1.12
+        let seal = size * 0.42
+        ZStack(alignment: .bottomTrailing) {
+            Image("LeafMark")
+                .resizable()
+                .scaledToFit()
+                .frame(height: leafH)
+                // Green by day; a plain dark shadow at night, where the green
+                // read as a glow (2026-11-12).
+                .shadow(color: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+                    ? UIColor(white: 0, alpha: 0.4) : UIColor(red: 0.25, green: 0.81, blue: 0.39, alpha: 0.3) }),
+                        radius: size * 0.16, y: size * 0.05)
+                .scaleEffect(grown ? 1 : 0.55, anchor: UnitPoint(x: 0.3, y: 0.95))
+                .rotationEffect(.degrees(grown ? 0 : -12), anchor: UnitPoint(x: 0.3, y: 0.95))
+                .opacity(grown ? 1 : 0)
+                .frame(width: size * 1.1, height: leafH, alignment: .center)
+            ZStack {
+                Circle()
+                    .fill(.white)
+                    .shadow(color: .black.opacity(0.16), radius: seal * 0.14, y: seal * 0.06)
+                Circle()
+                    .strokeBorder(Color(hex: "34C759").opacity(0.25), lineWidth: seal * 0.05)
+                SealTick()
+                    .trim(from: 0, to: ticked ? 1 : 0)
+                    .stroke(Color(hex: "2FB457"), style: StrokeStyle(lineWidth: seal * 0.13, lineCap: .round, lineJoin: .round))
+                    .padding(seal * 0.26)
+            }
+            .frame(width: seal, height: seal)
+            .scaleEffect(sealed ? 1 : 0.2)
+            .opacity(sealed ? 1 : 0)
+            .offset(x: seal * 0.08, y: seal * 0.02)
+        }
+        .frame(width: size * 1.2, height: leafH)
+        .sensoryFeedback(.success, trigger: ticked)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Connected")
+        .onAppear {
+            if reduceMotion { grown = true; sealed = true; ticked = true; return }
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.66)) { grown = true }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.55).delay(0.45)) { sealed = true }
+            withAnimation(.easeOut(duration: 0.35).delay(0.7)) { ticked = true }
+        }
+    }
+
+    /// The tick inside the seal.
+    private struct SealTick: Shape {
+        func path(in r: CGRect) -> Path {
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * r.width, y: r.minY + y * r.height) }
+            var p = Path()
+            p.move(to: pt(0.05, 0.55))
+            p.addLine(to: pt(0.38, 0.86))
+            p.addLine(to: pt(0.95, 0.18))
+            return p
+        }
+    }
+}

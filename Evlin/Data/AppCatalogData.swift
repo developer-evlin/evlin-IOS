@@ -25,6 +25,9 @@ final class AppCatalog {
     }
 
     func app(id: String) -> ApiApp? { apps.first { $0.id == id } }
+
+    /// The Demo build has no server to load from (DemoMode.seedIfOn).
+    func useSample(_ sample: [ApiApp]) { if apps.isEmpty { apps = sample } }
 }
 
 // The App Store's public search endpoint, queried by the catalog app's name,

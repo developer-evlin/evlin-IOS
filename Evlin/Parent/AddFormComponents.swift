@@ -68,27 +68,143 @@ extension EnvironmentValues {
 }
 
 enum FormGreen {
-    static let fieldBg = Color(hex: "F5FAF7")
-    static let title = Color(hex: "0F2115")
-    static let accent = Color(hex: "2FA84F")
-    static let accentBg = Color(hex: "EAF6ED")
-    static let proBg = Color(hex: "EDE7FB")
-    static let proText = Color(hex: "7C5CD9")
+    // A step deeper than the Alabaster page (2026-11-14: #EFECE5, made for
+    // the cream page, all but vanished on it).
+    static let fieldBg = Color(light: "EFEFF4", dark: "2A2E35")
+    static let title = Color(light: "0F2115", dark: "E4E4E6")
+    /// The main app's button green (Create task, Approve, Add habit, the
+    /// day pills, the Pro badge). Onboarding keeps its own brighter #3FCE64
+    /// (2026-11-15: the mascot green here too was tried and reversed the
+    /// same day, the user's call).
+    static let accent = Color(light: "2FA84F", dark: "3A9257")
+    /// Approve's green (the review card, the habit's half card, the story
+    /// viewer): the button green, the same as Create task and Add habit
+    /// (2026-11-16, the user's call: the done ticks' lighter #34C759, from
+    /// 2026-11-15, didn't match Add task on the cream).
+    static let approve = accent
+    static let accentBg = Color(light: "EAF6ED", dark: "17301F")
+    /// The Pro badge: the Create / Approve green, white words (2026-11-14,
+    /// the user's call: a pale wash with green words didn't match).
+    static let proBg = accent
+    static let proText = Color.white
     static let toggleOff = Color(hex: "B9C4BC")
 }
 
 // Bottom-sheet chrome: green "Cancel" top-left, big bold title, content,
 // full-width Save pill (accent when enabled, disabled gray otherwise).
+extension View {
+    /// A sheet you leave only by its own close button (or its Save): no
+    /// swipe down, and no grab line suggesting one, so what's been typed
+    /// can't be lost to a stray drag.
+    func closesOnlyWithButton(_ on: Bool = true) -> some View {
+        interactiveDismissDisabled(on)
+            .presentationDragIndicator(on ? .hidden : .visible)
+    }
+}
+
+/// A sheet's close button: a plain x at the right of the header (adding or
+/// editing alike), with a full 48pt tap area.
+struct SheetCloseButton: View {
+    var label: String = "Close"
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 18))
+                .foregroundStyle(.secondary)
+                .frame(width: 48, height: 48, alignment: .trailing)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+/// The delete button every edit sheet uses: a plain trash can drawn like the
+/// close button (same ink, a lighter stroke so its lines don't look heavy),
+/// at the left of the header across from it. It always asks first (the
+/// caller's confirm), which is where the red is.
+struct SheetDeleteButton: View {
+    var label: String = "Delete"
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "trash")
+                .font(.system(size: 20))
+                .foregroundStyle(.red)
+                .frame(width: 48, height: 48, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+// MARK: - Swipe down to close
+
+/// Hears a swipe-down that SwiftUI held back (interactiveDismissDisabled),
+/// so the question can be asked. It listens to the sheet's own drag rather
+/// than taking over the sheet's delegate: SwiftUI owns that, and replacing
+/// it made SwiftUI present the sheet afresh, emptying the form.
+private struct DismissAttemptObserver: UIViewControllerRepresentable {
+    var hold: Bool
+    var onAttempt: () -> Void
+
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.hold = hold
+        controller.onAttempt = onAttempt
+    }
+
+    final class Controller: UIViewController {
+        var hold = false
+        var onAttempt: () -> Void = {}
+        private var listening: [UIGestureRecognizer] = []
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            guard listening.isEmpty else { return }
+            // The sheet's drag lives on the sheet's view or one around it,
+            // never on the form's own scroll views inside.
+            var view: UIView? = view
+            while let v = view {
+                for pan in v.gestureRecognizers ?? [] where pan is UIPanGestureRecognizer {
+                    pan.addTarget(self, action: #selector(dragged(_:)))
+                    listening.append(pan)
+                }
+                view = v.superview
+            }
+        }
+
+        @objc private func dragged(_ pan: UIPanGestureRecognizer) {
+            guard hold, pan.state == .ended, let v = pan.view else { return }
+            // A clear pull down, not a nudge: about what would have closed it.
+            if pan.translation(in: v).y > 80 || pan.velocity(in: v).y > 800 { onAttempt() }
+        }
+
+        deinit { listening.forEach { $0.removeTarget(self, action: nil) } }
+    }
+}
+
 struct FormShell<Content: View>: View {
     var title: String
     var onCancel: () -> Void
     var onSave: () -> Void
     var canSave: Bool
     var saveLabel: String = "Save"
-    // Opt-in — nil (the default) means no trash icon renders, so every
-    // other FormShell caller is unaffected. When set, shows a red trash
-    // button top-right of the header, next to Cancel.
+    // Opt-in for edit forms: SheetDeleteButton at the left of the header.
     var onDelete: (() -> Void)? = nil
+    var deleteTitle: String = "Delete"
+    /// Something's been typed or changed. Off: a swipe down closes the
+    /// sheet. On: the swipe is held and the parent is asked whether to
+    /// discard (onCancel) or keep editing, as Calendar and Reminders do.
+    var hasChanges: Bool = false
+    /// A step back to what came before the form, at the left of the header.
+    var onBack: (() -> Void)? = nil
+    /// Off when the sheet draws its own header above the form (New task's tabs).
+    var showsHeader: Bool = true
     @ViewBuilder var content: Content
     // A second, compact copy of this button used to live in the keyboard's
     // own accessory bar, hidden/shown opposite this one so only one was
@@ -102,52 +218,50 @@ struct FormShell<Content: View>: View {
     // into view along with whatever's actively being typed.
     @State private var keyboardVisible = false
     @State private var topFieldFocused = false
+    @State private var askDiscard = false
 
     var body: some View {
-        // No drag handle here on purpose: these sheets disable interactive
-        // swipe-to-dismiss (see .interactiveDismissDisabled() at the call
-        // site) so a mid-edit swipe can't silently lose what was typed —
-        // Cancel/Save are the only way out, so there's no gesture zone to
-        // dodge and "Cancel" can sit right at the top.
+        // Swipes away like any sheet; once something's typed or changed the
+        // swipe is held and asks first (hasChanges, at the bottom), so a
+        // stray swipe never loses what was typed.
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                // A close button in the iOS sheet style: a small x on a soft
-                // circle, with a full 48pt tap area around it.
-                Button(action: onCancel) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                        .frame(width: 34, height: 34)
-                        .background(EColor.surfaceContainerHigh, in: Circle())
-                        .frame(width: 48, height: 48, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Cancel")
-
-                Spacer(minLength: 12)
-
-                if let onDelete {
-                    Button(action: onDelete) {
-                        Image(systemName: "trash.fill")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(EColor.danger)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
+            if showsHeader {
+                // Delete on the left when editing; close stays on the right.
+                HStack {
+                    if let onDelete { SheetDeleteButton(label: deleteTitle, action: onDelete) }
+                    if let onBack {
+                        Button(action: onBack) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(FormGreen.title)
+                                .frame(width: 48, height: 48, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Back")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Delete")
+                    Spacer(minLength: 12)
+                    // With changes, the ✕ asks the swipe's question first
+                    // (2026-11-18, the user's call), the keyboard down so
+                    // it's seen where Save was.
+                    SheetCloseButton(label: "Cancel") {
+                        guard hasChanges else { return onCancel() }
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                        withAnimation(.spring(duration: 0.3, bounce: 0)) { askDiscard = true }
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 6)
+
+                if !title.isEmpty {
+                    Text(title)
+                        .font(Typography.font(26, weight: .heavy))
+                        .foregroundStyle(FormGreen.title)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .padding(.bottom, 18)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 6)
-
-            Text(title)
-                .font(Typography.font(26, weight: .heavy))
-                .foregroundStyle(FormGreen.title)
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 18)
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -220,21 +334,71 @@ struct FormShell<Content: View>: View {
             // interactive pan for that ambiguity to happen in.
             .scrollDismissesKeyboard(.immediately)
 
-            Button(action: onSave) {
-                Text(saveLabel)
-                    .font(Typography.font(15, weight: .heavy))
-                    .foregroundStyle(canSave ? .white : EColor.onSurfaceVariant)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
-                    .background(canSave ? FormGreen.accent : EColor.outlineVariant.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .shadow(color: canSave ? FormGreen.accent.opacity(0.3) : .clear, radius: 12, y: 6)
+            // The swipe's question takes the button's place, inside the
+            // sheet: no pop-up over the form. (One presented from this
+            // sheet also made SwiftUI present the sheet afresh, emptied.)
+            Group {
+                if askDiscard {
+                    discardChoice
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else {
+                    Button(action: onSave) {
+                        Text(saveLabel)
+                            .font(Typography.font(15, weight: .heavy))
+                            .foregroundStyle(canSave ? .white : EColor.onSurfaceVariant)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 52)
+                            .background(canSave ? FormGreen.accent : EColor.outlineVariant.opacity(0.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .shadow(color: canSave ? FormGreen.accent.opacity(0.3) : .clear, radius: 12, y: 6)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSave)
+                    .transition(.opacity)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(!canSave)
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 4)
+        }
+        // Closes with a swipe down at iOS's own threshold, like any sheet.
+        // With changes the swipe is held and the parent is asked first.
+        .presentationBackground(EColor.surface)
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(hasChanges)
+        .background(DismissAttemptObserver(hold: hasChanges) {
+            withAnimation(.spring(duration: 0.3, bounce: 0)) { askDiscard = true }
+        })
+        .sensoryFeedback(.impact(flexibility: .soft), trigger: askDiscard) { _, asking in asking }
+    }
+
+    private var discardChoice: some View {
+        VStack(spacing: 10) {
+            Text("Discard your changes?")
+                .font(Typography.font(13, weight: .semibold))
+                .foregroundStyle(EColor.onSurfaceVariant)
+            HStack(spacing: 10) {
+                Button(action: onCancel) {
+                    Text("Discard")
+                        .font(Typography.font(15, weight: .heavy))
+                        .foregroundStyle(EColor.danger)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(EColor.danger.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    withAnimation(.spring(duration: 0.3, bounce: 0)) { askDiscard = false }
+                } label: {
+                    Text("Keep editing")
+                        .font(Typography.font(15, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(FormGreen.accent, in: RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 }
@@ -267,6 +431,8 @@ struct FormTextField: View {
     // place. Every other field leaves this off — they're not always first,
     // and the bottom-anchor scroll already covers them growing/appearing.
     var scrollToTopOnFocus: Bool = false
+    /// The keyboard comes up as the field arrives (writing a task of one's own).
+    var focusOnAppear: Bool = false
     @FocusState private var focused: Bool
     @Environment(\.scrollFormToTop) private var scrollFormToTop
     @Environment(\.formTopFieldFocused) private var formTopFieldFocused
@@ -280,12 +446,100 @@ struct FormTextField: View {
             .background(FormGreen.fieldBg)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .focused($focused)
+            .onAppear {
+                guard focusOnAppear else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focused = true }
+            }
             .onChange(of: focused) { _, isFocused in
                 guard scrollToTopOnFocus else { return }
                 formTopFieldFocused(isFocused)
                 if isFocused { scrollFormToTop() }
             }
 
+    }
+}
+
+/// New task's name: a blank canvas, text with no box around it. No clear
+/// button: the sheet's own × is the only one (the user's call).
+struct TaskNameCanvas: View {
+    @Binding var text: String
+    var focusOnAppear: Bool
+    @State private var focused = false
+    @Environment(\.scrollFormToTop) private var scrollFormToTop
+    @Environment(\.formTopFieldFocused) private var formTopFieldFocused
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // The task's name is in SF Pro (the system font), 20pt bold, on
+            // New task and Edit task alike (the user's call, 2026-11-05).
+            CanvasTextField(text: $text, focused: $focused, placeholder: "Add a task")
+                .frame(height: 30)
+        }
+        .frame(minHeight: 44)
+        .padding(.top, 20)
+        .padding(.bottom, 28)
+        .onAppear {
+            guard focusOnAppear else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focused = true }
+        }
+        .onChange(of: focused) { _, isFocused in
+            formTopFieldFocused(isFocused)
+            if isFocused { scrollFormToTop() }
+        }
+    }
+}
+
+/// The big task name: the app's font, slightly tightened, the same while typing
+/// as after.
+private struct CanvasTextField: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+    var placeholder: String
+
+    private static let font = UIFont.systemFont(ofSize: 20, weight: .bold)
+    private static var attributes: [NSAttributedString.Key: Any] {
+        [.font: font, .foregroundColor: UIColor(Neutral.ink)]
+    }
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.defaultTextAttributes = Self.attributes
+        field.typingAttributes = Self.attributes
+        field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [
+            .font: Self.font, .foregroundColor: UIColor(Neutral.border),
+        ])
+        field.tintColor = UIColor(Neutral.ink)
+        field.returnKeyType = .done
+        field.autocapitalizationType = .sentences
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        if field.text != text { field.text = text }
+        if focused && !field.isFirstResponder {
+            DispatchQueue.main.async { field.becomeFirstResponder() }
+        } else if !focused && field.isFirstResponder {
+            DispatchQueue.main.async { field.resignFirstResponder() }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: CanvasTextField
+        init(_ parent: CanvasTextField) { self.parent = parent }
+
+        @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
+        func textFieldDidBeginEditing(_ field: UITextField) { if !parent.focused { parent.focused = true } }
+        func textFieldDidEndEditing(_ field: UITextField) { if parent.focused { parent.focused = false } }
+        func textFieldShouldReturn(_ field: UITextField) -> Bool {
+            parent.focused = false
+            return true
+        }
     }
 }
 
@@ -308,7 +562,7 @@ struct DotChip: View {
             .foregroundStyle(selected ? FormGreen.accent : EColor.onSurfaceVariant)
             .padding(.horizontal, 15)
             .padding(.vertical, 9)
-            .background(selected ? FormGreen.accentBg : .white)
+            .background(selected ? FormGreen.accentBg : EColor.card)
             .clipShape(Capsule())
             .overlay(Capsule().strokeBorder(selected ? FormGreen.accent : EColor.outlineVariant, lineWidth: 1.5))
         }
@@ -472,7 +726,14 @@ struct FormTimeField: View {
 // preset to choose from.
 struct RepeatPicker: View {
     @Binding var selectedDays: Set<String>
-    @State private var expanded = false
+    /// Open from the start when days are already set (a chore picked from
+    /// the Library, a repeating task being edited), so they're seen at once.
+    @State private var expanded: Bool
+
+    init(selectedDays: Binding<Set<String>>) {
+        _selectedDays = selectedDays
+        _expanded = State(initialValue: !selectedDays.wrappedValue.isEmpty)
+    }
 
     private var summary: String {
         if selectedDays.isEmpty { return "Does not repeat" }
@@ -481,25 +742,23 @@ struct RepeatPicker: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 8) {
-                    Text("Repeats").font(Typography.font(17, weight: .heavy)).foregroundStyle(FormGreen.title)
+                    Text("Repeats").font(FormRow.title).foregroundStyle(FormGreen.title)
                     Text("Pro").font(Typography.font(11, weight: .bold))
                         .foregroundStyle(FormGreen.proText)
                         .padding(.horizontal, 10).padding(.vertical, 3)
                         .background(FormGreen.proBg).clipShape(Capsule())
                     Spacer()
                     Text(summary)
-                        .font(Typography.font(13, weight: .semibold))
+                        .font(FormRow.value)
                         .foregroundStyle(EColor.onSurfaceVariant)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    FormRow.chevron(open: expanded)
                 }
+                .frame(minHeight: FormRow.height)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -521,9 +780,29 @@ struct RepeatPicker: View {
                         .buttonStyle(.plain)
                     }
                 }
+                .padding(.bottom, 14)
             }
         }
-        .padding(.bottom, 18)
+    }
+}
+
+/// The three rows under a task's name (Repeats, Require photo, More options)
+/// share one look: the same title, value, chevron, height and the same line
+/// above each but the first (2026-11-05: they were three sizes before).
+enum FormRow {
+    static let title = Typography.font(16, weight: .bold)
+    static let value = Typography.font(14, weight: .medium)
+    static let height: CGFloat = 54
+
+    static func chevron(open: Bool) -> some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(EColor.onSurfaceVariant)
+            .rotationEffect(.degrees(open ? 90 : 0))
+    }
+
+    static var line: some View {
+        Rectangle().fill(Neutral.line).frame(height: 1)
     }
 }
 
@@ -562,18 +841,13 @@ struct MoreOptions<Content: View>: View {
                 }
             } label: {
                 HStack {
-                    Text("More options").font(Typography.font(15, weight: .heavy)).foregroundStyle(EColor.onSurface)
+                    Text("More options").font(FormRow.title).foregroundStyle(FormGreen.title)
                     Spacer()
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                        .rotationEffect(.degrees(open ? 90 : 0))
+                    FormRow.chevron(open: open)
                 }
-                .padding(.vertical, 14)
-                // A Rectangle, not Divider: in an HStack's overlay a
-                // Divider draws vertical, down the middle of the row.
-                .overlay(alignment: .top) {
-                    Rectangle().fill(EColor.outlineVariant).frame(height: 0.5)
-                }
+                .frame(minHeight: FormRow.height)
+                .contentShape(Rectangle())
+                .overlay(alignment: .top) { FormRow.line }
             }
             .buttonStyle(.plain)
 
@@ -587,11 +861,11 @@ struct MoreOptions<Content: View>: View {
 
 // MARK: - Add Task form
 
-// The one Add Task form, used by Home and the calendar: name, which child
+// New task's tab of the same name: a blank canvas to type on, which child
 // (only when not already fixed), Repeats, and under More options a
-// deadline time and instructions. The day comes from the caller.
+// deadline time and instructions. The day comes from the caller, and the
+// header (the tabs, the close button) is the sheet's.
 struct AddTaskFormFields: View {
-    var title: String
     var saveLabel: String
     // nil shows the For picker (Calendar's case); a real child hides it
     // (a profile's add-task, already scoped to that one child).
@@ -602,18 +876,22 @@ struct AddTaskFormFields: View {
     @Binding var repeatDays: Set<String>
     @Binding var hasDeadline: Bool
     @Binding var deadline: Date
+    @Binding var needsPhoto: Bool
     // The day the task lands on.
     var day: Date
     var canSave: Bool
     var onCancel: () -> Void
     var onSave: () -> Void
+    var focusName: Bool = false
     @Environment(\.scrollFormToBottom) private var scrollFormToBottom
 
     var body: some View {
-        FormShell(title: title, onCancel: onCancel, onSave: onSave, canSave: canSave, saveLabel: saveLabel) {
-            FormField(label: fixedChild == nil ? "Title" : "Task name") {
-                FormTextField(placeholder: "e.g. Make your bed", text: $taskTitle, scrollToTopOnFocus: true)
-            }
+        // No hold on the swipe: New task closes with a pull down from the top
+        // like any sheet, even with something typed (the user's call,
+        // 2026-11-05; it used to stop and ask to discard).
+        FormShell(title: "", onCancel: onCancel, onSave: onSave, canSave: canSave, saveLabel: saveLabel,
+                  hasChanges: false, showsHeader: false) {
+            TaskNameCanvas(text: $taskTitle, focusOnAppear: focusName)
             if fixedChild == nil {
                 // Which child. Evlin manages the children only, so the
                 // choices are the children (CalendarData.people).
@@ -670,8 +948,17 @@ struct BlockTargetPicker: View {
     /// Catalog app ids.
     @Binding var selectedApps: Set<String>
     var accent: Color = EColor.danger
+    /// One app at a time: picking one replaces the last, so nothing picked
+    /// earlier can hide off-screen behind a search.
+    var single = false
 
     @Environment(\.isEnabled) private var isEnabled
+    @FocusState private var searching: Bool
+    /// In a form (the Block an app sheet): searching keeps the field at the
+    /// top, so the results show under it instead of the form scrolling down
+    /// and cutting the field off under the title. Elsewhere, nothing.
+    @Environment(\.scrollFormToTop) private var scrollFormToTop
+    @Environment(\.formTopFieldFocused) private var formTopFieldFocused
 
     private let topCount = 3
 
@@ -688,29 +975,64 @@ struct BlockTargetPicker: View {
         }
     }
 
+    /// Searching: every match. Otherwise the top three, plus anything
+    /// already picked, so an app found by search stays in view once the
+    /// search is cleared.
     private var visibleApps: [ApiApp] {
-        isSearching ? filteredApps : Array(filteredApps.prefix(topCount))
+        if isSearching { return filteredApps }
+        let top = Array(filteredApps.prefix(topCount))
+        return top + catalog.filter { selectedApps.contains($0.id) && !top.contains($0) }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(EColor.onSurfaceVariant)
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(EColor.onSurfaceVariant)
                 TextField("Search apps", text: $query)
-                    .font(Typography.font(13, weight: .regular))
+                    .font(Typography.font(15, weight: .regular))
+                    .foregroundStyle(EColor.onSurface)
+                    .focused($searching)
+                    .submitLabel(.search)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                            .frame(width: 32, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                }
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(EColor.surfaceContainerHigh)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 14)
+            .frame(height: 48)
+            .background(FormGreen.fieldBg)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
+            .onTapGesture { searching = true }
+            .onChange(of: searching) { _, on in
+                formTopFieldFocused(on)
+                if on { scrollFormToTop() }
+            }
 
             VStack(spacing: 6) {
                 ForEach(visibleApps) { app in
                     targetRow(title: app.name, selected: selectedApps.contains(app.id)) { toggleApp(app) }
                 }
-                if !isSearching, filteredApps.count > topCount {
-                    searchHint(noun: "app")
+                if isSearching, filteredApps.isEmpty {
+                    Text("No apps match")
+                        .font(Typography.font(13))
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, minHeight: 34)
                 }
             }
+            // The list folds smoothly as the search narrows it.
+            .animation(.snappy(duration: 0.22), value: query)
         }
         // Loads the catalog, then warms every app's icon — a few dozen
         // apps, so this is cheap, and typing into search never waits on a
@@ -724,8 +1046,13 @@ struct BlockTargetPicker: View {
 
     private func toggleApp(_ app: ApiApp) {
         guard isEnabled else { return }
+        // Picking one ends the search: the keyboard goes, and the lengths
+        // under the list come into view.
+        searching = false
         withAnimation(.easeOut(duration: 0.12)) {
-            if selectedApps.contains(app.id) { selectedApps.remove(app.id) } else { selectedApps.insert(app.id) }
+            if selectedApps.contains(app.id) { selectedApps.remove(app.id) }
+            else if single { selectedApps = [app.id] }
+            else { selectedApps.insert(app.id) }
         }
     }
 
@@ -755,17 +1082,5 @@ struct BlockTargetPicker: View {
         }
         .buttonStyle(.plain)
     }
-
-    // Not a button — search above is the only way past the top 3, so this
-    // just tells a parent that path exists instead of offering a second one.
-    private func searchHint(noun: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
-            Text("Don't see it? Search for the \(noun) above.")
-                .font(Typography.font(12.5, weight: .medium))
-        }
-        .foregroundStyle(EColor.onSurfaceVariant)
-        .frame(maxWidth: .infinity)
-        .frame(height: 34)
-    }
 }
+

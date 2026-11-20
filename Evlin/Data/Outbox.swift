@@ -1,4 +1,5 @@
 import Foundation
+import Sentry
 import Network
 
 /// One write to the server, kept as the exact request to send, so it can wait
@@ -11,6 +12,9 @@ struct WriteRequest: Codable {
     /// offline (LocalStore.materializeTodayIfNeeded): the server has never
     /// seen its id, so the real one is looked up by task and day when sent.
     var occurrence: OccurrenceRef?
+    /// A kid's Send: the photos it names. It waits in the outbox until
+    /// they're uploaded (PhotoUploads.holds).
+    var photoIds: [String]?
 
     struct OccurrenceRef: Codable {
         var localId: String
@@ -37,14 +41,34 @@ extension APIClient {
         /// A new id for a row made on the phone, in the server's spelling.
         static func newId() -> String { UUID().uuidString.lowercased() }
 
+        /// The kid's device names its child, after pairing.
+        static func nameMyChild(_ name: String) -> WriteRequest {
+            WriteRequest("PUT", "/device/me", body: ["name": name])
+        }
+
+        /// Family Sharing's hand-off (`FamilySharingHandOff`): the kid's
+        /// device's stage; "" clears it.
+        static func mySetupStage(_ stage: String) -> WriteRequest {
+            WriteRequest("PUT", "/device/me", body: ["setup_stage": stage])
+        }
+
+        /// "I've created the account", tapped on the parent's phone: the
+        /// kid's device on the account steps moves on (`FamilySharingHandOff`).
+        static func childAccountCreated(_ childId: String) -> WriteRequest {
+            WriteRequest("PUT", "/children/\(childId)/setup-stage", body: ["setup_stage": "account_created"])
+        }
+
         static func updateMyName(_ name: String) -> WriteRequest {
             WriteRequest("PUT", "/auth/me", body: ["name": name])
         }
 
-        static func updateChild(childId: String, name: String? = nil, colorIndex: Int? = nil) -> WriteRequest {
+        /// `activeGoal`: the Library's goal; an empty string clears it.
+        static func updateChild(childId: String, name: String? = nil, colorIndex: Int? = nil,
+                                activeGoal: String? = nil) -> WriteRequest {
             var body: [String: Any] = [:]
             if let name { body["name"] = name }
             if let colorIndex { body["color_index"] = colorIndex }
+            if let activeGoal { body["active_goal"] = activeGoal }
             return WriteRequest("PUT", "/children/\(childId)", body: body)
         }
 
@@ -57,82 +81,11 @@ extension APIClient {
             WriteRequest("DELETE", "/children/\(childId)/device")
         }
 
-        // MARK: Calendar
-
-        private static func eventBody(childId: String, title: String, start: Date, end: Date, category: String?,
-                                      note: String?, location: String?, recurrence: String) -> [String: Any] {
-            var body: [String: Any] = [
-                "child_id": childId,
-                "title": title,
-                "start_at": iso.string(from: start),
-                "end_at": iso.string(from: end),
-                "recurrence": recurrence,
-            ]
-            if let category { body["category"] = category }
-            if let note { body["note"] = note }
-            if let location, !location.isEmpty { body["location_or_link"] = location }
-            return body
-        }
-
-        static func createEvent(id: String, childId: String, title: String, start: Date, end: Date, category: String?,
-                                note: String?, location: String?, recurrence: String) -> WriteRequest {
-            var body = eventBody(childId: childId, title: title, start: start, end: end, category: category,
-                                 note: note, location: location, recurrence: recurrence)
-            body["id"] = id
-            return WriteRequest("POST", "/events", body: body)
-        }
-
-        static func updateEvent(eventId: String, childId: String, title: String, start: Date, end: Date, category: String?,
-                                note: String?, location: String?, recurrence: String) -> WriteRequest {
-            WriteRequest("PUT", "/events/\(eventId)", body: eventBody(
-                childId: childId, title: title, start: start, end: end, category: category,
-                note: note, location: location, recurrence: recurrence))
-        }
-
-        static func deleteEvent(eventId: String) -> WriteRequest {
-            WriteRequest("DELETE", "/events/\(eventId)")
-        }
-
-        private static func planBody(title: String, start: Date, end: Date, note: String?, location: String?) -> [String: Any] {
-            var body: [String: Any] = [
-                "title": title,
-                "start_at": iso.string(from: start),
-                "end_at": iso.string(from: end),
-            ]
-            if let note, !note.isEmpty { body["note"] = note }
-            if let location, !location.isEmpty { body["location_or_link"] = location }
-            return body
-        }
-
-        /// Kid device: a plan for its own calendar, waiting on the parent.
-        static func createPlan(id: String, title: String, start: Date, end: Date, note: String?, location: String?) -> WriteRequest {
-            var body = planBody(title: title, start: start, end: end, note: note, location: location)
-            body["id"] = id
-            return WriteRequest("POST", "/device/plans", body: body)
-        }
-
-        static func updatePlan(eventId: String, title: String, start: Date, end: Date, note: String?, location: String?) -> WriteRequest {
-            WriteRequest("PUT", "/device/plans/\(eventId)", body: planBody(title: title, start: start, end: end, note: note, location: location))
-        }
-
-        /// Withdraws a waiting plan, or dismisses a declined one.
-        static func deletePlan(eventId: String) -> WriteRequest {
-            WriteRequest("DELETE", "/device/plans/\(eventId)")
-        }
-
-        static func approvePlan(eventId: String) -> WriteRequest {
-            WriteRequest("POST", "/events/\(eventId)/approve")
-        }
-
-        static func declinePlan(eventId: String, note: String?) -> WriteRequest {
-            WriteRequest("POST", "/events/\(eventId)/decline", body: ["note": note ?? ""])
-        }
-
         // MARK: Tasks
 
         static func createTask(id: String, childId: String, title: String, instructions: String?, recurrence: String,
                                category: String, submissionKind: String, dueTime: String? = nil, dueDate: String? = nil,
-                               bonusMinutes: Int = 0, createdBy: String = "parent") -> WriteRequest {
+                               bonusMinutes: Int = 0, createdBy: String = "parent", icon: String? = nil) -> WriteRequest {
             var body: [String: Any] = [
                 "id": id,
                 "title": title,
@@ -144,6 +97,7 @@ extension APIClient {
                 "created_by": createdBy,
             ]
             if let dueTime { body["due_time"] = dueTime }
+            if let icon { body["icon"] = icon }
             if let dueDate {
                 body["due_date"] = dueDate
             } else if recurrence.isEmpty || recurrence == "none" {
@@ -160,7 +114,7 @@ extension APIClient {
         /// (sent as an explicit null, which the server reads as "no time").
         static func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, category: String,
                                submissionKind: String, dueTime: String? = nil, dueDate: String? = nil,
-                               clearDueTime: Bool = false) -> WriteRequest {
+                               clearDueTime: Bool = false, icon: String? = nil) -> WriteRequest {
             var body: [String: Any] = [
                 "title": title,
                 "instructions": instructions ?? "",
@@ -170,6 +124,7 @@ extension APIClient {
             ]
             if let dueTime { body["due_time"] = dueTime } else if clearDueTime { body["due_time"] = NSNull() }
             if let dueDate { body["due_date"] = dueDate }
+            if let icon { body["icon"] = icon }
             return WriteRequest("PUT", "/tasks/\(taskId)", body: body)
         }
 
@@ -177,14 +132,54 @@ extension APIClient {
             WriteRequest("DELETE", "/tasks/\(taskId)")
         }
 
-        static func submitTask(occurrenceId: String, bypassNote: String? = nil) -> WriteRequest {
+        /// A repeating task deleted for one day ("This task": `through` the
+        /// same day) or from a day on ("This and following tasks": `through`
+        /// nil), days as "YYYY-MM-DD". The server takes those days off,
+        /// whatever was done on them (routers/tasks.py `cut_task`).
+        static func cutTask(taskId: String, from: String, through: String?) -> WriteRequest {
+            var body: [String: Any] = ["from": from]
+            if let through { body["through"] = through }
+            return WriteRequest("POST", "/tasks/\(taskId)/cut", body: body)
+        }
+
+        /// The same days edited instead: `newTask` (a `createTask`, its id
+        /// made on the phone) takes them, with whatever was sent in or
+        /// approved on them, and the series keeps the rest
+        /// (routers/tasks.py `split_task`).
+        static func splitTask(taskId: String, from: String, through: String?, newTask: WriteRequest) -> WriteRequest {
+            var body: [String: Any] = ["from": from]
+            if let through { body["through"] = through }
+            body["task"] = newTask.body.flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? [:]
+            return WriteRequest("POST", "/tasks/\(taskId)/split", body: body)
+        }
+
+        /// The kid's Send. `photoIds`: the photos sent in with it, each
+        /// checked in R2 by the server before it counts (PhotoUploads).
+        static func submitTask(occurrenceId: String, bypassNote: String? = nil, photoIds: [String]? = nil) -> WriteRequest {
             var body: [String: Any] = [:]
             if let bypassNote { body["bypass_note"] = bypassNote }
-            return WriteRequest("POST", "/tasks/occurrences/\(occurrenceId)/submit", body: body)
+            if let photoIds { body["photo_ids"] = photoIds }
+            var request = WriteRequest("POST", "/tasks/occurrences/\(occurrenceId)/submit", body: body)
+            request.photoIds = photoIds
+            return request
+        }
+
+        /// A place on the server for one photo, named by the phone, and a
+        /// link to upload it to R2, signed for its exact size.
+        static func photoSlot(occurrenceId: String, photoId: String, contentType: String, bytes: Int) -> WriteRequest {
+            WriteRequest("POST", "/occurrences/\(occurrenceId)/submissions", body: [
+                "id": photoId, "kind": "photo", "content_type": contentType, "bytes_size": bytes,
+            ])
         }
 
         static func approveTask(occurrenceId: String) -> WriteRequest {
             WriteRequest("POST", "/tasks/occurrences/\(occurrenceId)/approve")
+        }
+
+        /// Parent takes an approval back: the task returns to how it was
+        /// (waiting for review if it was sent in, else to do).
+        static func unapproveTask(occurrenceId: String) -> WriteRequest {
+            WriteRequest("POST", "/tasks/occurrences/\(occurrenceId)/unapprove")
         }
 
         /// Parent asks for a redo; the note is shown to the kid.
@@ -206,10 +201,11 @@ extension APIClient {
             WriteRequest("PUT", "/children/\(childId)/rules", body: body)
         }
 
-        static func updateChildState(childId: String, manualLock: Bool, taskGateOverride: Bool) -> WriteRequest {
+        static func updateChildState(childId: String, manualLock: Bool, taskGateOverride: Bool, instantUnlock: Bool) -> WriteRequest {
             WriteRequest("PUT", "/children/\(childId)/state", body: [
                 "manual_lock": manualLock,
                 "task_gate_override": taskGateOverride,
+                "instant_unlock": instantUnlock,
             ])
         }
 
@@ -218,6 +214,15 @@ extension APIClient {
             var body: [String: Any] = ["minutes": minutes]
             if let reason { body["reason"] = reason }
             return WriteRequest("POST", "/children/\(childId)/time-grants", body: body)
+        }
+
+        /// Blocks apps for a set time (`durationMinutes`) or until the
+        /// parent lifts it (nil). Apps not on the child's list yet are added.
+        static func createAppBlocks(childId: String, appIds: [String], durationMinutes: Int?) -> WriteRequest {
+            var body: [String: Any] = ["app_ids": appIds, "add_to_list": true,
+                                       "block_type": durationMinutes == nil ? "indefinite" : "duration"]
+            if let durationMinutes { body["duration_minutes"] = durationMinutes }
+            return WriteRequest("POST", "/children/\(childId)/app-blocks", body: body)
         }
 
         /// Ends a block early. Kept server-side as history, not deleted.
@@ -257,38 +262,64 @@ enum Outbox {
         /// A write was dropped (refused, or already done), so what the
         /// screen shows may be ahead of the server.
         var droppedAny: Bool
+        /// All that's left is a Send waiting for its photos to upload:
+        /// not a connection problem, just a moment.
+        var waitingOnPhotos: Bool = false
     }
 
     /// Saves a write and starts sending it. `label` names it in an error
     /// ("Approving the task wasn't saved").
-    static func send(_ request: WriteRequest, childId: String? = nil, label: String) {
-        LocalStore.shared.queueWrite(PendingWrite(request: request, childId: childId ?? "", label: label))
+    @discardableResult
+    static func send(_ request: WriteRequest, childId: String? = nil, label: String) -> String {
+        let write = PendingWrite(request: request, childId: childId ?? "", label: label)
+        LocalStore.shared.queueWrite(write)
         generation += 1
         Task {
             // Dropped writes leave the screen showing something the server
             // doesn't have, so fetch the truth back.
             if await drain().droppedAny { await AppSync.shared.syncBackendData() }
         }
+        return write.id
     }
 
     /// Sends a kid's write against one of today's occurrences, naming the
     /// task and day too when the occurrence was made up on this phone.
-    static func send(_ request: WriteRequest, occurrenceId: String, taskId: String, childId: String, label: String) {
+    @discardableResult
+    static func send(_ request: WriteRequest, occurrenceId: String, taskId: String, childId: String, label: String) -> String {
         var request = request
         if let local = LocalStore.shared.localOccurrence(id: occurrenceId) {
             request.occurrence = .init(localId: occurrenceId, childId: childId, taskId: taskId, dueDate: local.dueDate)
         }
-        send(request, childId: childId, label: label)
+        return send(request, childId: childId, label: label)
     }
 
-    static var hasPending: Bool { !LocalStore.shared.pendingRequests().isEmpty }
+    static var hasPending: Bool { !LocalStore.shared.pendingRequests().isEmpty || PhotoUploads.shared.hasWork }
+
+    /// How a write ended, by its id, for a screen waiting on one (the
+    /// kid's Send): true sent, false dropped. Kept for this launch only.
+    private static var outcomes: [String: Bool] = [:]
+
+    enum Arrival { case sent, refused, notYet }
+
+    /// Waits up to `seconds` for one write to reach the server.
+    static func waitUntilSent(_ writeId: String, seconds: Double) async -> Arrival {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            if let sent = outcomes[writeId] { return sent ? .sent : .refused }
+            if LocalStore.shared.pendingWrite(id: writeId) == nil { return .sent }
+            if Date() >= deadline { return .notYet }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
 
     /// Sends what's waiting, oldest first, until the outbox is empty or a
     /// write has to wait. Callers arriving mid-drain share the same pass.
     @discardableResult
     static func drain() async -> DrainResult {
-        // The debug demo keeps its writes on the phone (DemoMode).
-        if DemoMode.isOn { return DrainResult(isEmpty: true, droppedAny: false) }
+        // The Demo build keeps its writes on the phone (DemoMode).
+        if DemoMode.isBuild { return DrainResult(isEmpty: true, droppedAny: false) }
+        // A kid's photos go first, alongside: a Send waits for its own.
+        PhotoUploads.shared.run()
         if let draining { return await draining.value }
         let task = Task { await run() }
         draining = task
@@ -329,52 +360,110 @@ enum Outbox {
     // app's own 404s ("Event not found"): the server is older than the app.
     private static let noSuchRoute = "Not Found"
 
+    /// How long a write the server has no route for yet waits before it's
+    /// tried again (the app can reach phones before its server is deployed).
+    private static let parkFor: TimeInterval = 15 * 60
+
+    /// A write that can't go through, told to us and never to the parent: a
+    /// raw server message on their screen only alarms them, and the next
+    /// sync puts the screen back as the server has it. Debug builds still
+    /// show it, so a problem is seen while testing.
+    private static func reportUnsaved(_ text: String) {
+        #if DEBUG
+        SyncState.shared.writeError = text
+        #else
+        SentrySDK.capture(message: text)
+        #endif
+    }
+
+    private static func isParked(_ write: PendingWrite) -> Bool {
+        (write.parkedUntil ?? .distantPast) > Date()
+    }
+
     private static func run() async -> DrainResult {
         var droppedAny = false
-        while let write = LocalStore.shared.pendingRequests().first {
+        while let write = LocalStore.shared.pendingRequests().first(where: {
+            !isParked($0) && !($0.request.map(PhotoUploads.shared.holds) ?? false)
+        }) {
             guard let request = write.request else {
                 LocalStore.shared.removePendingWrite(write)
                 continue
             }
             let label = write.label ?? "That change"
+            let writeId = write.id, childId = write.childId
             do {
-                try await APIClient.shared.send(try await resolve(request))
+                let sent = try await resolve(request)
+                let answer = try await APIClient.shared.send(sent)
                 LocalStore.shared.removePendingWrite(write)
+                outcomes[writeId] = true
+                adoptServerId(sent: sent, answer: answer)
+                PhotoUploads.shared.sendAccepted(sent, answer: answer, childId: childId, label: label)
                 failedTries = 0
+                ConnectionStatus.shared.setServerTrouble(false)
+            } catch let failure as APIFailure where failure.status == 404 && failure.detail == Self.noSuchRoute {
+                // The server is older than this app and has no such route
+                // yet. Kept, not dropped, and set aside so the writes behind
+                // it still go: it goes through once the server has the route.
+                if write.parkedUntil == nil {
+                    SentrySDK.capture(message: "Outbox: server has no route for \(request.method) \(request.path); kept for later")
+                }
+                write.parkedUntil = Date().addingTimeInterval(Self.parkFor)
+                LocalStore.shared.saveChanges()
             } catch let failure as APIFailure where (failure.status == 404 && failure.detail != Self.noSuchRoute) || failure.status == 409 {
                 // Gone, or already that way: a retry whose first try got
                 // through but whose answer was lost, or a change someone
-                // else already made. Nothing to send any more. (A 404 for
-                // a route the server doesn't have is a real failure, and
-                // falls through to be reported.)
+                // else already made. Nothing to send any more.
                 print("Outbox: \(request.method) \(request.path) answered \(failure.status); dropped")
                 LocalStore.shared.removePendingWrite(write)
+                outcomes[writeId] = false
                 droppedAny = true
             } catch let failure as APIFailure where (400..<500).contains(failure.status) && ![401, 408, 429].contains(failure.status) {
-                SyncState.shared.writeError = "\(label) wasn't saved. \(failure.apiUserMessage)"
+                reportUnsaved("\(label) wasn't saved. \(failure.apiUserMessage)")
                 LocalStore.shared.removePendingWrite(write)
+                outcomes[writeId] = false
                 droppedAny = true
             } catch {
                 let serverError = (error as? APIFailure).map { $0.status >= 500 } ?? false
                 if serverError { write.attempts += 1 }
                 if serverError && write.attempts >= maxServerErrors {
-                    SyncState.shared.writeError = "\(label) wasn't saved. \(error.apiUserMessage)"
+                    reportUnsaved("\(label) wasn't saved. \(error.apiUserMessage)")
                     LocalStore.shared.removePendingWrite(write)
+                    outcomes[writeId] = false
                     droppedAny = true
                     continue
                 }
                 LocalStore.shared.saveChanges()
                 failedTries += 1
+                // Not reaching the server (offline shows as offline; this is
+                // the server slow, waking, or down): the pill says so.
+                ConnectionStatus.shared.setServerTrouble(true)
                 scheduleRetry(after: failedTries)
                 return DrainResult(isEmpty: false, droppedAny: droppedAny)
             }
         }
-        return DrainResult(isEmpty: true, droppedAny: droppedAny)
+        // What's left waits for photos still uploading (PhotoUploads.holds).
+        let held = LocalStore.shared.pendingRequests().filter { !isParked($0) }
+        return DrainResult(isEmpty: held.isEmpty, droppedAny: droppedAny, waitingOnPhotos: !held.isEmpty)
+    }
+
+    /// A create carries the phone's id. A server that answers with another
+    /// id (one too old to take it) made the row under that id: the phone's
+    /// copy takes it, rather than the next sync deleting the phone's row and
+    /// adding the server's as a new one.
+    private static func adoptServerId(sent: WriteRequest, answer: Data) {
+        guard sent.method == "POST",
+              let body = sent.body.flatMap({ try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any],
+              let localId = body["id"] as? String,
+              let reply = try? JSONSerialization.jsonObject(with: answer) as? [String: Any],
+              let serverId = reply["id"] as? String,
+              serverId.lowercased() != localId.lowercased() else { return }
+        print("Outbox: \(sent.path) made \(serverId) for the phone's \(localId); adopting the server's id")
+        LocalStore.shared.adoptServerId(serverId, for: localId)
     }
 
     /// Swaps an occurrence id made up on this phone for the server's real
     /// one, found by task and day.
-    private static func resolve(_ request: WriteRequest) async throws -> WriteRequest {
+    static func resolve(_ request: WriteRequest) async throws -> WriteRequest {
         guard let ref = request.occurrence else { return request }
         let realId: String
         if let known = LocalStore.shared.serverOccurrenceId(childId: ref.childId, taskId: ref.taskId, dueDate: ref.dueDate) {

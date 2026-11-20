@@ -1,10 +1,11 @@
 import Foundation
 import SwiftData
+import SwiftUI
 
 // The phone's database, on both the parent's and the kid's phone (see
 // "Phone database" in CLAUDE.md). It keeps the server's own rows: every
 // child with their rules and state, their tasks, today's occurrences, time
-// grants, app blocks, policy and calendar events, plus the outbox of writes
+// grants, app blocks and policy, plus the outbox of writes
 // not sent yet. Launch builds the screens from it before the network
 // answers; every sync writes through to it, merging by id.
 //
@@ -27,6 +28,12 @@ final class CachedTask {
     var bonusMinutes: Int
     var createdBy: String
     var createdAt: String?
+    /// The task's emoji (ApiTask.icon); nil until one was picked.
+    var icon: String?
+    /// A repeating task's days taken out of it, comma-joined "YYYY-MM-DD",
+    /// and its last day (ApiTask.skippedDates, repeatUntil). Nil for none.
+    var skippedDates: String?
+    var repeatUntil: String?
 
     init(id: String, childId: String, title: String, instructions: String?, category: String?,
          recurrence: String, gatesApps: Bool, submissionKind: String, dueDate: String?, dueTime: String?,
@@ -43,12 +50,18 @@ final class CachedTask {
                    category: api.category, recurrence: api.recurrence, gatesApps: api.gatesApps,
                    submissionKind: api.submissionKind, dueDate: api.dueDate, dueTime: api.dueTime,
                    active: true, bonusMinutes: api.bonusMinutes, createdBy: api.createdBy, createdAt: api.createdAt)
+        icon = api.icon
+        skippedDates = api.skippedDates.map { $0.joined(separator: ",") }
+        repeatUntil = api.repeatUntil
     }
 
     func apiShape() -> ApiTask {
         ApiTask(id: id, title: title, instructions: instructions, recurrence: recurrence, gatesApps: gatesApps,
                 submissionKind: submissionKind, bucket: "anytime", category: category, dueDate: dueDate,
-                dueTime: dueTime, createdAt: createdAt, bonusMinutes: bonusMinutes, createdBy: createdBy)
+                dueTime: dueTime, createdAt: createdAt, bonusMinutes: bonusMinutes, createdBy: createdBy,
+                icon: icon,
+                skippedDates: skippedDates.map { $0.split(separator: ",").map(String.init) },
+                repeatUntil: repeatUntil)
     }
 }
 
@@ -62,6 +75,8 @@ final class CachedOccurrence {
     var bypassRequested: Bool
     var bypassNote: String?
     var rejectionNote: String?
+    /// When the kid sent it in (the server's completed_at); nil if never.
+    var completedAt: String?
     // True for a row this device materialized itself (see
     // LocalStore.materializeTodayIfNeeded) rather than one confirmed by a
     // real sync — lets the next successful sync's authoritative list
@@ -92,6 +107,7 @@ final class CachedOccurrence {
         self.init(id: api.id, taskId: api.taskId, childId: api.childId, dueDate: String(api.dueDate.prefix(10)), status: api.status,
                    bypassRequested: api.bypassRequested, bypassNote: api.bypassNote, rejectionNote: api.rejectionNote,
                    isLocallyMaterialized: false)
+        completedAt = api.completedAt
     }
 
     /// Takes newly signed links, unless they're for the same photos as the
@@ -108,7 +124,8 @@ final class CachedOccurrence {
 
     var apiShape: ApiOccurrence {
         ApiOccurrence(id: id, taskId: taskId, childId: childId, dueDate: dueDate, status: status,
-                      bypassRequested: bypassRequested, bypassNote: bypassNote, rejectionNote: rejectionNote)
+                      bypassRequested: bypassRequested, bypassNote: bypassNote, rejectionNote: rejectionNote,
+                      completedAt: completedAt)
     }
 }
 
@@ -149,6 +166,8 @@ final class CachedChildState {
     var downtimeEnd: String?
     var manualLock: Bool
     var taskGateOverride: Bool
+    /// Work sent in opens the phone, without waiting for approval.
+    var instantUnlock: Bool = false
     // The server's own rows for this child, so launch can build the child
     // exactly the way a sync does (AppSync.makeChild). Optional: rows saved
     // before these existed fill in on the next sync.
@@ -231,25 +250,6 @@ final class CachedAppBlock {
     }
 }
 
-/// One calendar event (or a kid's plan), as the server sent it. Events are
-/// fetched a month at a time; this keeps every one seen, so the calendar
-/// opens with them at launch.
-@Model
-final class CachedEvent {
-    @Attribute(.unique) var id: String
-    var childId: String
-    var startAt: Date
-    var recurrence: String
-    var json: Data
-
-    init(_ api: ApiEvent, childId: String, startAt: Date, json: Data) {
-        id = api.id; self.childId = childId; self.startAt = startAt
-        recurrence = api.recurrence; self.json = json
-    }
-
-    var event: ApiEvent? { try? JSONDecoder().decode(ApiEvent.self, from: json) }
-}
-
 /// The last policy the server sent for this child, kept so the lock and
 /// "blocked right now" stay right with no connection. One per child.
 @Model
@@ -269,7 +269,8 @@ final class CachedPolicy {
 /// A write that hasn't reached the server yet. Two kinds:
 /// - "request": one of the outbox's saved requests (`payload`, see Outbox).
 /// - "uploadPhoto": a kid's photo, whose bytes wait on disk at
-///   `localFilePath` (TaskDetailView.upload sends these itself).
+///   `localFilePath`, and `payload` the request for its slot on the
+///   server (PhotoUploads sends these).
 @Model
 final class PendingWrite {
     @Attribute(.unique) var id: String
@@ -285,6 +286,14 @@ final class PendingWrite {
     var payload: Data?
     /// What the write is, for an error ("Approving the task").
     var label: String?
+    /// Set when the server didn't have this write's route yet (it's older
+    /// than the app): left for this long, without holding up the rest.
+    var parkedUntil: Date?
+    /// "uploadPhoto": the photo's own id, the server's submission id too.
+    var photoId: String?
+    /// "uploadPhoto": when R2 took the file. Kept until the server has
+    /// confirmed it (by Send, or on its own).
+    var uploadedAt: Date?
 
     convenience init(request: WriteRequest, childId: String, label: String) {
         self.init(childId: childId, kind: "request", occurrenceId: request.occurrence?.localId ?? "")
@@ -331,13 +340,13 @@ final class LocalStore {
     /// to live here — and it has to live here from the start, because moving
     /// it later means migrating a store that already has real data on real
     /// devices.
-    static let appGroupID = "group.com.evlin.app"
+    static let appGroupID = "group.com.evlin.family"
 
     private init() {
         let schema = Schema([
             CachedTask.self, CachedOccurrence.self, CachedTimeGrant.self, CachedChildState.self,
             CachedAppBlock.self, PendingWrite.self,
-            CachedPolicy.self, CachedEvent.self,
+            CachedPolicy.self,
         ])
 
         // Prefer the shared container; fall back only if the App Group isn't
@@ -393,31 +402,6 @@ final class LocalStore {
         TaskStore.shared.reload()
     }
 
-    // MARK: - Local file caching (real disk persistence for pending uploads)
-
-    private static let cacheDir: URL = {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("PendingUploads", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
-    /// Writes `data` to a real file in Caches/PendingUploads and returns
-    /// its URL — the actual "local temp disk caching" a pending upload
-    /// (a photo) is tracked against via PendingWrite, so the bytes
-    /// survive the app being killed or backgrounded mid-upload instead of
-    /// only ever existing as an in-memory UIImage/Data.
-    static func cacheFile(data: Data, suffix: String) -> URL? {
-        let url = cacheDir.appendingPathComponent("\(UUID().uuidString).\(suffix)")
-        do {
-            try data.write(to: url, options: .atomic)
-            return url
-        } catch {
-            print("LocalStore.cacheFile: \(error)")
-            return nil
-        }
-    }
-
     // MARK: - Write-through (called by AppSync after a successful fetch)
 
     /// Makes this child's cached tasks exactly the server's list: updates and
@@ -436,6 +420,11 @@ final class LocalStore {
                 existing.recurrence = api.recurrence; existing.gatesApps = api.gatesApps
                 existing.submissionKind = api.submissionKind; existing.dueDate = api.dueDate; existing.dueTime = api.dueTime
                 existing.bonusMinutes = api.bonusMinutes; existing.createdBy = api.createdBy
+                existing.icon = api.icon
+                // A day taken out of a repeat, or its last day, set on the
+                // parent's phone reaches the kid's here.
+                existing.skippedDates = api.skippedDates.map { $0.joined(separator: ",") }
+                existing.repeatUntil = api.repeatUntil
             } else {
                 context.insert(CachedTask(api, childId: childId))
             }
@@ -459,6 +448,7 @@ final class LocalStore {
             row.dueDate = String(api.dueDate.prefix(10))
             row.status = api.status; row.bypassRequested = api.bypassRequested
             row.bypassNote = api.bypassNote; row.rejectionNote = api.rejectionNote
+            row.completedAt = api.completedAt
             row.isLocallyMaterialized = false
             row.keepPhotoLinks(photos[api.id] ?? [])
         }
@@ -487,16 +477,20 @@ final class LocalStore {
         commit()
     }
 
+    /// One child and everything kept for them, gone from the phone.
+    func forgetChild(_ childId: String) {
+        removeChild(childId)
+        commit()
+    }
+
     private func removeChild(_ childId: String) {
         tasksCache = nil
-        eventsCache = nil
         try? context.delete(model: CachedChildState.self, where: #Predicate { $0.childId == childId })
         try? context.delete(model: CachedTask.self, where: #Predicate { $0.childId == childId })
         try? context.delete(model: CachedOccurrence.self, where: #Predicate { $0.childId == childId })
         try? context.delete(model: CachedTimeGrant.self, where: #Predicate { $0.childId == childId })
         try? context.delete(model: CachedAppBlock.self, where: #Predicate { $0.childId == childId })
         try? context.delete(model: CachedPolicy.self, where: #Predicate { $0.childId == childId })
-        try? context.delete(model: CachedEvent.self, where: #Predicate { $0.childId == childId })
     }
 
     /// One child, their rules and state, in the family's order.
@@ -528,6 +522,7 @@ final class LocalStore {
             row.manualLock = state.manualLock
             row.taskGateOverride = state.taskGateOverride
         }
+        if let instantUnlock = state.instantUnlock { row.instantUnlock = instantUnlock }
         row.weeklySchedule = rules.weeklySchedule
         if existing == nil { context.insert(row) }
         commit()
@@ -550,46 +545,11 @@ final class LocalStore {
         commit()
     }
 
-    /// One child's events from a fetch of [from, to): updated in place, and
-    /// any the same fetch would have returned but didn't (deleted, or moved
-    /// out) removed. Mirrors the server's window: everything starting in
-    /// it, and every repeat that started before it ends.
-    func saveEvents(_ events: [ApiEvent], childId: String, from: Date, to: Date) {
-        eventsCache = nil
-        let existing = (try? context.fetch(FetchDescriptor<CachedEvent>(predicate: #Predicate { $0.childId == childId }))) ?? []
-        var byId = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        for api in events { upsertEvent(api, existing: byId.removeValue(forKey: api.id)) }
-        for row in byId.values where row.startAt <= to && (row.startAt >= from || row.recurrence != "none") {
-            context.delete(row)
-        }
-        commit()
-    }
-
-    private func upsertEvent(_ api: ApiEvent, existing: CachedEvent?) {
-        eventsCache = nil
-        guard let childId = api.childId, let start = CalendarSync.parseISO(api.startAt),
-              let json = try? JSONEncoder().encode(api) else { return }
-        if let row = existing {
-            row.childId = childId; row.startAt = start; row.recurrence = api.recurrence; row.json = json
-        } else {
-            context.insert(CachedEvent(api, childId: childId, startAt: start, json: json))
-        }
-    }
-
-    // Decoded once and kept until a task or event is written: a tap (an
+    // Decoded once and kept until a task is written: a tap (an
     // approval, say) only changes an occurrence, and re-reading and decoding
-    // every task and event for each rebuild of the screens took long enough
+    // every task for each rebuild of the screens took long enough
     // to stall the animation that tap starts.
     private var tasksCache: [String: [ApiTask]]?
-    private var eventsCache: [ApiEvent]?
-
-    func allCachedEvents() -> [ApiEvent] {
-        if let eventsCache { return eventsCache }
-        let events = ((try? context.fetch(FetchDescriptor<CachedEvent>(sortBy: [SortDescriptor(\.startAt)]))) ?? []).compactMap(\.event)
-        eventsCache = events
-        return events
-    }
-
     /// Every child's tasks, keyed by child.
     func cachedTasksByChild() -> [String: [ApiTask]] {
         if let tasksCache { return tasksCache }
@@ -659,7 +619,8 @@ final class LocalStore {
             predicate: #Predicate { $0.childId == childId && $0.dueDate == dueDate }))) ?? []
         return rows.map {
             ApiOccurrence(id: $0.id, taskId: $0.taskId, childId: $0.childId, dueDate: $0.dueDate, status: $0.status,
-                          bypassRequested: $0.bypassRequested, bypassNote: $0.bypassNote, rejectionNote: $0.rejectionNote)
+                          bypassRequested: $0.bypassRequested, bypassNote: $0.bypassNote, rejectionNote: $0.rejectionNote,
+                          completedAt: $0.completedAt)
         }
     }
 
@@ -713,12 +674,78 @@ final class LocalStore {
     func queueWrite(_ write: PendingWrite) {
         context.insert(write)
         try? context.save()
+        ConnectionStatus.shared.setWaiting(pendingRequests().count)
     }
 
     /// The outbox, oldest first.
+    /// A server gave something the phone created a different id from the
+    /// one the phone sent (a server too old to take the phone's id). The
+    /// phone's row takes the server's id in place, with the rows pointing
+    /// at it and the writes still waiting to name it, so the next sync
+    /// finds it already here instead of deleting it and adding a "new" one,
+    /// which made the row blink out and back in on screen. Keeps the
+    /// phone's own creation time, so the row keeps its place too.
+    func adoptServerId(_ serverId: String, for localId: String) {
+        guard serverId != localId else { return }
+        if let task = try? context.fetch(FetchDescriptor<CachedTask>(predicate: #Predicate { $0.id == localId })).first {
+            // A sync that already brought the server's row: the phone's
+            // copy is the duplicate.
+            if let dup = try? context.fetch(FetchDescriptor<CachedTask>(predicate: #Predicate { $0.id == serverId })).first {
+                task.createdAt = task.createdAt ?? dup.createdAt
+                context.delete(dup)
+            }
+            task.id = serverId
+            for occ in (try? context.fetch(FetchDescriptor<CachedOccurrence>(predicate: #Predicate { $0.taskId == localId }))) ?? [] {
+                occ.taskId = serverId
+            }
+            tasksCache = nil
+        }
+        for write in pendingRequests() {
+            guard var request = write.request else { continue }
+            let path = request.path.replacingOccurrences(of: localId, with: serverId)
+            let body = request.body.flatMap { String(data: $0, encoding: .utf8) }
+                .map { $0.replacingOccurrences(of: localId, with: serverId) }
+            guard path != request.path || body.map({ $0.data(using: .utf8) }) != request.body.map({ Optional($0) }) else { continue }
+            request.path = path
+            request.body = body?.data(using: .utf8) ?? request.body
+            if request.occurrence?.taskId == localId { request.occurrence?.taskId = serverId }
+            write.payload = try? JSONEncoder().encode(request)
+        }
+        // No animation: the row is the same task in the same place, only
+        // its id changed, so nothing on screen should move or fade.
+        var quiet = Transaction()
+        quiet.disablesAnimations = true
+        withTransaction(quiet) { commit() }
+    }
+
+    /// The calendar is gone (2026-10-28): an event or plan write still
+    /// waiting from an older version would only fail, and writes go out in
+    /// order, so it would hold up the task writes behind it. Dropped.
+    private func dropCalendarWrites() {
+        var dropped = false
+        for write in pendingRequests() {
+            guard let path = write.request?.path else { continue }
+            if path.hasPrefix("/events") || path.hasPrefix("/device/plans") {
+                context.delete(write)
+                dropped = true
+            }
+        }
+        if dropped { try? context.save() }
+    }
+
     func pendingRequests() -> [PendingWrite] {
         (try? context.fetch(FetchDescriptor<PendingWrite>(
             predicate: #Predicate { $0.kind == "request" }, sortBy: [SortDescriptor(\.createdAt)]))) ?? []
+    }
+
+    /// A kid's photos still on their way (PhotoUploads), oldest first.
+    func uploadWrites() -> [PendingWrite] {
+        (try? context.fetch(FetchDescriptor<PendingWrite>(
+            predicate: #Predicate { $0.kind == "uploadPhoto" }, sortBy: [SortDescriptor(\.createdAt)]))) ?? []
+    }
+
+    func pendingWrite(id: String) -> PendingWrite? {
+        (try? context.fetch(FetchDescriptor<PendingWrite>(predicate: #Predicate { $0.id == id })))?.first
     }
 
     func removeAllPendingRequests() {
@@ -731,9 +758,8 @@ final class LocalStore {
     /// Signing out: nothing of the old account stays on the phone.
     func eraseAll() {
         tasksCache = nil
-        eventsCache = nil
         for type in [CachedTask.self, CachedOccurrence.self, CachedTimeGrant.self, CachedChildState.self,
-                     CachedAppBlock.self, PendingWrite.self, CachedPolicy.self, CachedEvent.self] as [any PersistentModel.Type] {
+                     CachedAppBlock.self, PendingWrite.self, CachedPolicy.self] as [any PersistentModel.Type] {
             try? context.delete(model: type)
         }
         commit()
@@ -762,6 +788,9 @@ final class LocalStore {
         if let row = try? context.fetch(FetchDescriptor<CachedTask>(predicate: #Predicate { $0.id == id })).first {
             row.title = task.title; row.instructions = task.instructions; row.category = task.category
             row.recurrence = task.recurrence; row.dueDate = task.dueDate; row.dueTime = task.dueTime
+            row.icon = task.icon
+            row.skippedDates = task.skippedDates.map { $0.joined(separator: ",") }
+            row.repeatUntil = task.repeatUntil
         } else {
             context.insert(CachedTask(task, childId: childId))
         }
@@ -776,6 +805,72 @@ final class LocalStore {
         (try? context.fetch(FetchDescriptor<CachedTask>(predicate: #Predicate { $0.id == id })))?.first?.childId
     }
 
+    /// A task edited off a day (its repeat days changed) leaves that day
+    /// from today on: its occurrences the kid hasn't sent in, today's and
+    /// later, for days it no longer falls on, go. Work sent in or approved
+    /// stays, as do earlier days. The server does the same on the edit
+    /// (routers/tasks.py `_drop_days_it_no_longer_falls_on`).
+    func dropDaysTaskLeft(_ task: ApiTask) {
+        let id = task.id
+        let today = CalendarSync.isoDay(Date())
+        let rows = (try? context.fetch(FetchDescriptor<CachedOccurrence>(predicate: #Predicate {
+            $0.taskId == id && $0.dueDate >= today
+        }))) ?? []
+        var dropped = false
+        for row in rows where row.status == "pending" || row.status == "rejected" {
+            guard let day = CalendarSync.parseDay(row.dueDate), !CalendarSync.applies(task, on: day) else { continue }
+            context.delete(row)
+            dropped = true
+        }
+        if dropped { commit() }
+    }
+
+    /// A repeating task's day taken out of it ("This task"), or the series
+    /// ended the day before `endBefore` ("This and following tasks"), both
+    /// "YYYY-MM-DD", written on the task's row.
+    func mirrorSeriesCut(taskId: String, skip day: String? = nil, endBefore first: String? = nil) {
+        tasksCache = nil
+        guard let row = try? context.fetch(FetchDescriptor<CachedTask>(predicate: #Predicate { $0.id == taskId })).first
+        else { return }
+        if let day {
+            var days = Set(row.skippedDates?.split(separator: ",").map(String.init) ?? [])
+            days.insert(day)
+            row.skippedDates = days.sorted().joined(separator: ",")
+        }
+        if let first, let start = CalendarSync.parseDay(first),
+           let last = Calendar.current.date(byAdding: .day, value: -1, to: start) {
+            let lastDay = CalendarSync.isoDay(last)
+            if row.repeatUntil.map({ $0 > lastDay }) ?? true { row.repeatUntil = lastDay }
+            let kept = (row.skippedDates?.split(separator: ",").map(String.init) ?? []).filter { $0 <= lastDay }
+            row.skippedDates = kept.isEmpty ? nil : kept.joined(separator: ",")
+        }
+        commit()
+    }
+
+    /// A repeating task's days from `first` on (through `last`, when
+    /// given), each as "YYYY-MM-DD": handed to another task, with whatever
+    /// was sent in or approved on them (one day of a series edited on its
+    /// own, or the rest of it; `mirrorSeriesCut`).
+    func moveOccurrences(of taskId: String, to newId: String, from first: String, through last: String? = nil) {
+        for row in occurrences(of: taskId, from: first, through: last) { row.taskId = newId }
+        commit()
+    }
+
+    /// The same days taken off the lists, whatever was done on them (one
+    /// day of a series deleted, or the rest of it).
+    func dropOccurrences(of taskId: String, from first: String, through last: String? = nil) {
+        for row in occurrences(of: taskId, from: first, through: last) { context.delete(row) }
+        commit()
+    }
+
+    private func occurrences(of taskId: String, from first: String, through last: String?) -> [CachedOccurrence] {
+        let rows = (try? context.fetch(FetchDescriptor<CachedOccurrence>(predicate: #Predicate {
+            $0.taskId == taskId && $0.dueDate >= first
+        }))) ?? []
+        guard let last else { return rows }
+        return rows.filter { $0.dueDate <= last }
+    }
+
     func mirrorTaskDeleted(id: String) {
         tasksCache = nil
         try? context.delete(model: CachedTask.self, where: #Predicate { $0.id == id })
@@ -783,28 +878,56 @@ final class LocalStore {
         commit()
     }
 
-    func mirrorChildState(childId: String, manualLock: Bool, taskGateOverride: Bool) {
+    /// Today's screen-time total for a child as the phone knows it: the
+    /// server's last answer for today, else today's limit (its weekday's,
+    /// with a custom schedule) plus the grants saved for today.
+    private func availableToday(_ row: CachedChildState, rules: ApiChildRule, on date: Date) -> Int {
+        let todayKey = CalendarSync.isoDay(date)
+        if row.availableOn == todayKey, let minutes = row.availableMinutes { return minutes }
+        let base = EnforcementCalculator.baseLimit(dailyLimitMinutes: rules.dailyLimitMinutes,
+                                                   weeklySchedule: rules.weeklySchedule, on: date)
+        return max(0, base + cachedTimeGrants(childId: row.childId, creditedDate: todayKey).reduce(0) { $0 + $1.minutes })
+    }
+
+    /// Extra time given on this phone, counted in today's total at once
+    /// (the grant itself waits in the outbox). The server's own total
+    /// replaces it on the next sync, which comes after the grant is sent.
+    /// Returns the new total, for the screen to show.
+    @discardableResult
+    func mirrorTimeGrant(childId: String, minutes: Int) -> Int? {
+        guard let row = cachedChildState(childId: childId), let rules = row.rules else { return nil }
+        let now = Date()
+        let total = max(0, availableToday(row, rules: rules, on: now) + minutes)
+        row.availableMinutes = total
+        row.availableOn = CalendarSync.isoDay(now)
+        commit()
+        return total
+    }
+
+    func mirrorChildState(childId: String, manualLock: Bool, taskGateOverride: Bool, instantUnlock: Bool) {
         guard let row = cachedChildState(childId: childId) else { return }
         row.manualLock = manualLock
         row.taskGateOverride = taskGateOverride
+        row.instantUnlock = instantUnlock
+        commit()
+    }
+
+    /// New blocks, shown before the server has them. Their ids are the
+    /// phone's own; the next sync (which waits for the write to be sent)
+    /// replaces them with the server's rows.
+    func mirrorBlocksCreated(childId: String, apps: [(id: String, name: String)], endsAt: Date?) {
+        for app in apps {
+            context.insert(CachedAppBlock(id: "local-" + UUID().uuidString.lowercased(), childId: childId,
+                                          appName: app.name, blockType: endsAt == nil ? "indefinite" : "duration",
+                                          untilTaskId: nil, resolved: false, appId: app.id, state: "active",
+                                          summary: nil, endsAt: endsAt))
+        }
         commit()
     }
 
     func mirrorBlockLifted(id: String) {
         guard let row = try? context.fetch(FetchDescriptor<CachedAppBlock>(predicate: #Predicate { $0.id == id })).first else { return }
         row.resolved = true
-        commit()
-    }
-
-    func mirrorEventSaved(_ event: ApiEvent) {
-        let id = event.id
-        upsertEvent(event, existing: try? context.fetch(FetchDescriptor<CachedEvent>(predicate: #Predicate { $0.id == id })).first)
-        commit()
-    }
-
-    func mirrorEventDeleted(id: String) {
-        eventsCache = nil
-        try? context.delete(model: CachedEvent.self, where: #Predicate { $0.id == id })
         commit()
     }
 
@@ -816,6 +939,7 @@ final class LocalStore {
     func removePendingWrite(_ write: PendingWrite) {
         context.delete(write)
         try? context.save()
+        ConnectionStatus.shared.setWaiting(pendingRequests().count)
     }
 
     // MARK: - Launch-time hydration
@@ -829,12 +953,18 @@ final class LocalStore {
     }
 
     /// Builds every child from the database, the way a sync does
-    /// (AppSync.makeChild), and rebuilds the task lists and calendar
-    /// (TaskStore.reload). Also used when the day changes, so today's lists
+    /// (AppSync.makeChild), and rebuilds the task lists (TaskStore.reload). Also used when the day changes, so today's lists
     /// move on even with no connection.
     func hydrate() {
+        dropCalendarWrites()
+        // Left by features removed on 2026-11-01: a day's own limit, deny time,
+        // video requests, approving on the parent's phone.
+        for key in ["evlin.dayLimits", "evlin.approvalTrims", "evlin.approvalTask", "evlin.videoRequests",
+                    "evlin.instantApproval", "evlin.instantApprovalHandled", "evlin.goalPromptHidden"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         let session = SessionManager.shared
-        let isKidDevice = session.parentAccessToken == nil && session.childDeviceToken != nil
+        let isKidDevice = !session.isParent && session.childDeviceToken != nil
         var rows = ((try? context.fetch(FetchDescriptor<CachedChildState>())) ?? [])
             .filter { $0.childJSON != nil }
             .sorted { ($0.position ?? 0) < ($1.position ?? 0) }
@@ -849,13 +979,8 @@ final class LocalStore {
             let id = apiChild.id
             materializeTodayIfNeeded(childId: id, day: today, dueDate: todayKey)
 
-            let available: Int
-            if row.availableOn == todayKey, let minutes = row.availableMinutes {
-                available = minutes
-            } else {
-                available = rules.dailyLimitMinutes + cachedTimeGrants(childId: id, creditedDate: todayKey).reduce(0) { $0 + $1.minutes }
-            }
-            let state = ApiChildState(manualLock: row.manualLock, taskGateOverride: row.taskGateOverride)
+            let available = availableToday(row, rules: rules, on: today)
+            let state = ApiChildState(manualLock: row.manualLock, taskGateOverride: row.taskGateOverride, instantUnlock: row.instantUnlock)
             let existing = FamilyStore.children.first { $0.id == id }
             children.append(AppSync.makeChild(apiChild, rules: rules, state: state, availableMinutes: available, existing: existing))
         }

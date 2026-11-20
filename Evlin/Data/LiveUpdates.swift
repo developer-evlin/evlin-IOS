@@ -33,7 +33,7 @@ final class LiveUpdates {
     private static let fallbackInterval: UInt64 = 15
 
     func start() {
-        guard connection == nil, !DemoMode.isOn else { return }
+        guard connection == nil, !DemoMode.isBuild else { return }
         connection = Task { await run() }
     }
 
@@ -62,7 +62,7 @@ final class LiveUpdates {
                 // A parent's access token lasts about an hour. Signing out on
                 // a revoked token is left to the ordinary API requests, which
                 // already do it; this only tries to get a fresh one.
-                if SessionManager.shared.parentAccessToken != nil,
+                if SessionManager.shared.parentSessionToken == nil, SessionManager.shared.parentAccessToken != nil,
                    await APIClient.shared.refreshParentToken() == .refreshed {
                     continue
                 }

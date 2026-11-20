@@ -7,20 +7,15 @@ private let taskDetailBottomAnchorID = "task-detail-bottom-anchor"
 /// it's taken (so the tile shows something real immediately, not a
 /// placeholder); `downloadURL` is set instead when this photo came from
 /// reopening an already-submitted task (the backend's copy — there's no
-/// local UIImage left once the app has relaunched). `submissionId` and
-/// `uploadState` track the real upload to the backend, independent of the
-/// local capture.
+/// local UIImage left once the app has relaunched). `photoId` is the
+/// photo's own id, the server's submission id too: Send names it, and
+/// PhotoUploads carries its upload (`uploadState` follows it there).
 private struct CapturedPhoto: Identifiable, Equatable {
     let id = UUID()
     var image: UIImage?
     var downloadURL: String?
-    var submissionId: String?
+    var photoId: String?
     var uploadState: UploadState = .idle
-    // The real on-disk cache backing this photo's upload — see capture()/
-    // upload(). Lets the upload survive the app being killed/backgrounded
-    // mid-flight (the pending write in LocalStore points at this same
-    // file) instead of only ever existing as an in-memory UIImage.
-    var pendingWriteId: String?
 
     enum UploadState: Equatable { case idle, uploading, uploaded, failed }
 
@@ -29,7 +24,9 @@ private struct CapturedPhoto: Identifiable, Equatable {
 
 struct TaskDetailView: View {
     let task: KidTask
-    var onComplete: (_ photoCount: Int, _ note: String?) -> Void
+    /// The kid's Send: queues it and returns the outbox write's id, which
+    /// this screen waits on (nil when there's nothing to send it to).
+    var onComplete: (_ photoCount: Int, _ note: String?, _ photoIds: [String]) -> String?
     var onRequestBypass: (String) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var photos: [CapturedPhoto] = []
@@ -43,12 +40,17 @@ struct TaskDetailView: View {
     // evidence is still pending review — that's the parent's business, not
     // something to make the kid sit and wonder about.
     @State private var justSubmitted = false
-    // Pops the big tick in once the submitted screen is up.
-    @State private var celebrate = false
     // Haptics at the kid's own tap, the moment it's sent: success for a
     // task sent in, a soft tap for asking to skip.
     @State private var sentTick = 0
     @State private var skipSentTick = 0
+    // Send waits for the server's yes (photos checked in R2) before
+    // "Good Job!": a moment on a good connection. Offline, or past
+    // `sendWait`, it's saved and says so; refused, it says that.
+    @State private var sending = false
+    @State private var savedOffline = false
+    @State private var sendFailed = false
+    private static let sendWait: Double = 8
     @State private var showBypassSheet = false
     @State private var bypassSent = false
     @State private var viewerIndex: Int?
@@ -81,7 +83,8 @@ struct TaskDetailView: View {
     // created. Photos themselves load separately (see .task below) — a
     // reopened task has no local UIImage any more, only what the backend
     // has, so they can't be seeded synchronously here.
-    init(task: KidTask, onComplete: @escaping (_ photoCount: Int, _ note: String?) -> Void, onRequestBypass: @escaping (String) -> Void = { _ in }) {
+    init(task: KidTask, onComplete: @escaping (_ photoCount: Int, _ note: String?, _ photoIds: [String]) -> String?,
+         onRequestBypass: @escaping (String) -> Void = { _ in }) {
         self.task = task
         self.onComplete = onComplete
         self.onRequestBypass = onRequestBypass
@@ -90,6 +93,8 @@ struct TaskDetailView: View {
     }
 
     var body: some View {
+        GeometryReader { geo in
+        let wide = kid.isRegular && geo.size.width > geo.size.height
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -97,10 +102,10 @@ struct TaskDetailView: View {
                         if bypassSent {
                             bypassSentCard
                         } else if !submitted {
-                            VStack(alignment: .leading, spacing: 0) { notYetSubmittedContent }
+                            VStack(alignment: .leading, spacing: 0) { notYetSubmittedContent(wide: wide) }
                                 .transition(.asymmetric(insertion: .opacity, removal: .opacity.combined(with: .offset(y: -20))))
                         } else {
-                            VStack(alignment: .leading, spacing: 0) { submittedContent }
+                            VStack(alignment: .leading, spacing: 0) { submittedContent(height: geo.size.height) }
                                 .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.94, anchor: .top)), removal: .opacity))
                         }
 
@@ -111,8 +116,8 @@ struct TaskDetailView: View {
                         // leaving them hidden behind it.
                         Color.clear.frame(height: 1).id(taskDetailBottomAnchorID)
                     }
-                    .padding(20)
-                    .kidContentColumn(kid.contentMaxWidth)
+                    .padding(wide ? 32 : 20)
+                    .kidContentColumn(wide && !submitted && !bypassSent ? nil : kid.contentMaxWidth)
                 }
                 // A blanket dismissKeyboardOnTap() used to sit on this whole
                 // screen and got removed for fighting the field's own tap-
@@ -136,7 +141,7 @@ struct TaskDetailView: View {
                     }
                 }
             }
-            .background(KidTheme.background)
+            .background(EPaperBackground())
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
@@ -150,9 +155,25 @@ struct TaskDetailView: View {
         // touch — see SwipeToDismiss's own doc comment.
         .swipeToDismiss(interactive: false) { dismiss() }
         .task {
+            if DemoMode.kidHandIn, !submitted {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                handIn()
+            }
             guard let occurrenceId = task.occurrenceId else { return }
             await loadExistingSubmissions(occurrenceId: occurrenceId)
-            resumePendingUploads()
+            showQueuedPhotos(occurrenceId: occurrenceId)
+        }
+        // A photo's upload is PhotoUploads' (it outlives this screen); its
+        // state shows here, a failed one with its retry.
+        .onChange(of: PhotoUploads.shared.states) { _, states in
+            for i in photos.indices {
+                guard let id = photos[i].photoId, let state = states[id] else { continue }
+                switch state {
+                case .uploading: photos[i].uploadState = .uploading
+                case .uploaded: photos[i].uploadState = .uploaded
+                case .failed: photos[i].uploadState = .failed
+                }
+            }
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraCapture(
@@ -193,37 +214,92 @@ struct TaskDetailView: View {
         // popping in.
         .sensoryFeedback(.success, trigger: sentTick)
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.7), trigger: skipSentTick)
+        }
     }
 
     // MARK: - Not-yet-submitted flow (capture + note + "All done!")
 
     /// Hands the task in the moment the kid says they're done.
     ///
-    /// The submit used to ride on "Back to today", so the other two ways out
+    /// The submit used to ride on the button out of this screen, so the other two ways out
     /// of this screen — the Back button and a swipe down — closed it after
     /// it had already said "submitted", and nothing ever reached the server:
     /// the task sat at pending and the parent saw "waiting". Called again
     /// after "Redo this", which is a real resubmission.
+    ///
+    /// Confirmed by the server, not assumed (2026-11-19): Send names the
+    /// photos, waits in the outbox until they're uploaded, and the server
+    /// counts each only once R2 has it. "Good Job!" waits for that yes,
+    /// usually under a second, since photos start uploading the moment
+    /// they're taken. Offline, or still going after `sendWait`, it's saved
+    /// on the device and goes by itself; the kid is told so.
     private func handIn() {
+        guard !sending else { return }
         noteFocused = false
-        celebrate = false
-        sentTick += 1
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
-            submitted = true
-            justSubmitted = true
-        }
+        sendFailed = false
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        onComplete(photos.count, trimmed.isEmpty ? nil : trimmed)
+        let photoIds = photos.compactMap(\.photoId)
+        sending = true
+        Task {
+            await PhotoUploads.shared.ready(photoIds)
+            let writeId = onComplete(photos.count, trimmed.isEmpty ? nil : trimmed, photoIds)
+            let arrival: Outbox.Arrival
+            if DemoMode.isBuild || writeId == nil {
+                arrival = .sent
+            } else if !ConnectionStatus.shared.isOnline {
+                arrival = .notYet
+            } else {
+                arrival = await Outbox.waitUntilSent(writeId!, seconds: Self.sendWait)
+            }
+            sending = false
+            switch arrival {
+            case .sent:
+                sentTick += 1
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
+                    submitted = true
+                    justSubmitted = true
+                }
+            case .notYet:
+                skipSentTick += 1
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
+                    savedOffline = true
+                    submitted = true
+                }
+            case .refused:
+                withAnimation(.easeOut(duration: 0.2)) { sendFailed = true }
+            }
+        }
     }
 
-    @ViewBuilder private var notYetSubmittedContent: some View {
+    // Wide (an iPad sideways): the task, the note and the buttons on the
+    // left, the photos on the right, so the whole screen is used and
+    // nothing needs scrolling. Upright: one column, top to bottom.
+    @ViewBuilder private func notYetSubmittedContent(wide: Bool) -> some View {
+        if wide {
+            HStack(alignment: .top, spacing: 32) {
+                VStack(alignment: .leading, spacing: 0) {
+                    taskHeader
+                    noteAndActions(wide: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 0) {
+                    photoArea(wide: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else {
+            taskHeader
+            photoArea(wide: false)
+            noteAndActions(wide: false)
+        }
+    }
+
+    @ViewBuilder private var taskHeader: some View {
         HStack(alignment: .top, spacing: 12) {
             Text(task.title)
                 .font(Typography.display(28, weight: .heavy))
                 .foregroundStyle(KidTheme.ink)
             Spacer()
-            Circle().fill(KidTheme.green).frame(width: 44, height: 44)
-                .overlay(Image(systemName: "speaker.wave.2.fill").font(.system(size: 18)).foregroundStyle(.white))
         }
         Text(task.desc)
             .font(Typography.font(16, weight: .medium))
@@ -252,22 +328,25 @@ struct TaskDetailView: View {
             .padding(.top, 16)
         }
 
+    }
+
+    @ViewBuilder private func photoArea(wide: Bool) -> some View {
         if photos.isEmpty {
             Button { showCamera = true } label: {
                 VStack(spacing: 16) {
-                    Circle().fill(KidTheme.green).frame(width: 84, height: 84)
+                    Circle().fill(KidTheme.paperButton).frame(width: 84, height: 84)
                         .overlay(Image(systemName: "camera.fill").font(.system(size: 36, weight: .bold)).foregroundStyle(.white))
                     Text("Tap to take a photo").font(Typography.display(20, weight: .bold))
                     Text("Show us what you did").font(Typography.font(14, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 280)
+                .frame(height: wide ? 440 : 280)
                 .background(KidTheme.cream)
                 .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(KidTheme.line, style: StrokeStyle(lineWidth: 2.5, dash: [7])))
                 .clipShape(RoundedRectangle(cornerRadius: 24))
             }
             .buttonStyle(.plain)
-            .padding(.top, 24)
+            .padding(.top, wide ? 0 : 24)
         } else {
             LazyVGrid(columns: photoGridColumns, spacing: 10) {
                 ForEach(photos) { photo in
@@ -280,6 +359,7 @@ struct TaskDetailView: View {
                         // than silently swapping back in — makes the retry
                         // an explicit, visible action. Also how a failed
                         // upload is cleared to try again.
+                        if let photoId = photo.photoId, photo.downloadURL == nil { PhotoUploads.shared.discard(photoId) }
                         withAnimation(.easeOut(duration: 0.15)) { photos.removeAll { $0.id == photo.id } }
                     }
                 }
@@ -310,9 +390,12 @@ struct TaskDetailView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.top, 24)
+            .padding(.top, wide ? 0 : 24)
         }
 
+    }
+
+    @ViewBuilder private func noteAndActions(wide: Bool) -> some View {
         Text("Add a note (optional)")
             .font(Typography.display(15.5, weight: .bold))
             .foregroundStyle(KidTheme.ink)
@@ -331,28 +414,35 @@ struct TaskDetailView: View {
         // solid green-deep base for the 3D lift — a duplicate offset
         // rectangle behind the face, not a `.shadow()` (which would also
         // shadow the label text itself, ghosting a second copy of it
-        // below). Never disabled by photo count any more — a photo is
-        // optional, so "All done!" always has to be reachable.
+        // below). A photo is always optional (2026-11-05): "All done!" is
+        // always there.
         Button { handIn() } label: {
-            Text("All done!")
-                .font(Typography.display(20, weight: .heavy))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 58)
-                .background(
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 20).fill(KidTheme.greenDeep).offset(y: 5)
-                        RoundedRectangle(cornerRadius: 20).fill(KidTheme.green)
-                    }
-                    // Flattened into one layer first so any future
-                    // press/disabled dimming can't split the two
-                    // rectangles apart into a smeared double edge.
-                    .compositingGroup()
-                )
+            HStack(spacing: 10) {
+                if sending {
+                    ProgressView().tint(KidTheme.paperInk)
+                    Text("Sending…")
+                } else {
+                    Text("All done!")
+                }
+            }
+            .font(KidTheme.buttonFont(20))
+            .foregroundStyle(KidTheme.paperInk)
+            .frame(maxWidth: .infinity)
+            .frame(height: 58)
         }
-        .buttonStyle(KidPressStyle())
+        // Its own success haptic plays once the server has it (sentTick),
+        // so no press tap.
+        .buttonStyle(KidRaisedButtonStyle.paper(tapHaptic: false))
+        .disabled(sending)
         .padding(.top, photos.isEmpty ? 18 : 22)
-        .padding(.bottom, 5)
+
+        if sendFailed {
+            Text("That didn't send. Try again.")
+                .font(Typography.font(14, weight: .bold))
+                .foregroundStyle(Color(hex: "EA580C"))
+                .frame(maxWidth: .infinity)
+                .padding(.top, 10)
+        }
 
         Button { showBypassSheet = true } label: {
             HStack(spacing: 8) {
@@ -371,36 +461,57 @@ struct TaskDetailView: View {
 
     // MARK: - Submitted flow (recap, no "waiting for parent" framing)
 
-    @ViewBuilder private var submittedContent: some View {
-        if justSubmitted {
-            ZStack {
-                Circle().fill(KidTheme.green.opacity(0.18)).frame(width: 112, height: 112)
-                    .scaleEffect(celebrate ? 1 : 0.4)
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 76))
-                    .foregroundStyle(KidTheme.green)
-                    .scaleEffect(celebrate ? 1 : 0.2)
-                    .rotationEffect(.degrees(celebrate ? 0 : -30))
+    // Centred on the screen. Right after "All done!": the party popper
+    // bursts, "Congrats!", keep it up. Reopened while it waits: the
+    // hourglass and "Task is pending approval". Approved: the confetti,
+    // already burst, and a green Approved.
+    @ViewBuilder private func submittedContent(height: CGFloat) -> some View {
+        VStack(spacing: 22) {
+            if (justSubmitted || task.approved) && !savedOffline {
+                PartyPopperBurst(plays: justSubmitted)
+                    .frame(width: kid.of(260, 320), height: kid.of(260, 320))
+                    .accessibilityHidden(true)
+            } else {
+                PendingHourglass()
+                    .frame(width: kid.of(220, 270), height: kid.of(220, 270))
+                    .accessibilityHidden(true)
             }
-            .opacity(celebrate ? 1 : 0)
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, 18)
-            .onAppear {
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.55).delay(0.12)) { celebrate = true }
+            if task.approved {
+                Label("Approved", systemImage: "checkmark.circle.fill")
+                    .font(Typography.display(kid.of(20, 24), weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 28)
+                    .frame(height: kid.of(54, 62))
+                    .background(Capsule().fill(KidTheme.green))
+            } else if savedOffline {
+                VStack(spacing: 8) {
+                    Text("Saved!")
+                        .font(Typography.display(kid.of(32, 38), weight: .heavy))
+                        .foregroundStyle(KidTheme.ink)
+                    Text("It'll send when you're back online.")
+                        .font(Typography.font(kid.of(18, 21), weight: .bold))
+                        .foregroundStyle(KidTheme.inkSoft)
+                }
+                .multilineTextAlignment(.center)
+            } else if justSubmitted {
+                VStack(spacing: 8) {
+                    Text("Good Job! 🎉")
+                        .font(Typography.display(kid.of(32, 38), weight: .heavy))
+                        .foregroundStyle(KidTheme.ink)
+                    Text("Keep up the great work!")
+                        .font(Typography.font(kid.of(18, 21), weight: .bold))
+                        .foregroundStyle(KidTheme.inkSoft)
+                }
+                .multilineTextAlignment(.center)
+            } else {
+                Text("Task is pending approval")
+                    .font(Typography.display(kid.of(22, 28), weight: .heavy))
+                    .foregroundStyle(KidTheme.ink)
+                    .multilineTextAlignment(.center)
             }
-            .accessibilityHidden(true)
         }
-
-        VStack(alignment: .leading, spacing: 6) {
-            Text(justSubmitted ? "Evidence submitted 🎉" : "All done! ✅")
-                .font(Typography.display(21, weight: .heavy)).foregroundStyle(KidTheme.ink)
-            Text(justSubmitted ? "Nice work! Here's what you turned in." : "Here's what you turned in for this one.")
-                .font(Typography.font(14.5, weight: .regular)).foregroundStyle(KidTheme.inkSoft)
-        }
-        .padding(22)
-        .background(KidTheme.cream)
-        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
-        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: height * 0.62)
 
         // A photo that didn't make it up (a network blip, or the server
         // wasn't configured yet — see PhotoCompression/capture(_:)) used to
@@ -477,139 +588,52 @@ struct TaskDetailView: View {
                 }
                 .foregroundStyle(KidTheme.greenDeep)
                 .frame(maxWidth: .infinity)
-                .frame(height: 50)
+                .frame(height: 56)
                 .background(KidTheme.cream)
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(KidTheme.line, lineWidth: 1.5))
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             }
             .buttonStyle(.plain)
-            .padding(.top, 20)
+            .padding(.top, 36)
         }
 
-        Button { dismiss() } label: {
-            Text("Back to today")
-                .font(Typography.font(18, weight: .heavy))
-                .foregroundStyle(KidTheme.ink)
-                .frame(maxWidth: .infinity).frame(height: 56)
-                .background(.white)
-                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(KidTheme.line, lineWidth: 2))
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-        }
-        .buttonStyle(.plain)
-        .padding(.top, 20)
     }
 
     // MARK: - Real capture + upload
 
     private var hasFailedUploads: Bool { photos.contains { $0.uploadState == .failed } }
 
+    /// The upload starts the moment the photo is taken (PhotoUploads), so
+    /// it's usually up before the kid presses Send.
     private func capture(_ image: UIImage) {
-        let photo = CapturedPhoto(image: image, uploadState: .uploading)
+        var photo = CapturedPhoto(image: image, uploadState: .uploading)
+        if let occurrenceId = task.occurrenceId, let childId = SessionManager.shared.activeChildId {
+            photo.photoId = PhotoUploads.shared.add(image, occurrenceId: occurrenceId, taskId: task.id, childId: childId)
+        } else {
+            // Nothing to attach it to (shouldn't happen: every synced task
+            // has an occurrence): shown, marked as not sent.
+            photo.uploadState = .failed
+        }
         withAnimation(.easeOut(duration: 0.15)) { photos.append(photo) }
-        upload(photoId: photo.id, image: image)
     }
 
-    /// Retries every failed photo using the image already on the device —
-    /// there's no reason to make a kid retake a perfectly good photo just
-    /// because the upload itself (a network blip, or the server not being
-    /// configured yet) is what actually failed.
+    /// Tries every photo that didn't go, from the files already saved on
+    /// the device: no retaking a good photo because the network failed.
     private func retryFailedUploads() {
-        for photo in photos where photo.uploadState == .failed {
-            guard let image = photo.image else { continue }
-            if let i = photos.firstIndex(where: { $0.id == photo.id }) { photos[i].uploadState = .uploading }
-            upload(photoId: photo.id, image: image)
-        }
+        PhotoUploads.shared.retryNow()
     }
 
-    /// Standard practice for a mobile upload, not just an in-memory
-    /// attempt: the compressed file is written to disk immediately — real
-    /// local caching, not just a UIImage that's gone the moment this view
-    /// (or the app) closes — and tracked as a real PendingWrite in
-    /// LocalStore. If the app is killed or backgrounded mid-upload, the
-    /// file and the queue entry both survive; resumePendingUploads() (see
-    /// .task below) picks it back up on next launch without the kid ever
-    /// needing to retake anything. The queue entry is only removed once
-    /// the real upload actually finishes.
-    private func upload(photoId: UUID, image: UIImage) {
-        guard let occurrenceId = task.occurrenceId, let childId = SessionManager.shared.activeChildId else {
-            // No occurrence to attach evidence to — shouldn't normally
-            // happen (every synced task has one) — keep the photo visible
-            // locally rather than losing it, just without a real upload
-            // behind it.
-            if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
-            return
-        }
-        Task { @MainActor in
-            // The JPEG re-encode is real CPU work and used to run right
-            // here, synchronously, before this Task even started — which
-            // blocked the screen for its duration on every single photo,
-            // and visibly worse capturing several in a row, since each one
-            // froze the UI before the next could even show. Detached so it
-            // runs on a background thread instead; everything after this
-            // await stays on the main actor same as before, so the @State
-            // mutations below are still safe.
-            guard let data = await Task.detached(priority: .userInitiated, operation: {
-                PhotoCompression.compress(image)
-            }).value else {
-                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
-                return
-            }
-            guard let fileURL = LocalStore.cacheFile(data: data, suffix: "jpg") else {
-                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
-                return
-            }
-            // A retry re-compresses and re-caches fresh, so the previous
-            // attempt's queue entry (and its now-redundant file) would
-            // otherwise just sit there orphaned forever.
-            if let previousId = photos.first(where: { $0.id == photoId })?.pendingWriteId,
-               let stale = LocalStore.shared.pendingWrites(childId: childId).first(where: { $0.id == previousId }) {
-                if let path = stale.localFilePath { try? FileManager.default.removeItem(atPath: path) }
-                LocalStore.shared.removePendingWrite(stale)
-            }
-            let write = PendingWrite(childId: childId, kind: "uploadPhoto", occurrenceId: occurrenceId,
-                                      localFilePath: fileURL.path, contentType: "image/jpeg")
-            LocalStore.shared.queueWrite(write)
-            if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].pendingWriteId = write.id }
-
-            do {
-                let result = try await APIClient.shared.createSubmission(occurrenceId: occurrenceId, kind: "photo", contentType: "image/jpeg")
-                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].submissionId = result.submissionId }
-                try await APIClient.shared.uploadToPresignedURL(result.uploadURL, data: data, contentType: "image/jpeg")
-                try await APIClient.shared.completeSubmission(id: result.submissionId)
-                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .uploaded }
-                LocalStore.shared.removePendingWrite(write)
-                try? FileManager.default.removeItem(at: fileURL)
-            } catch {
-                // Left queued on purpose — this is exactly what
-                // resumePendingUploads() retries later, whether that's a
-                // manual tap on the (now-visible, since this is a real
-                // failure) retry icon, or automatically next launch.
-                if let i = photos.firstIndex(where: { $0.id == photoId }) { photos[i].uploadState = .failed }
-            }
-        }
-    }
-
-    /// Picks up any photo upload that was still queued from a previous
-    /// session for this exact task — the app got backgrounded/killed
-    /// before it finished, but the file (and the queue entry pointing at
-    /// it) survived on disk. Runs once per appearance; a write that's
-    /// already represented in `photos` (this same session) is skipped.
-    private func resumePendingUploads() {
-        guard let occurrenceId = task.occurrenceId, let childId = SessionManager.shared.activeChildId else { return }
-        let known = Set(photos.compactMap(\.pendingWriteId))
-        for write in LocalStore.shared.pendingWrites(childId: childId)
-        where write.kind == "uploadPhoto" && write.occurrenceId == occurrenceId && !known.contains(write.id) {
-            guard let path = write.localFilePath, let image = UIImage(contentsOfFile: path) else {
-                // The file's gone (e.g. iOS reclaimed Caches under storage
-                // pressure) — nothing left to retry from; drop the
-                // now-meaningless queue entry rather than leave it stuck.
-                LocalStore.shared.removePendingWrite(write)
-                continue
-            }
-            var photo = CapturedPhoto(image: image, uploadState: .uploading)
-            photo.pendingWriteId = write.id
-            photos.append(photo)
-            upload(photoId: photo.id, image: image)
+    /// Photos taken for this task that haven't gone yet (the app was
+    /// closed, or there was no connection): shown again, still on their
+    /// way.
+    private func showQueuedPhotos(occurrenceId: String) {
+        let shown = Set(photos.compactMap(\.photoId))
+        for write in LocalStore.shared.uploadWrites()
+        where write.occurrenceId == occurrenceId && !shown.contains(write.photoId ?? "") {
+            guard let path = write.localFilePath, let image = UIImage(contentsOfFile: path) else { continue }
+            let state = write.photoId.flatMap { PhotoUploads.shared.state(of: $0) }
+            photos.append(CapturedPhoto(image: image, photoId: write.photoId,
+                                        uploadState: state == .failed ? .failed : (write.uploadedAt == nil ? .uploading : .uploaded)))
         }
     }
 
@@ -619,8 +643,10 @@ struct TaskDetailView: View {
     private func loadExistingSubmissions(occurrenceId: String) async {
         guard photos.isEmpty, task.submittedPhotoCount > 0 || task.done else { return }
         guard let subs = try? await APIClient.shared.fetchSubmissions(occurrenceId: occurrenceId), !subs.isEmpty else { return }
-        photos = subs.filter { $0.kind == "photo" }.map {
-            CapturedPhoto(downloadURL: $0.downloadUrl, submissionId: $0.id, uploadState: $0.status == "uploaded" ? .uploaded : .uploading)
+        // Only photos R2 has: one still on its way from this device shows
+        // from its saved file instead (showQueuedPhotos).
+        photos = subs.filter { $0.kind == "photo" && $0.status == "uploaded" }.map {
+            CapturedPhoto(downloadURL: $0.downloadUrl, photoId: $0.id, uploadState: $0.status == "uploaded" ? .uploaded : .uploading)
         }
     }
 
@@ -646,19 +672,6 @@ struct TaskDetailView: View {
             .background(KidTheme.lavender)
             .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(KidTheme.ink, lineWidth: 2.5))
             .clipShape(RoundedRectangle(cornerRadius: 20))
-
-            Button {
-                dismiss()
-            } label: {
-                Text("Back to today")
-                    .font(Typography.font(18, weight: .heavy))
-                    .foregroundStyle(KidTheme.ink)
-                    .frame(maxWidth: .infinity).frame(height: 56)
-                    .background(.white)
-                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(KidTheme.line, lineWidth: 2))
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-            }
-            .buttonStyle(.plain)
         }
     }
 }
@@ -962,6 +975,10 @@ private struct BypassRequestSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: kid.of(16, 22)) {
+                // A plain x, not the toolbar's Cancel: iOS draws that as a
+                // frosted glass pill with a soft shadow, which read as blurry.
+                SheetCloseButton(label: "Cancel", action: onCancel)
+                    .padding(.leading, -6)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Ask to skip this one?")
                         .font(Typography.display(kid.of(20, 26), weight: .heavy)).foregroundStyle(KidTheme.ink)
@@ -980,35 +997,21 @@ private struct BypassRequestSheet: View {
                 if !kid.isRegular { Spacer(minLength: 0) }
 
                 Button { onSend(reason.trimmingCharacters(in: .whitespacesAndNewlines)) } label: {
-                    Text("Send to a parent")
+                    Text("Send")
                         .font(Typography.display(kid.of(18, 21), weight: .heavy))
                         .foregroundStyle(canSend ? .white : Color(hex: "B5C8BC"))
                         .frame(maxWidth: .infinity)
                         .frame(height: kid.of(58, 66))
-                        .background(
-                            // Offset duplicate behind the face, not
-                            // `.shadow()` — that ghosts the label text too.
-                            // Dropped (not just faded) while disabled, along
-                            // with the fill swap below — fading both
-                            // overlapping layers together via `.opacity()`
-                            // (the old approach) exposed the seam between
-                            // them as a smeared double edge instead of
-                            // reading as one grayed-out button.
-                            ZStack {
-                                if canSend {
-                                    RoundedRectangle(cornerRadius: 20).fill(Color(hex: "5B3FA6")).offset(y: 5)
-                                }
-                                RoundedRectangle(cornerRadius: 20).fill(canSend ? KidTheme.lavenderText : KidTheme.line)
-                            }
-                        )
                 }
-                .buttonStyle(.plain)
+                // A deep purple, so the white label is crisp: on the light
+                // lavender it had too little contrast and its edges smeared.
+                .buttonStyle(KidRaisedButtonStyle(face: Color(hex: "5B3FA6"), base: Color(hex: "3F2A7A")))
                 .disabled(!canSend)
             }
             .padding(kid.of(20, 32))
             .kidContentColumn(kid.isRegular ? 620 : nil)
             .frame(maxHeight: .infinity, alignment: kid.isRegular ? .center : .top)
-            .background(KidTheme.background)
+            .background(EPaperBackground())
             // Guarded the same way as TaskDetailView's own note field
             // above: only acts when the field is already focused, so it
             // can only take focus away, never race the tap that's trying
@@ -1020,21 +1023,272 @@ private struct BypassRequestSheet: View {
                     if reasonFocused { reasonFocused = false }
                 }
             )
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel", action: onCancel) }
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .swipeToDismiss(interactive: false, onCancel)
     }
 }
 
 
-/// The kid's big buttons press down under the finger the moment they're
-/// touched, so a tap always feels answered.
-struct KidPressStyle: ButtonStyle {
+/// The kid's big raised buttons: a coloured face on a darker base, like a
+/// key. Pressed, the face sinks onto the base (no shrinking, so the base
+/// never shows as a shadow) with a light tap, the cheapest haptic there is.
+/// Disabled: flat and grey. The label sets its own size and text colour.
+extension KidRaisedButtonStyle {
+    /// The kid's e-paper button (2026-11-09, the user's call): pale sage
+    /// paper, a fine edge, a soft paper base; its words are
+    /// `KidTheme.paperInk`. Warm and easy on the eyes, nothing glaring.
+    static func paper(tapHaptic: Bool = true) -> KidRaisedButtonStyle {
+        KidRaisedButtonStyle(face: KidTheme.paperButton, base: KidTheme.paperButtonBase,
+                             edge: KidTheme.paperButtonEdge, depth: 4, tapHaptic: tapHaptic)
+    }
+}
+
+struct KidRaisedButtonStyle: ButtonStyle {
+    var face: Color
+    var base: Color
+    /// A fine edge round the face (the e-paper button's).
+    var edge: Color? = nil
+    var disabledFace: Color = KidTheme.line
+    var cornerRadius: CGFloat = 20
+    var depth: CGFloat = 5
+    /// Off where the tap already has its own haptic (a success, say).
+    var tapHaptic = true
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .animation(.spring(duration: 0.18, bounce: 0), value: configuration.isPressed)
+        Raised(configuration: configuration, style: self)
+    }
+
+    private struct Raised: View {
+        let configuration: Configuration
+        let style: KidRaisedButtonStyle
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let pressed = configuration.isPressed && isEnabled
+            // Flat, 2D (2026-11-15, the user's call): the face alone, no
+            // raised base under it (`base` and `depth` are kept, unused); a
+            // press dims and shrinks it a touch.
+            configuration.label
+                .background(RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
+                    .fill(isEnabled ? style.face : style.disabledFace))
+                .opacity(pressed ? 0.85 : 1)
+                .scaleEffect(pressed ? 0.98 : 1)
+            .animation(.spring(duration: 0.12, bounce: 0), value: pressed)
+            .sensoryFeedback(.impact(weight: .light), trigger: pressed) { _, now in style.tapHaptic && now }
+        }
+    }
+}
+
+// MARK: - The party popper
+
+/// A party popper going off: the cone kicks in, then confetti and three
+/// streamers burst out of its mouth and the confetti settles a little.
+/// Drawn on a 200-point square. `plays: false` (or Reduce Motion) shows it
+/// already burst, still.
+private struct PartyPopperBurst: View {
+    var plays: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var cone = false
+    @State private var burst: CGFloat = 0
+    @State private var float = false
+    // A soft tap the moment it goes off (the user asked for the burst to be
+    // felt), after the success tap of "All done!" itself.
+    @State private var popTick = 0
+
+    private static let mouth = CGPoint(x: 98, y: 112)
+    private static let colors = ["3FCE64", "B9F04F", "FFC93C", "FF6B9A", "4D9CFF", "A86BFF", "FF8A3D"].map { Color(hex: $0) }
+    /// Each piece: direction (degrees), distance, spin, colour, kind
+    /// (0 strip, 1 dot, 2 squiggle). Fixed, so it bursts the same way each time.
+    private static let pieces: [(angle: Double, distance: CGFloat, spin: Double, color: Int, kind: Int)] = [
+        (-117, 52, 71, 0, 0), (-113, 51, 72, 1, 1), (-102, 83, 138, 2, 2), (-102, 72, 50, 3, 0), (-98, 53, 39, 4, 1),
+        (-87, 85, 145, 5, 2), (-83, 57, 56, 6, 0), (-79, 80, 154, 0, 1), (-72, 52, 109, 1, 2), (-69, 70, 32, 2, 0),
+        (-65, 52, 168, 3, 1), (-57, 72, 54, 4, 2), (-52, 73, 159, 5, 0), (-47, 70, 75, 6, 1), (-44, 67, 29, 0, 2),
+        (-42, 84, 8, 1, 0), (-39, 76, 50, 2, 1), (-30, 69, 62, 3, 2), (-21, 57, 74, 4, 0), (-22, 76, 50, 5, 1),
+        (-16, 81, 58, 6, 2), (-10, 88, 18, 0, 0), (-9, 58, 138, 1, 1), (1, 58, 60, 2, 2), (2, 68, 8, 3, 0), (12, 87, 172, 4, 1),
+    ]
+
+    var body: some View {
+        GeometryReader { geo in
+            let s = min(geo.size.width, geo.size.height) / 200
+            ZStack(alignment: .topLeading) {
+                streamers(s)
+                confetti(s)
+                    .offset(y: float ? 4 * s : 0)
+                popper(s)
+            }
+            .frame(width: 200 * s, height: 200 * s, alignment: .topLeading)
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .onAppear(perform: play)
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: popTick)
+    }
+
+    private func play() {
+        guard plays, !reduceMotion else {
+            cone = true; burst = 1
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { popTick += 1 }
+        withAnimation(.spring(duration: 0.35, bounce: 0.4)) { cone = true }
+        withAnimation(.spring(duration: 0.9, bounce: 0.15).delay(0.3)) { burst = 1 }
+        // One slow settle, not an endless float: a looping animation keeps
+        // the screen redrawing (about a tenth of the CPU) for as long as
+        // it's open.
+        withAnimation(.easeInOut(duration: 1.6).delay(1.1)) { float = true }
+    }
+
+    private func streamers(_ s: CGFloat) -> some View {
+        let m = Self.mouth
+        let paths: [(Color, [CGPoint])] = [
+            (Self.colors[3], [CGPoint(x: 120, y: 70), CGPoint(x: 150, y: 92), CGPoint(x: 160, y: 60)]),
+            (Self.colors[4], [CGPoint(x: 80, y: 70), CGPoint(x: 110, y: 50), CGPoint(x: 96, y: 22)]),
+            (Self.colors[0], [CGPoint(x: 140, y: 110), CGPoint(x: 150, y: 140), CGPoint(x: 184, y: 128)]),
+        ]
+        return ZStack(alignment: .topLeading) {
+            ForEach(0..<paths.count, id: \.self) { i in
+                let pts = paths[i].1
+                Path { p in
+                    p.move(to: CGPoint(x: m.x * s, y: m.y * s))
+                    p.addCurve(to: CGPoint(x: pts[2].x * s, y: pts[2].y * s),
+                               control1: CGPoint(x: pts[0].x * s, y: pts[0].y * s),
+                               control2: CGPoint(x: pts[1].x * s, y: pts[1].y * s))
+                }
+                .trim(from: 0, to: burst)
+                .stroke(paths[i].0, style: StrokeStyle(lineWidth: 4 * s, lineCap: .round))
+            }
+        }
+    }
+
+    private func confetti(_ s: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(0..<Self.pieces.count, id: \.self) { i in
+                let piece = Self.pieces[i]
+                let rad = piece.angle * .pi / 180
+                let x = Self.mouth.x + CGFloat(cos(rad)) * piece.distance * burst
+                let y = Self.mouth.y + CGFloat(sin(rad)) * piece.distance * burst
+                confettiPiece(piece.kind, Self.colors[piece.color], s)
+                    .rotationEffect(.degrees(piece.spin * Double(burst) + 180 * Double(burst)))
+                    .position(x: x * s, y: y * s)
+                    .opacity(burst > 0.05 ? 1 : 0)
+            }
+        }
+        .frame(width: 200 * s, height: 200 * s)
+    }
+
+    @ViewBuilder private func confettiPiece(_ kind: Int, _ color: Color, _ s: CGFloat) -> some View {
+        switch kind {
+        case 0:
+            RoundedRectangle(cornerRadius: 1.5 * s).fill(color).frame(width: 10 * s, height: 5 * s)
+        case 1:
+            Circle().fill(color).frame(width: 7.2 * s, height: 7.2 * s)
+        default:
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 3 * s))
+                p.addQuadCurve(to: CGPoint(x: 6 * s, y: 3 * s), control: CGPoint(x: 3 * s, y: -2 * s))
+                p.addQuadCurve(to: CGPoint(x: 12 * s, y: 3 * s), control: CGPoint(x: 9 * s, y: 8 * s))
+            }
+            .stroke(color, style: StrokeStyle(lineWidth: 2.6 * s, lineCap: .round))
+            .frame(width: 12 * s, height: 6 * s)
+        }
+    }
+
+    // The cone, pointing down and left, with pale stripes and a darker
+    // rim at its mouth. It kicks back a little as it goes off.
+    private func popper(_ s: CGFloat) -> some View {
+        let cone = Path { p in
+            p.move(to: CGPoint(x: 38 * s, y: 178 * s))
+            p.addLine(to: CGPoint(x: 72 * s, y: 98 * s))
+            p.addLine(to: CGPoint(x: 118 * s, y: 144 * s))
+            p.closeSubpath()
+        }
+        return ZStack(alignment: .topLeading) {
+            cone.fill(LinearGradient(colors: [Color(hex: "FF8A3D"), Color(hex: "FFC93C")],
+                                     startPoint: .bottomLeading, endPoint: .topTrailing))
+            Path { p in
+                for (a, b) in [((40, 140), (90, 190)), ((52, 116), (110, 174)), ((64, 92), (130, 158))] {
+                    p.move(to: CGPoint(x: CGFloat(a.0) * s, y: CGFloat(a.1) * s))
+                    p.addLine(to: CGPoint(x: CGFloat(b.0) * s, y: CGFloat(b.1) * s))
+                }
+            }
+            .stroke(Color.white.opacity(0.55), lineWidth: 7 * s)
+            .clipShape(cone)
+            Ellipse()
+                .fill(Color(hex: "E2701F"))
+                .frame(width: 66 * s, height: 18 * s)
+                .rotationEffect(.degrees(45))
+                .position(x: 95 * s, y: 121 * s)
+        }
+        .frame(width: 200 * s, height: 200 * s, alignment: .topLeading)
+        .scaleEffect(self.cone ? 1 : 0.5, anchor: UnitPoint(x: 0.4, y: 0.7))
+        .rotationEffect(.degrees(self.cone ? 0 : -20), anchor: UnitPoint(x: 0.2, y: 0.9))
+        .opacity(self.cone ? 1 : 0)
+    }
+}
+
+// MARK: - The hourglass
+
+/// A task sent in and still waiting for a parent: an hourglass flips over
+/// and its sand runs down once, then rests. Drawn on a 200-point square.
+/// Plays once, not in a loop (a looping animation keeps the screen
+/// redrawing); Reduce Motion shows it at rest.
+private struct PendingHourglass: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var flipped = false
+    @State private var sand: CGFloat = 0
+
+    private let frameColor = Color(hex: "25924A")
+    private let glass = Color(hex: "E4F8E9")
+    private let sandColor = Color(hex: "FFB938")
+
+    var body: some View {
+        GeometryReader { geo in
+            let s = min(geo.size.width, geo.size.height) / 200
+            ZStack(alignment: .topLeading) {
+                bulb(top: true, s).fill(glass)
+                bulb(top: false, s).fill(glass)
+                // Sand: the top bulb's empties from the top down, the
+                // bottom one's fills from the bottom up.
+                bulb(top: true, s).fill(sandColor)
+                    .mask(alignment: .top) {
+                        Rectangle().frame(height: (100 - 50 - 34 * sand) * s).offset(y: (50 + 34 * sand) * s)
+                    }
+                bulb(top: false, s).fill(sandColor)
+                    .mask(alignment: .top) {
+                        Rectangle().frame(height: 40 * sand * s).offset(y: (160 - 40 * sand) * s)
+                    }
+                Rectangle().fill(sandColor)
+                    .frame(width: 3 * s, height: max(0, (160 - 40 * sand - 100)) * s)
+                    .offset(x: 98.5 * s, y: 100 * s)
+                    .opacity(sand > 0.02 && sand < 0.98 ? 1 : 0)
+                bulb(top: true, s).stroke(frameColor.opacity(0.35), lineWidth: 3 * s)
+                bulb(top: false, s).stroke(frameColor.opacity(0.35), lineWidth: 3 * s)
+                RoundedRectangle(cornerRadius: 6 * s).fill(frameColor)
+                    .frame(width: 112 * s, height: 14 * s).offset(x: 44 * s, y: 26 * s)
+                RoundedRectangle(cornerRadius: 6 * s).fill(frameColor)
+                    .frame(width: 112 * s, height: 14 * s).offset(x: 44 * s, y: 160 * s)
+            }
+            .frame(width: 200 * s, height: 200 * s, alignment: .topLeading)
+            .rotationEffect(.degrees(flipped ? 0 : -180))
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .onAppear {
+            guard !reduceMotion else { flipped = true; sand = 0.7; return }
+            withAnimation(.spring(duration: 0.6, bounce: 0.2)) { flipped = true }
+            withAnimation(.easeInOut(duration: 2.4).delay(0.55)) { sand = 0.7 }
+        }
+    }
+
+    private func bulb(top: Bool, _ s: CGFloat) -> Path {
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * s, y: (top ? y : 200 - y) * s) }
+        var path = Path()
+        path.move(to: p(60, 40))
+        path.addLine(to: p(140, 40))
+        path.addCurve(to: p(104, 100), control1: p(140, 76), control2: p(108, 86))
+        path.addLine(to: p(96, 100))
+        path.addCurve(to: p(60, 40), control1: p(92, 86), control2: p(60, 76))
+        path.closeSubpath()
+        return path
     }
 }

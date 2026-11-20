@@ -181,7 +181,7 @@ struct EToggle: View {
     var body: some View {
         Button { on.toggle() } label: {
             ZStack(alignment: on ? .trailing : .leading) {
-                Capsule().fill(on ? color : Color(hex: "E9E9EA"))
+                Capsule().fill(on ? color : Color(light: "E9E9EA", dark: "39393D"))
                 Circle()
                     .fill(.white)
                     .frame(width: 27, height: 27)

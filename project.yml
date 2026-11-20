@@ -4,6 +4,14 @@ options:
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
+# Debug is Run in Xcode, Release is Archive/TestFlight: real features only.
+# Demo is a separate app for agents trying screens on the Simulator
+# (DemoMode.swift): the only build with demo code, the sample family, and no
+# server. It never goes to TestFlight.
+configs:
+  Debug: debug
+  Release: release
+  Demo: debug
 settings:
   base:
     SWIFT_VERSION: 5.0
@@ -31,17 +39,36 @@ targets:
     info:
       path: Evlin/Info.plist
       properties:
-        UILaunchScreen: {}
+        # The system's launch screen: the page's cream, or #121212 when the
+        # phone is in Dark mode (the asset's dark variant).
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        # Light only: every screen is drawn in fixed light colours, and in
+        # dark mode the system parts (typed text, placeholders, the time
+        # picker, the close x) turned white on them and vanished.
+        CFBundleDisplayName: $(EVLIN_DISPLAY_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Only standard HTTPS: no export-compliance question on each upload.
+        ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
           - CFBundleURLSchemes: [evlin]
         NSCameraUsageDescription: Evlin uses the camera to scan a pairing QR code and to take photos showing a task is done.
+        NSFaceIDUsageDescription: Evlin uses Face ID to make sure only you can see your child's screen time access code.
         # Background refresh: iOS wakes the app now and then to sync (BackgroundSync).
         UIBackgroundModes: [fetch]
-        BGTaskSchedulerPermittedIdentifiers: [com.evlin.app.refresh]
+        BGTaskSchedulerPermittedIdentifiers: [com.evlin.ios.refresh]
+        # iPhone runs portrait; only the video player turns sideways
+        # (OrientationLock in EvlinApp.swift). iPad turns freely.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UIAppFonts:
           - PlusJakartaSans-Bold.ttf
           - PlusJakartaSans-ExtraBold.ttf
@@ -54,10 +81,33 @@ targets:
           - Baloo2-Medium.ttf
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.evlin.app
+        # The one bundle id, for Debug and Release alike. Each id is a
+        # separate app with its own Keychain, so changing it signs everyone
+        # out (it did: app, app1 and io were all in use at once). Not com.evlin.io:
+        # it belonged to a deleted App Store Connect app, so it can never be
+        # used for a new one.
+        PRODUCT_BUNDLE_IDENTIFIER: com.evlin.ios
+        # TestFlight needs a new build number for every upload.
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1,2"
-        DEVELOPMENT_TEAM: D9FM36P37F
+        DEVELOPMENT_TEAM: U53243C253
         CODE_SIGN_ENTITLEMENTS: Evlin/Evlin.entitlements
+        EVLIN_DISPLAY_NAME: Evlin
+      configs:
+        Release:
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+        Demo:
+          # Its own app beside the real one: own database (no App Group),
+          # own Keychain, so it can't touch a real sign-in or real data.
+          PRODUCT_BUNDLE_IDENTIFIER: com.evlin.ios.demo
+          EVLIN_DISPLAY_NAME: Evlin Demo
+          CODE_SIGN_ENTITLEMENTS: Evlin/EvlinDemo.entitlements
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG EVLIN_DEMO
+    postBuildScripts:
+      - name: Upload Release dSYMs to Sentry
+        script: /bin/sh "${SRCROOT}/scripts/upload_sentry_dsyms.sh"
+        basedOnDependencyAnalysis: false
   # Unit tests, run inside the app so they use its Keychain.
   EvlinTests:
     type: bundle.unit-test
@@ -68,8 +118,8 @@ targets:
       - target: Evlin
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.evlin.app.tests
-        DEVELOPMENT_TEAM: D9FM36P37F
+        PRODUCT_BUNDLE_IDENTIFIER: com.evlin.ios.tests
+        DEVELOPMENT_TEAM: U53243C253
         GENERATE_INFOPLIST_FILE: YES
 schemes:
   Evlin:
@@ -80,3 +130,18 @@ schemes:
     test:
       targets:
         - EvlinTests
+  # Agents only. Simulator only.
+  Evlin Demo:
+    build:
+      targets:
+        Evlin: all
+    run:
+      config: Demo
+    test:
+      config: Demo
+    profile:
+      config: Demo
+    analyze:
+      config: Demo
+    archive:
+      config: Demo

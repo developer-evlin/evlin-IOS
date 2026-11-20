@@ -1,0 +1,21 @@
+<svg width="240" height="240" viewBox="0 0 240 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- The habit: a ring that fills a day at a time -->
+  <circle cx="120" cy="120" r="96" stroke="#E4F6E3" stroke-width="16"/>
+  <path d="M120 24 A96 96 0 1 1 24 120" stroke="#3FCE64" stroke-width="16" stroke-linecap="round"/>
+  <!-- Today -->
+  <circle cx="24" cy="120" r="15" fill="#25924A" stroke="#FFFFFF" stroke-width="6"/>
+  <!-- The sprout: Evlin's flame-leaf -->
+  <rect x="84" y="164" width="72" height="18" rx="9" fill="#D0F1C9"/>
+  <path d="M120 168 C120 146 117 128 121 112" stroke="#25924A" stroke-width="9" stroke-linecap="round"/>
+  <path d="M118.5 136 C100 134 86 122 84 106 C83 98 79 92 74 88 C90 88 104 94 112 106 C117 114 119 124 118.5 136 Z" fill="url(#small)"/>
+  <path d="M121 116 C113 98 119 80 136 70 C144 65 150 59 152 50 C162 64 165 82 158 96 C150 110 138 116 121 116 Z" fill="url(#big)"/>
+  <path d="M126 110 C120 96 126 82 140 74 C146 70 150 64 152 56 C150 70 143 79 135 86 C129 92 126 100 126 110 Z" fill="#FFFFFF" fill-opacity="0.75"/>
+  <defs>
+    <linearGradient id="big" x1="152" y1="50" x2="124" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#BEF06B"/><stop offset="1" stop-color="#3FCE64"/>
+    </linearGradient>
+    <linearGradient id="small" x1="74" y1="88" x2="118" y2="136" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D6F79A"/><stop offset="1" stop-color="#6BD96A"/>
+    </linearGradient>
+  </defs>
+</svg>

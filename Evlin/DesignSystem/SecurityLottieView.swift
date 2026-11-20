@@ -44,19 +44,3 @@ struct ContractSignLottieView: View {
         .frame(width: size, height: size)
     }
 }
-
-/// ScreenTimeGrant.lottie — the kid-device Screen Time authorization step.
-/// Also a `.lottie` (dotLottie) file, loaded the same way as
-/// ContractSignLottieView above.
-struct ScreenTimeGrantLottieView: View {
-    var size: CGFloat = 140
-
-    var body: some View {
-        LottieView {
-            try await DotLottieFile.named("ScreenTimeGrant")
-        }
-        .playing(loopMode: .loop)
-        .resizable()
-        .frame(width: size, height: size)
-    }
-}

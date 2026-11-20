@@ -52,6 +52,22 @@ struct QRScannerView: UIViewRepresentable {
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+
+        // The camera delivers frames in the sensor's landscape orientation;
+        // the preview has to be turned to match the screen, or it shows on
+        // its side (an iPad held sideways, or before the first rotation).
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard let connection = previewLayer.connection else { return }
+            let angle: CGFloat
+            switch window?.windowScene?.interfaceOrientation ?? .portrait {
+            case .landscapeLeft: angle = 180
+            case .landscapeRight: angle = 0
+            case .portraitUpsideDown: angle = 270
+            default: angle = 90
+            }
+            if connection.isVideoRotationAngleSupported(angle) { connection.videoRotationAngle = angle }
+        }
     }
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
@@ -76,6 +92,8 @@ struct PairCodeEntry: View {
     @State private var errorText: String?
     @State private var cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
     @State private var lastRejected: (code: String, at: Date)?
+    @State private var showScanner = false
+    @Environment(\.horizontalSizeClass) private var hSizeClass
 
     private var cameraAvailable: Bool {
         AVCaptureDevice.default(for: .video) != nil && cameraStatus != .denied && cameraStatus != .restricted
@@ -114,14 +132,18 @@ struct PairCodeEntry: View {
             } label: {
                 HStack {
                     if busy { ProgressView().tint(.white) }
-                    Text(busy ? "Connecting…" : "Connect").font(Typography.font(16, weight: .bold))
+                    Text(busy ? "Connecting…" : "Connect").font(OnboardingV2Theme.Typography.cta(hSizeClass == .regular))
                 }
                 .foregroundStyle(.white)
-                .frame(maxWidth: .infinity).frame(height: 52)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, OnboardingV2Theme.Metrics.ctaPaddingHorizontal)
                 .background(accent.opacity(code.count == 6 && !busy ? 1 : 0.4))
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .frame(height: hSizeClass == .regular ? OnboardingV2Theme.Metrics.ctaHeightRegular : OnboardingV2Theme.Metrics.ctaHeightCompact)
             }
             .buttonStyle(.plain)
+            .frame(maxWidth: OnboardingV2Theme.Metrics.ctaMaxWidth)
+            .frame(maxWidth: .infinity)
             .disabled(code.count != 6 || busy)
         }
         .task {
@@ -132,19 +154,42 @@ struct PairCodeEntry: View {
         }
     }
 
+    /// A button that opens the camera full screen. The camera used to sit
+    /// in a short, wide box on the page, which read as a sideways sliver of
+    /// a camera rather than a scanner.
     @ViewBuilder private var scannerArea: some View {
-        if cameraAvailable && cameraStatus != .notDetermined {
-            QRScannerView { scanned in
-                guard let scannedCode = PairCodeParser.code(from: scanned), !busy else { return }
-                // The camera reports the same frame many times a second; after a
-                // refusal, wait a moment before trying that code again.
-                if let last = lastRejected, last.code == scannedCode, Date().timeIntervalSince(last.at) < 3 { return }
-                code = scannedCode
-                submit(scannedCode)
+        if cameraAvailable {
+            Button {
+                Task {
+                    if cameraStatus == .notDetermined {
+                        _ = await AVCaptureDevice.requestAccess(for: .video)
+                        cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+                    }
+                    if cameraStatus == .authorized { showScanner = true }
+                }
+            } label: {
+                VStack(spacing: 10) {
+                    Image(systemName: "qrcode.viewfinder").font(.system(size: 40, weight: .regular))
+                    Text("Scan the QR code").font(OnboardingV2Theme.Typography.cta(hSizeClass == .regular))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+                .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(accent))
             }
-            .frame(height: 240)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.white.opacity(0.8), lineWidth: 3).padding(24))
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .fullScreenCover(isPresented: $showScanner) {
+                QRScannerScreen(onClose: { showScanner = false }) { scanned in
+                    guard let scannedCode = PairCodeParser.code(from: scanned), !busy else { return }
+                    // The camera reports the same frame many times a second;
+                    // after a refusal, wait a moment before trying it again.
+                    if let last = lastRejected, last.code == scannedCode, Date().timeIntervalSince(last.at) < 3 { return }
+                    showScanner = false
+                    code = scannedCode
+                    submit(scannedCode)
+                }
+            }
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "qrcode.viewfinder").font(.system(size: 34)).foregroundStyle(EColor.onSurfaceVariant)
@@ -180,5 +225,53 @@ struct PairCodeEntry: View {
             }
             busy = false
         }
+    }
+}
+
+/// The camera, full screen, for scanning the code on the kid's device.
+struct QRScannerScreen: View {
+    var onClose: () -> Void
+    var onScan: (String) -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            QRScannerView(onScan: onScan)
+                .ignoresSafeArea()
+
+            // Where to hold the code.
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .strokeBorder(Color.white, lineWidth: 4)
+                .frame(width: 260, height: 260)
+                .shadow(color: .black.opacity(0.35), radius: 12)
+                .allowsHitTesting(false)
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Circle().fill(Color.black.opacity(0.45)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                Spacer()
+                Text("Point the camera at the QR code on your child's device")
+                    .font(Typography.font(16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 14)
+                    .background(Capsule().fill(Color.black.opacity(0.45)))
+                    .padding(.bottom, 32)
+            }
+        }
+        .statusBarHidden()
     }
 }

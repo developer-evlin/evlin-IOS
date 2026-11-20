@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Direct camera capture for a kid's task-evidence photo. Falls back to the
 /// photo library when no camera exists (the Simulator, mainly — this is
@@ -40,6 +42,36 @@ struct CameraCapture: UIViewControllerRepresentable {
 }
 
 enum PhotoCompression {
+    struct Encoded { let data: Data; let contentType: String; let ext: String }
+
+    /// A kid's task photo, ready to upload: at most 1600 px, HEIC (about
+    /// half a JPEG's size at the same look; the parent's iPhone shows it
+    /// natively), JPEG where HEIC can't be written. Drawn afresh, so the
+    /// camera's metadata (location included) isn't carried over.
+    static func encodeForUpload(_ image: UIImage, maxDimension: CGFloat = 1600) -> Encoded? {
+        let size = image.size
+        let longer = max(size.width, size.height)
+        let scale = longer > maxDimension ? maxDimension / longer : 1
+        let target = CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        let resized = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        if let cg = resized.cgImage {
+            let data = NSMutableData()
+            if let dest = CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, 1, nil) {
+                CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: 0.6] as CFDictionary)
+                if CGImageDestinationFinalize(dest), data.length > 0 {
+                    return Encoded(data: data as Data, contentType: "image/heic", ext: "heic")
+                }
+            }
+        }
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else { return nil }
+        return Encoded(data: jpeg, contentType: "image/jpeg", ext: "jpg")
+    }
+
     /// Downsamples to a reasonable max dimension and re-encodes as JPEG — a
     /// full-resolution photo (10+MB on a modern phone) is wasted upload time
     /// and R2 storage for evidence a parent just glances at. 1600px still

@@ -31,26 +31,76 @@ enum CornerRadius {
 enum OnboardingV2Theme {
 
     enum Palette {
-        static let surface = Color(hex: "FCFCFD")
-        static let surfaceLow = Color(hex: "F7F8FA")
-        static let surfaceContainer = Color(hex: "F1F2F4")
-        static let surfaceLowest = Color.white
+        static let surface = EColor.surface
+        static let surfaceLow = Color(light: "F7F8FA", dark: "22252B", warm: "22252B")
+        static let surfaceContainer = Color(light: "F1F2F4", dark: "262A30", warm: "262A30")
+        // Cards, rows and secondary buttons in setup: the page's off-white,
+        // set apart by their edge (2026-11-14; a warm paper, #F8F6F1, on
+        // the e-paper before).
+        static let surfaceLowest = Color(light: "FAF9F6", dark: "262A30", warm: "262A30")
 
-        static let onSurface = Color(hex: "1A1C1E")
-        static let onSurfaceVariant = Color(hex: "5A5E66")
-        static let outline = Color(hex: "8E9199")
-        static let outlineVariant = Color(hex: "E2E4E9")
+        static let onSurface = Color(light: "1A1C1E", dark: "E6E8EC", warm: "E6E8EC")
+        static let onSurfaceVariant = Color(light: "5A5E66", dark: "A0A6B0", warm: "A0A6B0")
+        static let outline = Color(light: "8E9199", dark: "7A808B", warm: "7A808B")
+        static let outlineVariant = Color(light: "E5E5EA", dark: "353A42", warm: "353A42")
+        /// Fields: a near-white box with a warm hairline and a soft
+        /// shadow, so it sits up off the e-paper page. Choice bars: a soft
+        /// warm track; the picked one a soft green pill with deep-green
+        /// words (2026-11-08: cool pale greys vanished; a darker fill with a
+        /// green ring was harsh; a white pick was tucked in and hard to see).
+        static let fieldFill = Color(light: "FAF9F6", dark: "262A30", warm: "262A30")
+        static let fieldEdge = Color(light: "D1D1D6", dark: "353A42", warm: "353A42")
+        // On the off-white page, Apple's light greys; the pick a fresh light
+        // green, #C2EDC7 with deep-green #134A26 words, and a faint lift
+        // (2026-11-15, the user's call: lighter than the start screen's
+        // Child green, #A4E3AA with #0F3A1E words, tried just before as
+        // "the same color behind child mode"; a forest green #2F8F50 and the deep #1F6B3A
+        // with white words just before, after the pale sage was a "mood
+        // killer"; a muted sage
+        // #D9EADB with a #BCD9C2 edge and #1B6B34 words just before;
+        // the page's off-white as Apple's segmented control, "white isn't
+        // the color", a light mint #CBEFCE and the start screen's Child
+        // #A4E3AA tried just before;
+        // the solid button green with white words, the same day, was harsh; the main app's sage wash with a green edge
+        // before that) (2026-11-15, the user's call: the warm #E8E4DB track, #CFC6B6
+        // field edge and pale mint pick, made for the e-paper, read muddy).
+        static let choiceTrack = Color(light: "EFEFF4", dark: "262A30", warm: "262A30")
+        static let choicePicked = Color(light: "C2EDC7", dark: "2F563B", warm: "2F563B")
+        static let choicePickedEdge = Color(light: "C2EDC7", dark: "2F563B", warm: "2F563B")
+        static let choicePickedText = Color(light: "134A26", dark: "EAF7EC", warm: "EAF7EC")
+        /// The e-paper page under onboarding: a matte light warm grey,
+        /// grained (`EPaperBackground`); with the device in dark mode, a
+        /// warm near-black, since most parents set up at night (2026-11-08).
+        static let paper = Color(light: "FAF9F6", dark: "1C1F24", warm: "1C1F24")
+        /// The kid's e-paper button (always light: the kid's side is).
+        static let paperButton = KidTheme.paperButton
+        static let paperButtonEdge = KidTheme.paperButtonEdge
+        static let paperButtonBase = KidTheme.paperButtonBase
+        static let paperButtonInk = KidTheme.paperInk
 
         // Straight from evlin-style-guide (1).html's :root token block —
         // "everything builds from that one green at different depths."
-        static let greenTint = Color(hex: "E4F8E9")   // soft fills, banners, done cards
+        static let greenTint = Color(light: "E4F8E9", dark: "17301F")   // soft fills, banners, done cards
         static let greenLight = Color(hex: "8CE6A4")  // light accents
         static let greenMascot = Color(hex: "3FCE64") // primary brand — buttons, checks, accents
         static let greenDeep = Color(hex: "25924A")   // button 3D base, deeper accents, status text
         static let greenInk = Color(hex: "0D3318")    // dark green text — swap in when a green fill fails contrast
 
-        static let primary = greenMascot
-        static let primaryContainer = Color(hex: "E8F5E9")
+        /// Setup's main buttons, its progress bar, the picked choice and the
+        /// ticked boxes, both sides: the soft mid green of the Family
+        /// Sharing question's Yes, #34B85A (#3A9257 at night), with white
+        /// semibold words (2026-11-16, the user's call: the bright green
+        /// buttons hurt the eyes; the start screen's Parent green, the
+        /// mascot #3FCE64 (`Brand.emerald`), from 2026-11-15, and the main
+        /// app's #2FA84F / #3A9257 and iOS's #34C759 earlier that day).
+        /// Since 2026-11-16 (later the same day, the user's call: one green
+        /// for the style everywhere) the main app's button green, #2FA84F,
+        /// the same as Create task, Add habit and Approve.
+        static let button = Color(light: "2FA84F", dark: "3A9257", warm: "3A9257")
+        /// Setup's other green fills and accents (the busy button, step
+        /// numbers, focused fields, the code entry's Connect): the same.
+        static let primary = button
+        static let primaryContainer = Color(light: "E8F5E9", dark: "1B3323")
         static let onPrimary = Color.white
 
         // CTA fill — chartreuse, off style-guide-spec by request. Flat (no
@@ -59,14 +109,14 @@ enum OnboardingV2Theme {
         // the guide's mascot green.
         static let ctaFill = Color(hex: "58CC02")
 
-        static let secondary = Color(hex: "2E7D32")
-        static let secondaryContainer = Color(hex: "E8F5E9")
+        static let secondary = Color(light: "2E7D32", dark: "3FCE64")
+        static let secondaryContainer = Color(light: "E8F5E9", dark: "1B3323")
 
         static let tertiary = Color(hex: "EF6C00")
-        static let tertiaryContainer = Color(hex: "FFF3E0")
+        static let tertiaryContainer = Color(light: "FFF3E0", dark: "3A2A12")
 
         static let error = Color(hex: "D32F2F")
-        static let errorContainer = Color(hex: "FFEBEE")
+        static let errorContainer = Color(light: "FFEBEE", dark: "3A1E1E")
 
         static let darkScreen = Color(hex: "0A0A0D")
         static let darkBody = Color(hex: "B9BCC4")
@@ -91,6 +141,9 @@ enum OnboardingV2Theme {
         static let ctaPaddingVertical: CGFloat = 18
         static let ctaPaddingHorizontal: CGFloat = 24
         static let ctaRowSpacing: CGFloat = 10
+        static let ctaMaxWidth: CGFloat = 600
+        static let ctaHeightCompact: CGFloat = 58
+        static let ctaHeightRegular: CGFloat = 88
 
         static let cardCornerRadius: CGFloat = 16
         static let cardPadding: CGFloat = 15
@@ -139,15 +192,17 @@ enum OnboardingV2Theme {
         static func titleXL(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 36 : 25, weight: .bold) }
         static let titleXLTracking: CGFloat = -0.6
 
-        static func titleL(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 26 : 19, weight: .semibold) }
-        static let titleLTracking: CGFloat = -0.3
+        static func titleL(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 27 : 21, weight: .semibold) }
+        static let titleLTracking: CGFloat = -0.1
 
         static func body(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 18 : 13.5, weight: .regular) }
         static let bodyLineSpacing: CGFloat = 13.5 * 0.5
 
         static func bodyStrong(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 19 : 15, weight: .medium) }
         static let bodyXS = Evlin.Typography.font(11, weight: .regular)
-        static func cta(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 21 : 15, weight: .bold) }
+        /// Semibold (2026-11-16, the user's call, with the softer green:
+        /// thick white letters on a strong fill tired the eyes; bold before).
+        static func cta(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 21 : 15, weight: .semibold) }
         static func ctaBold(_ regular: Bool) -> Font { Evlin.Typography.font(regular ? 21 : 15, weight: .heavy) }
 
         static let phaseTag = Evlin.Typography.font(12, weight: .bold)
@@ -179,7 +234,7 @@ enum OnboardingV2Role {
     // selected-state border stroke. Same mascot green on both roles now —
     // parent buttons used to sit on a separate chartreuse `ctaFill`.
     var accent: Color {
-        OnboardingV2Theme.Palette.primary
+        OnboardingV2Theme.Palette.button
     }
 
     var accentContainer: Color {
@@ -260,6 +315,10 @@ struct OnboardingV2PrimaryButton: View {
     // or a plain non-brand button (Apple/Google), neither of which used a
     // hard offset shadow before; role: below opts child in explicitly.
     var flat: Bool = true
+    /// The kid's e-paper button: pale sage paper, deep green ink, a fine
+    /// edge and a soft paper base (2026-11-09, the user's call: warm, easy
+    /// on the eyes, nothing glaring on the kid's iPad).
+    var paper: Bool = false
     let action: () -> Void
 
     // Drives disabled dimming from inside the button itself (see body)
@@ -268,6 +327,7 @@ struct OnboardingV2PrimaryButton: View {
     // two separate overlapping shapes, the result was a smeared double pill
     // rather than one grayed-out button.
     @Environment(\.isEnabled) private var isEnabled
+    @State private var tapCount = 0
     // The single most visible "this still looks like a phone" tell on
     // iPad — a CTA sized for a 44pt iPhone touch target reads as tiny
     // floating in the middle of a 1024pt-wide canvas. Taller + bigger
@@ -300,11 +360,17 @@ struct OnboardingV2PrimaryButton: View {
         // (green-deep, box-shadow: 0 5px 0 var(--green-deep)) stays
         // kid-only — that tactile "pressable button" feel is a kid-mode
         // thing; parent buttons stay a flat pill.
-        self.init(title, systemImage: systemImage, fill: role.accent, flat: role == .parent, action: action)
+        // One button for both sides (2026-11-14, the user's call: "just make
+        // it the same button"): the parent's flat green pill. The child's
+        // raised paper button before, a different green.
+        self.init(title, systemImage: systemImage, fill: role.accent, flat: true, action: action)
     }
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            tapCount += 1
+            action()
+        } label: {
             HStack(spacing: 8) {
                 if let systemImage {
                     Image(systemName: systemImage)
@@ -322,9 +388,9 @@ struct OnboardingV2PrimaryButton: View {
             // barely read as a button at all. A solid neutral fill with
             // full-strength gray text is the standard disabled-button
             // convention — it stays a clearly defined pill, just inert.
-            .foregroundStyle(isEnabled ? OnboardingV2Theme.Palette.onPrimary : OnboardingV2Theme.Palette.onSurfaceVariant)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, isRegular ? OnboardingV2Theme.Metrics.ctaPaddingVertical + 14 : OnboardingV2Theme.Metrics.ctaPaddingVertical)
+            .foregroundStyle(!isEnabled ? OnboardingV2Theme.Palette.onSurfaceVariant
+                             : paper ? OnboardingV2Theme.Palette.paperButtonInk : OnboardingV2Theme.Palette.onPrimary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, OnboardingV2Theme.Metrics.ctaPaddingHorizontal)
             .background(
                 ZStack {
@@ -339,11 +405,15 @@ struct OnboardingV2PrimaryButton: View {
                     // once the button reads as one flat gray pill.
                     if !flat && isEnabled {
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(OnboardingV2Theme.Palette.greenDeep)
-                            .offset(y: 5)
+                            .fill(paper ? OnboardingV2Theme.Palette.paperButtonBase : OnboardingV2Theme.Palette.greenDeep)
+                            .offset(y: paper ? 4 : 5)
                     }
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(isEnabled ? fill : OnboardingV2Theme.Palette.surfaceContainer)
+                        .fill(isEnabled ? (paper ? OnboardingV2Theme.Palette.paperButton : fill) : OnboardingV2Theme.Palette.choiceTrack)
+                    if paper && isEnabled {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(OnboardingV2Theme.Palette.paperButtonEdge, lineWidth: 1)
+                    }
                 }
                 // Flattens the two overlapping rectangles into one rendered
                 // layer before anything else (a press-state dim, a future
@@ -354,8 +424,12 @@ struct OnboardingV2PrimaryButton: View {
                 // already-composited single shape instead.
                 .compositingGroup()
             )
+            .frame(height: isRegular ? OnboardingV2Theme.Metrics.ctaHeightRegular : OnboardingV2Theme.Metrics.ctaHeightCompact)
         }
         .buttonStyle(.plain)
+        .sensoryFeedback(.impact(weight: .light), trigger: tapCount)
+        .frame(maxWidth: OnboardingV2Theme.Metrics.ctaMaxWidth)
+        .frame(maxWidth: .infinity)
     }
 
 }
@@ -365,43 +439,57 @@ struct OnboardingV2PrimaryButton: View {
 struct OnboardingV2SecondaryButton: View {
     let title: String
     var systemImage: String? = nil
+    /// The icon's own colour (the words keep the page's ink).
+    var imageTint: Color? = nil
     let action: () -> Void
     @Environment(\.horizontalSizeClass) private var hSizeClass
+    @State private var tapCount = 0
     private var isRegular: Bool { hSizeClass == .regular }
 
     init(_ title: String,
          systemImage: String? = nil,
+         imageTint: Color? = nil,
          action: @escaping () -> Void) {
         self.title = title
         self.systemImage = systemImage
+        self.imageTint = imageTint
         self.action = action
     }
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            tapCount += 1
+            action()
+        } label: {
             HStack(spacing: 8) {
                 if let systemImage {
                     Image(systemName: systemImage)
+                        .foregroundStyle(imageTint ?? OnboardingV2Theme.Palette.onSurface)
                 }
                 Text(title)
             }
             .font(OnboardingV2Theme.Typography.cta(isRegular))
             .foregroundStyle(OnboardingV2Theme.Palette.onSurface)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, isRegular ? OnboardingV2Theme.Metrics.ctaPaddingVertical + 14 : OnboardingV2Theme.Metrics.ctaPaddingVertical)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, OnboardingV2Theme.Metrics.ctaPaddingHorizontal)
             .background(
                 RoundedRectangle(cornerRadius: isRegular ? OnboardingV2Theme.Metrics.ctaCornerRadius + 10 : OnboardingV2Theme.Metrics.ctaCornerRadius,
                                  style: .continuous)
-                    .fill(Color.white)
+                    // The page's card colour: white by day, the card at night
+                    // (plain white glared and hid its words on the warm night).
+                    .fill(OnboardingV2Theme.Palette.surfaceLowest)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: isRegular ? OnboardingV2Theme.Metrics.ctaCornerRadius + 10 : OnboardingV2Theme.Metrics.ctaCornerRadius,
                                  style: .continuous)
                     .stroke(OnboardingV2Theme.Palette.outlineVariant, lineWidth: 1)
             )
+            .frame(height: isRegular ? OnboardingV2Theme.Metrics.ctaHeightRegular : OnboardingV2Theme.Metrics.ctaHeightCompact)
         }
         .buttonStyle(.plain)
+        .sensoryFeedback(.impact(weight: .light), trigger: tapCount)
+        .frame(maxWidth: OnboardingV2Theme.Metrics.ctaMaxWidth)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -531,6 +619,9 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
     // footer on every step (OnboardingV2BackLink, now unused). nil hides it,
     // matching how the old link only rendered `if let onBack`.
     var onBack: (() -> Void)? = nil
+    /// A scroll bar that stays in view, for a step that's a long list to
+    /// scroll (2026-11-12, the user's ask: the Family Sharing steps).
+    var scrollBar: Bool = false
 
     @ViewBuilder var content: () -> Content
     @ViewBuilder var footer: () -> Footer
@@ -560,6 +651,7 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
          dotsCount: Int? = nil,
          dotsCurrent: Int? = nil,
          onBack: (() -> Void)? = nil,
+         scrollBar: Bool = false,
          @ViewBuilder content: @escaping () -> Content,
          @ViewBuilder footer: @escaping () -> Footer) {
         self.role = role
@@ -573,6 +665,7 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
         self.dotsCount = dotsCount
         self.dotsCurrent = dotsCurrent
         self.onBack = onBack
+        self.scrollBar = scrollBar
         self.content = content
         self.footer = footer
     }
@@ -647,38 +740,20 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
                 .frame(maxWidth: .infinity, alignment: role == .parent ? .center : .leading)
             }
 
-            // On iPhone, flexible Spacers push the footer toward the
-            // bottom of the (short) screen — exactly what makes this read
-            // as a real iOS screen. On iPad's much taller canvas, those
-            // same flexible Spacers absorbed every bit of the extra
-            // height instead, stranding the header at the very top and
-            // the footer at the very bottom with an empty gap between big
-            // enough to lose the actual content in. Fixed spacing plus
-            // centering the whole block vertically (below) is what a
-            // screen actually designed for the bigger canvas looks like,
-            // rather than a phone screen with a hole punched in the
-            // middle of it.
+            // Keep each step between the top progress/navigation and the
+            // bottom action on iPad too, using the available screen height.
             if isRegular {
-                // Several steps' own content() closures have their *own*
-                // internal flexible Spacers, authored to mimic a real iOS
-                // prompt sliding up from the bottom of a phone screen (icon
-                // up top, a beat of empty space, the mock system dialog
-                // pinned near the bottom). Centering the outer block (below)
-                // still proposes this a full screen's worth of height to
-                // fill, so those inner Spacers greedily expanded to consume
-                // it — recreating the exact same dead-space bug one level
-                // deeper. fixedSize forces content() to report its own
-                // natural/hugging height instead of accepting that
-                // proposal, so its Spacers collapse to their minimum and
-                // the icon+card render as one compact group, which is what
-                // actually gets centered.
+                Spacer(minLength: Spacing.lg)
+
                 content()
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, Spacing.section)
-                VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
-                    footer()
+
+                Spacer(minLength: Spacing.lg)
+
+                if !pinned {
+                    VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
+                        footer()
+                    }
                 }
-                .padding(.top, Spacing.section)
             } else {
                 Spacer(minLength: Spacing.lg)
 
@@ -694,12 +769,11 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
             }
         }
         .padding(.top, pinned ? 0 : OnboardingV2Theme.Metrics.screenBodyPaddingTop)
-        .padding(.horizontal, isRegular ? 8 : OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
+        .padding(.horizontal, isRegular ? 32 : OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
         .padding(.bottom, pinned ? 0 : OnboardingV2Theme.Metrics.screenBodyPaddingBottom)
-        .frame(maxWidth: isRegular ? OnboardingV2Theme.Metrics.iPadCenteredMaxWidth : .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isRegular ? .center : .top)
-        .background(dark ? OnboardingV2Theme.Palette.darkScreen
-                         : OnboardingV2Theme.Palette.surface)
+        .background { if dark { OnboardingV2Theme.Palette.darkScreen } else { EPaperBackground() } }
     }
 
     var body: some View {
@@ -722,7 +796,30 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
                                     lineWidth: OnboardingV2Theme.Metrics.deviceRingWidth)
                     )
             } else if isRegular {
-                screenBody
+                GeometryReader { proxy in
+                    ScrollView {
+                        screenBody(pinned: true).frame(minHeight: proxy.size.height)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollDismissesKeyboard(.interactively)
+                    .modifier(PersistentScrollBar(on: scrollBar))
+                }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: Spacing.xl) { topChrome }
+                        .padding(.horizontal, 32)
+                        .padding(.top, OnboardingV2Theme.Metrics.screenBodyPaddingTop)
+                        .padding(.bottom, Spacing.xl)
+                        .background { if dark { OnboardingV2Theme.Palette.darkScreen } else { EPaperBackground() } }
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
+                        footer()
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.top, Spacing.sm)
+                    .padding(.bottom, OnboardingV2Theme.Metrics.screenBodyPaddingBottom)
+                    .background { if dark { OnboardingV2Theme.Palette.darkScreen } else { EPaperBackground() } }
+                }
             } else {
                 // On iPhone the keyboard takes about 40% of the screen, and a
                 // step with a field (the kid's name, an email) is taller than
@@ -740,13 +837,14 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
                     }
                     .scrollBounceBehavior(.basedOnSize)
                     .scrollDismissesKeyboard(.interactively)
+                    .modifier(PersistentScrollBar(on: scrollBar))
                 }
                 .safeAreaInset(edge: .top, spacing: 0) {
                     VStack(alignment: .leading, spacing: Spacing.xl) { topChrome }
                         .padding(.horizontal, OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
                         .padding(.top, OnboardingV2Theme.Metrics.screenBodyPaddingTop)
                         .padding(.bottom, Spacing.xl)
-                        .background(dark ? OnboardingV2Theme.Palette.darkScreen : OnboardingV2Theme.Palette.surface)
+                        .background { if dark { OnboardingV2Theme.Palette.darkScreen } else { EPaperBackground() } }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     VStack(spacing: OnboardingV2Theme.Metrics.ctaRowSpacing) {
@@ -755,7 +853,7 @@ struct OnboardingV2ScreenContainer<Content: View, Footer: View>: View {
                     .padding(.horizontal, OnboardingV2Theme.Metrics.screenBodyPaddingHorizontal)
                     .padding(.top, Spacing.sm)
                     .padding(.bottom, OnboardingV2Theme.Metrics.screenBodyPaddingBottom)
-                    .background(dark ? OnboardingV2Theme.Palette.darkScreen : OnboardingV2Theme.Palette.surface)
+                    .background { if dark { OnboardingV2Theme.Palette.darkScreen } else { EPaperBackground() } }
                 }
             }
         }
@@ -780,6 +878,7 @@ extension OnboardingV2ScreenContainer {
          subtitle: String? = nil,
          dark: Bool = false,
          onBack: (() -> Void)? = nil,
+         scrollBar: Bool = false,
          @ViewBuilder content: @escaping () -> Content,
          @ViewBuilder footer: @escaping () -> Footer) {
         self.init(role: role,
@@ -791,7 +890,96 @@ extension OnboardingV2ScreenContainer {
                   dark: dark,
                   showsDeviceFrame: false,
                   onBack: onBack,
+                  scrollBar: scrollBar,
                   content: content,
                   footer: footer)
+    }
+}
+
+
+// MARK: - E-paper page
+
+/// Setup's page and the kid's: plain off-white by day, the blue charcoal at
+/// night, no grain (2026-11-14, the user's call: off-white everywhere; a
+/// matte warm grey, #F1EFE9, with a fine still grain, the e-paper, from
+/// 2026-11-08). The grain is kept below, unused, in case it comes back.
+struct EPaperBackground: View {
+    var body: some View {
+        OnboardingV2Theme.Palette.paper
+            .ignoresSafeArea()
+    }
+
+    /// 160pt of soft speckle: each pixel a touch lighter or darker.
+    static let grain: UIImage = {
+        let side = 160
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2
+        format.opaque = false
+        var rng = SystemRandomNumberGenerator()
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { ctx in
+            let c = ctx.cgContext
+            for _ in 0..<(side * side / 2) {
+                let x = CGFloat(Int.random(in: 0..<(side * 2), using: &rng)) / 2
+                let y = CGFloat(Int.random(in: 0..<(side * 2), using: &rng)) / 2
+                let dark = Bool.random(using: &rng)
+                let a = CGFloat.random(in: 0.02...0.07, using: &rng)
+                let ink: UIColor = dark ? UIColor(red: 0.30, green: 0.27, blue: 0.22, alpha: a)
+                                        : UIColor(white: 1, alpha: a * 1.4)
+                c.setFillColor(ink.cgColor)
+                c.fill(CGRect(x: x, y: y, width: 0.5, height: 0.5))
+            }
+        }
+    }()
+}
+
+/// A thin scroll bar that stays in view (iOS hides its own when the page is
+/// still), so a long step plainly scrolls. On iOS 17 the system's own
+/// flashes on appearing instead.
+private struct PersistentScrollBar: ViewModifier {
+    let on: Bool
+    @State private var g = Metrics()
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+
+    struct Metrics: Equatable {
+        var offset: CGFloat = 0
+        var content: CGFloat = 0
+        var visible: CGFloat = 0
+    }
+
+    func body(content: Content) -> some View {
+        if !on {
+            content
+        } else if #available(iOS 18.0, *) {
+            content
+                .scrollIndicators(.hidden)
+                .onScrollGeometryChange(for: Metrics.self) { geo in
+                    // The container is already the part between the pinned
+                    // header and button; the insets only shift the offset.
+                    Metrics(offset: geo.contentOffset.y + geo.contentInsets.top,
+                            content: geo.contentSize.height,
+                            visible: geo.containerSize.height)
+                } action: { _, new in g = new }
+                .overlay(alignment: .topTrailing) { bar }
+        } else {
+            content.scrollIndicatorsFlash(onAppear: true)
+        }
+    }
+
+    @ViewBuilder private var bar: some View {
+        if g.content > g.visible + 1, g.visible > 0 {
+            let track = g.visible - 16
+            let thumb = max(44, track * g.visible / g.content)
+            let travel = max(0, min(1, g.offset / (g.content - g.visible)))
+            ZStack(alignment: .top) {
+                Capsule().fill(OnboardingV2Theme.Palette.onSurfaceVariant.opacity(0.22))
+                Capsule().fill(OnboardingV2Theme.Palette.onSurface.opacity(0.85))
+                    .frame(height: thumb)
+                    .offset(y: (track - thumb) * travel)
+            }
+            .frame(width: 6, height: track)
+            .padding(.top, 8)
+            .padding(.trailing, hSizeClass == .regular ? 10 : 4)
+            .allowsHitTesting(false)
+        }
     }
 }

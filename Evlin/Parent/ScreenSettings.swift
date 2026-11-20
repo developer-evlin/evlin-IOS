@@ -1,31 +1,26 @@
 import SwiftUI
 
-// The parent's avatar colour in Settings. The parent has no calendar lane any
-// more, so this no longer comes from CalendarData.
-private let parentAvatarColor = Color(hex: "7C6FF7")
-
 // Structured to the "Settings — build spec" doc: account header (no card,
 // opens a sheet) → Plan (removed entirely on Pro) → Family (capped list,
 // each row opening the Child sheet) → Alerts → Support → a muted text
 // footer. Every row is exactly one of chevron/toggle/read-only-value —
-// never mixed — and every edit happens live inside the sheet a row opens,
-// with a "Done" dismiss rather than Save/Cancel. Destructive actions never
-// use an inline alert; they open DestructiveConfirmSheet instead.
+// never mixed. The account name is edited as a draft and saved explicitly;
+// other edits happen live inside the sheet a row opens. Destructive actions
+// never use an inline alert; they open DestructiveConfirmSheet instead.
 struct ScreenSettings: View {
     var onSwitchMode: () -> Void
     var onSignOut: (() -> Void)? = nil
 
     // Root notification toggle — the only notification setting there is.
     @State private var pushOn = true
+    @AppStorage(Appearance.key) private var appearance: Appearance = .cream
 
     // Parent identity — shown in the account header and edited in the
     // account sheet (parentProfilePage).
     private var profile: ParentProfile { ParentProfile.shared }
     private var parentName: String { profile.displayName }
 
-    // Family list — capped at 5 rows with a "Show all N" / "Show fewer"
-    // toggle, and the child a tap should open the Child sheet for.
-    @State private var showAllChildren = false
+    // The child whose profile (ChildSettingsSheet) is open.
     @State private var settingsChild: Child?
     // "Add a child" creates a placeholder profile immediately and goes
     // straight to the QR pairing screen — no name/colour form first, and
@@ -40,29 +35,32 @@ struct ScreenSettings: View {
     // on the same Child instance the sheet already observes, and dismissing
     // that sheet re-renders this screen's body anyway.
     @State private var familyRefreshTick = 0
+    // With more than one child, Children opens a list of profiles first
+    // (a pushed page); with one child it opens the profile directly.
+    @State private var showChildrenList = false
 
     // Account/plan/legal sheets — chevron rows on the root list, each
     // opening a sheet rather than pushing.
     @State private var showParentProfile = false
+    @State private var parentNameDraft = ""
+    @State private var savedParentName = ""
     @State private var showBilling = false
-    @State private var showPrivacyTerms = false
+    /// Settings' Screen time access code row, tapped (`AccessCodeOpener`).
+    @State private var askAccessCode = false
+    /// The plan page, opened by Add a child on the free plan's one child.
+    @State private var showChildPaywall = DemoMode.parentOpen == "childpaywall"
+    // Pages inside the Account sheet.
+    @State private var showEditAccount = false
+    @State private var showLegal = false
 
     // Destructive confirmations — always a sheet, never an inline alert.
     @State private var showSignOutConfirm = false
     @State private var showDeleteAccountConfirm = false
-    @State private var showCancelPlanConfirm = false
 
-    // Billing has no real StoreKit behind it yet (upgrade just flipped a
-    // local flag after a fake delay, "Restore Purchases" did nothing) —
-    // paused per product decision until real purchase + server-side
-    // receipt validation exist. billingEnabled gates every entry point
-    // below off until then; BillingState/billingPage stay in place as
-    // scaffolding for that real build rather than being torn out.
-    private let billingEnabled = false
-    // Shared (BillingState.shared, not local @State) so the account
-    // header's "Free plan"/"Pro" subtitle reflects whatever's set here.
+    // Shared (BillingState.shared, not local @State) so the account card's
+    // plan badge follows the plan page. Upgrade offers show only while
+    // EvlinPlan.offered (no StoreKit yet).
     @ObservedObject private var billing = BillingState.shared
-    @State private var isProcessingUpgrade = false
 
     var body: some View {
         NavigationStack {
@@ -71,11 +69,14 @@ struct ScreenSettings: View {
             }
             // Home's page colour, so the tabs read as one app.
             .background(EColor.surface)
-            // Custom header (see settingsHeader) replaces the system nav
+            // Custom header (SettingsProfileHead) replaces the system nav
             // bar on this root screen — every destination below now opens
             // as its own sheet instead of pushing, so this stack never
             // actually navigates anywhere itself.
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $showChildrenList) {
+                childListPage(title: "Children") { settingsChild = $0 }
+            }
         }
         .sheet(item: $settingsChild) { child in
             Group {
@@ -84,7 +85,7 @@ struct ScreenSettings: View {
             .presentationDragIndicator(.visible)
         }
         // Straight into pairing the moment "Add a child" is tapped — see
-        // addChildCard's action. The child this holds is only ever in
+        // the Add a child row's action. The child this holds is only ever in
         // memory, not FamilyStore, until pairing actually succeeds (see
         // onPaired below) — so a child that's never paired never shows up
         // in the Family list or on Home. Closing this is the end of the
@@ -102,38 +103,44 @@ struct ScreenSettings: View {
         }
         .sheet(isPresented: $showParentProfile) {
             Group {
-            // The name field edits live; persist it when the sheet closes.
-            parentProfilePage.onDisappear { profile.saveIfChanged() }
+            parentProfilePage
         }
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showBilling) {
-            Group { NavigationStack { billingPage } }
+            EvlinPlanSheet()
+                .presentationDragIndicator(.visible)   // nothing to lose here: swipes away
+        }
+        .sheet(isPresented: $showChildPaywall) {
+            // Bought, it closes and goes straight on to adding the child.
+            EvlinPlanSheet(reason: .anotherChild) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { startAddingChild() }
+            }
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showPrivacyTerms) {
-            Group { NavigationStack { privacyTermsPage } }
-            .presentationDragIndicator(.visible)
+        .onAppear { if DemoMode.parentOpen == "child", settingsChild == nil { settingsChild = FamilyStore.children.first } }
+        // Demo: `account` / `edit` open the Account page once Settings is up.
+        .task {
+            guard ["account", "edit"].contains(DemoMode.parentOpen ?? "") else { return }
+            try? await Task.sleep(for: .seconds(0.8))
+            showParentProfile = true
+            guard DemoMode.parentOpen == "edit" else { return }
+            try? await Task.sleep(for: .seconds(0.8))
+            parentNameDraft = profile.name
+            savedParentName = profile.name
+            showEditAccount = true
         }
-        .sheet(isPresented: $showCancelPlanConfirm) {
-            Group {
-            DestructiveConfirmSheet(
-                title: "Cancel Evlin Plus?",
-                consequences: [
-                    "You'll lose unlimited rules, AI strategies, and insights.",
-                    "Pro access continues until the end of the current billing period.",
-                ],
-                destructiveLabel: "Cancel Subscription",
-                onConfirm: {
-                    billing.isPlus = false
-                    showCancelPlanConfirm = false
-                },
-                onCancel: { showCancelPlanConfirm = false }
-            )
-        }
-            .presentationDragIndicator(.visible)
-        }
-        .preferredColorScheme(.light)
+    }
+
+    /// A new child, held in memory only until pairing succeeds (the
+    /// newlyAddedChild sheet's onPaired), so a child that's never paired
+    /// never appears anywhere.
+    private func startAddingChild() {
+        newlyAddedChild = Child(
+            id: UUID().uuidString, name: "New Child", age: 8, dailyLimitMin: 60,
+            color: FamilyStore.nextChildColor(), manualLock: false, taskGateOverride: false, timeLeft: formatMinutes(60), timePct: 100,
+            usageTodayMin: 0, subtitle: "No tasks yet"
+        )
     }
 
     // MARK: - Root
@@ -143,21 +150,6 @@ struct ScreenSettings: View {
     // are), small uppercase labels sitting tight against the group they
     // name, rows on a plain white page separated by hairline dividers —
     // Instagram-style, not Form's own insetGrouped card styling.
-
-    // Custom title row (system nav bar is hidden on this screen — see
-    // body) rather than .navigationTitle, so the title can match Home's
-    // "Hi, …" exactly: the app's font, 32pt heavy. No trailing button — it
-    // had nothing to open.
-    private var settingsHeader: some View {
-        Text("Settings")
-            .font(Typography.font(32, weight: .heavy))
-            .foregroundStyle(EColor.onSurface)
-            .padding(.bottom, 6)
-    }
-
-    private var visibleChildren: [Child] {
-        showAllChildren ? FamilyStore.children : Array(FamilyStore.children.prefix(5))
-    }
 
     // Four rules govern everything below:
     // 1. Cards separate by cardinality, not topic — a list of entities
@@ -173,247 +165,149 @@ struct ScreenSettings: View {
     // 4. Section headings (SectionHead — 20pt heavy black, same weight
     //    as Home's "Current Tasks") sit outside the cards. Small grey
     //    uppercase is reserved for form-field labels inside sheets.
+    // One quiet list, the way modern apps lay out Settings: a line icon and a
+    // title per row, a grey value or a switch where there's one, hairlines
+    // between groups, no section headings and no cards.
     @ViewBuilder
     private var settingsRootContent: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            settingsHeader
+        let children = FamilyStore.children
+        VStack(alignment: .leading, spacing: 0) {
+            // A sheet now, not a tab: the same room under the grab line
+            // whatever the number of children, so the title never jams
+            // against the top (it did with one child).
+            // The parent's own head in place of the "Settings" title
+            // (2026-11-17, the user's call): name, plan and Upgrade.
+            SettingsProfileHead(onAccount: {
+                parentNameDraft = profile.name
+                savedParentName = profile.name
+                showParentProfile = true
+            }, onUpgrade: { showBilling = true })
+                .padding(.top, 22)
+                .padding(.bottom, 20)
 
-            // Account + Plan are one subject (who you are, what you're
-            // paying) — one card, not two.
-            settingsAccountCard
 
-            VStack(alignment: .leading, spacing: 12) {
-                SectionHead("Family")
-                VStack(spacing: 8) {
-                    ForEach(visibleChildren) { child in
-                        settingsFamilyChildCard(child)
+            // Related rows together, one line between groups.
+            SettingsCard {
+                // The account is the head over this, one row with a › (the
+                // way to Sign out and Delete account), and the free plan's
+                // Upgrade under it (2026-11-17, the user's call: the head and
+                // a separate Account row showed the name twice). On Pro, the
+                // plan to manage.
+                if billing.isPlus || !EvlinPlan.offered {
+                    ManageRow(icon: "leaf.fill", title: "Manage subscription",
+                              value: billing.isPlus ? "Pro" : "Free plan", tile: SettingsTile.plan,
+                              showChevron: billing.isPlus) {
+                        if billing.isPlus { showBilling = true }
                     }
-
-                    if FamilyStore.children.count > 5 {
-                        showAllChildrenRow(total: FamilyStore.children.count)
-                    }
-
-                    Button {
-                        // Not added to FamilyStore here — only held in
-                        // memory until pairing succeeds (see the
-                        // newlyAddedChild sheet's onPaired), so a child
-                        // that's never paired never appears on Home or in
-                        // this list.
-                        newlyAddedChild = Child(
-                            id: UUID().uuidString, name: "New Child", age: 8, dailyLimitMin: 60,
-                            color: FamilyStore.nextChildColor(), manualLock: false, taskGateOverride: false, timeLeft: formatMinutes(60), timePct: 100,
-                            usageTodayMin: 0, subtitle: "No tasks yet"
-                        )
-                    } label: { addChildCard }
-                        .buttonStyle(.plain)
+                    SettingsGroupGap()
                 }
-                // familyRefreshTick was being bumped on add/remove (see its
-                // declaration above) but never actually read anywhere, so
-                // SwiftUI had no reason to think this section's body-derived
-                // content (visibleChildren, the FamilyStore.children.count
-                // check above) had changed — bumping it was a complete
-                // no-op. This list only ever caught up whenever some
-                // *unrelated* state change happened to re-render the screen
-                // afterward (backgrounding, navigating away and back, …),
-                // which is what read as "it took too long." Keying this
-                // subtree on the tick forces SwiftUI to discard and rebuild
-                // it — and re-read FamilyStore.children fresh — the instant
-                // a child is actually added or removed.
-                .id(familyRefreshTick)
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                SectionHead("Alerts")
-                Card(padded: false) {
-                    VStack(spacing: 0) {
-                        settingsCompactRow(icon: "bell", title: "Push notifications", showChevron: false) {
-                            EToggle(on: $pushOn, color: StatusCardStyle.green)
-                                .accessibilityLabel("Push notifications")
-                        }
-
-                        // "Billing and receipts" used to sit here — removed
-                        // along with every other entry point into billing
-                        // (see billingEnabled) since there's nothing real to
-                        // show receipts for yet.
+                // One child: straight to their profile. More: their profiles first.
+                if !children.isEmpty {
+                    ManageRow(icon: "figure.2.and.child.holdinghands",
+                              title: children.count == 1 ? children[0].name : "Children",
+                              value: children.count == 1 ? nil : "\(children.count)", tile: SettingsTile.children) {
+                        if children.count == 1 { settingsChild = children[0] } else { showChildrenList = true }
                     }
                 }
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                SectionHead("Support")
-                Card(padded: false) {
-                    VStack(spacing: 0) {
-                        ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
-                            settingsCompactRow(icon: "square.and.arrow.up", title: "Share Evlin")
-                        }
-                        .buttonStyle(.plain)
-
-                        settingsDivider
-
-                        // Honest about what this actually is — a mailbox,
-                        // not a help center — and the prefilled metadata
-                        // is what turns "it's not working" into something
-                        // traceable.
-                        Button {
-                            if let url = reportProblemURL { UIApplication.shared.open(url) }
-                        } label: {
-                            settingsCompactRow(icon: "exclamationmark.bubble", title: "Report a problem")
-                        }
-                        .buttonStyle(.plain)
-                        // "Replay the tours" used to sit here — removed;
-                        // there's no tour/coach-mark system anywhere in the
-                        // app for it to replay, so it never did anything.
+                ManageRow(icon: "person.badge.plus", title: "Add a child", tile: SettingsTile.addChild, showChevron: false) {
+                    // The free plan covers one child: a second opens the
+                    // plan page first, saying why (EvlinPlan.needsPro).
+                    if EvlinPlan.needsPro(toAddTo: children.count) {
+                        showChildPaywall = true
+                    } else {
+                        startAddingChild()
                     }
                 }
-            }
-
-            settingsFooter
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 16)
-    }
-
-    // One card, one subject: who you are and what you're paying. On Pro
-    // it's a single row (nothing left to upsell); on Free, a hairline
-    // separates identity from the plan row — same facet-card pattern as
-    // Alerts/Support, not two cards for one subject.
-    private var settingsAccountCard: some View {
-        let personColor = parentAvatarColor
-        return Card(padded: false) {
-            VStack(spacing: 0) {
-                Button { showParentProfile = true } label: {
-                    HStack(spacing: 16) {
-                        storyRingAvatar(color: personColor, initial: String(parentName.prefix(1)))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(parentName).font(Typography.font(19, weight: .bold)).foregroundStyle(Color.black)
-                            Text(billing.isPlus ? "Pro" : "Free plan")
-                                .font(Typography.font(13, weight: .regular))
-                                .foregroundStyle(Color(.secondaryLabel))
-                        }
-                        Spacer(minLength: 10)
-                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                // Removed entirely once on Pro — a paying customer should
-                // never see an upsell. Also gated on billingEnabled, since
-                // there's no real purchase behind this yet (see its decl).
-                if billingEnabled && !billing.isPlus {
-                    settingsDivider
-                    upgradeToProRow
-                }
-            }
-        }
-    }
-
-    // Same content wherever it appears (this card and the Profile sheet)
-    // — one subject's plan status shouldn't read differently depending on
-    // which screen asked. Vanishes entirely once on Pro at every call
-    // site, since that check lives with the caller, not in here.
-    private var upgradeToProRow: some View {
-        Button { showBilling = true } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Upgrade to Pro").font(Typography.font(15, weight: .bold)).foregroundStyle(Color.black)
-                    Text("Repeating tasks, downtime, and bedtime are locked on the free plan.")
-                        .font(Typography.font(12.5, weight: .regular))
-                        .foregroundStyle(Color(.secondaryLabel))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    // The Instagram story-highlight look: a gradient ring, a thin white
-    // gap, then the 62px avatar itself — not the gradient stroked directly
-    // onto the avatar's own edge, which reads as a flat colored border
-    // instead of a separate ring floating around it.
-    private func storyRingAvatar(color: Color, initial: String) -> some View {
-        ZStack {
-            Circle()
-                .fill(
-                    AngularGradient(
-                        colors: [Color(hex: "FEDA75"), Color(hex: "FA7E1E"), Color(hex: "D62976"), Color(hex: "962FBF"), Color(hex: "4F5BD5"), Color(hex: "FEDA75")],
-                        center: .center
-                    )
-                )
-                .frame(width: 72, height: 72)
-            Circle().fill(Color.white).frame(width: 68, height: 68)
-            Circle().fill(color).frame(width: 62, height: 62)
-                .overlay(Text(initial).font(Typography.font(23, weight: .bold)).foregroundStyle(.white))
-        }
-    }
-
-    // Family is a list of entities, not facets of one subject — every
-    // child is their own card, entirely tappable (no internal hairline;
-    // there's nothing else in this card to separate). Opens the Child
-    // sheet, where all of that child's editing (picture/name/colour/
-    // screen time/device) actually happens.
-    private func settingsFamilyChildCard(_ child: Child) -> some View {
-        Button { settingsChild = child } label: {
-            Card(padded: false) {
-                HStack(spacing: 12) {
-                    Circle().fill(child.color).frame(width: 40, height: 40)
-                        .overlay(Text(String(child.name.prefix(1))).font(Typography.font(15, weight: .bold)).foregroundStyle(.white))
-                    Text(child.name).font(Typography.font(16, weight: .semibold)).foregroundStyle(Color.black)
+                HStack(spacing: 16) {
+                    SettingsTileIcon(icon: "bell.badge.fill", color: SettingsTile.notifications)
+                    Text("Notifications")
+                        .font(SettingsType.title)
+                        .foregroundStyle(EColor.onSurface)
                     Spacer(minLength: 10)
-                    Text(child.devices.isEmpty ? "not paired" : "\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
-                        .font(Typography.font(13, weight: .regular))
-                        .foregroundStyle(child.devices.isEmpty ? EColor.danger : Color(.secondaryLabel))
-                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
+                    EToggle(on: $pushOn, color: StatusCardStyle.green)
+                        .accessibilityLabel("Notifications")
                 }
-                .padding(.horizontal, 16)
-                .frame(height: 64)
-                .contentShape(Rectangle())
+                .frame(minHeight: SettingsType.rowHeight)
+                // No "Task template library" switch: New task always has its
+                // Library (2026-11-19, the user's call).
+                // Cream or Dark.
+                HStack(spacing: 16) {
+                    SettingsTileIcon(icon: "circle.lefthalf.filled", color: SettingsTile.appearance)
+                    Text("Appearance")
+                        .font(SettingsType.title)
+                        .foregroundStyle(EColor.onSurface)
+                    Spacer(minLength: 10)
+                    AppearanceSwitch(appearance: $appearance)
+                }
+                .frame(minHeight: SettingsType.rowHeight)
+                // What a parent types on any of their children's devices to
+                // get into its settings (2026-11-19, the user's call: here,
+                // not on Profile, as parents won't use it much). Face ID first.
+                ManageRow(icon: "key.fill", title: "Screen time access code", tile: SettingsTile.accessCode) {
+                    askAccessCode = true
+                }
+
+                SettingsGroupGap()
+                // A mailbox, not a help centre; the prefilled details make "it's
+                // not working" traceable.
+                ManageRow(icon: "exclamationmark.bubble.fill", title: "Report a problem", tile: SettingsTile.report) {
+                    if let url = reportProblemURL { UIApplication.shared.open(url) }
+                }
+                ShareLink(item: "I've been using Evlin to manage screen time for my kids — thought you might like it too.") {
+                    ManageRowLabel(icon: "square.and.arrow.up", title: "Invite a friend", tile: SettingsTile.invite)
+                }
+                .buttonStyle(SettingsTapStyle())
             }
         }
-        .buttonStyle(.plain)
-    }
-
-    // A utility control, not an entity or a subject — it doesn't get a
-    // card. Plain and centered so it doesn't compete with the cards
-    // around it.
-    private func showAllChildrenRow(total: Int) -> some View {
-        Button { showAllChildren.toggle() } label: {
-            Text(showAllChildren ? "Show fewer" : "Show all \(total)")
-                .font(Typography.font(15, weight: .semibold))
-                .foregroundStyle(EColor.secondary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 36)
-                .contentShape(Rectangle())
+        // Keyed on the tick so adding or removing a child redraws the rows
+        // that depend on how many children there are.
+        .id(familyRefreshTick)
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+        .padding(.bottom, 120)
+        .modifier(AccessCodeOpener(asked: $askAccessCode))
+        // Demo: `-EvlinParentTab 3 -EvlinParentOpen accesscode` opens it.
+        .task {
+            guard DemoMode.parentOpen == "accesscode" else { return }
+            try? await Task.sleep(for: .seconds(0.9))
+            askAccessCode = true
         }
-        .buttonStyle(.plain)
     }
 
-    // A dashed plus circle in accent colour — part of the same list of
-    // entities as the child cards above it (same card shell, same 8pt
-    // gap), visually distinct only by the dashed ring so it never reads
-    // as just another child.
-    private var addChildCard: some View {
-        Card(padded: false) {
-            HStack(spacing: 12) {
-                Circle()
-                    .strokeBorder(EColor.secondary, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                    .frame(width: 40, height: 40)
-                    .overlay(Image(systemName: "plus").font(.system(size: 15, weight: .bold)).foregroundStyle(EColor.secondary))
-                Text("Add a child").font(Typography.font(16, weight: .bold)).foregroundStyle(EColor.secondary)
-                Spacer(minLength: 10)
+    /// The family's profiles, for Children when there's more than one
+    /// child. Tapping one opens it.
+    private func childListPage(title: String, open: @escaping (Child) -> Void) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(FamilyStore.children) { child in
+                    Button { open(child) } label: {
+                        HStack(spacing: 16) {
+                            Circle().fill(child.color).frame(width: 36, height: 36)
+                                .overlay(Text(String(child.name.prefix(1))).font(Typography.font(15, weight: .bold)).foregroundStyle(.white))
+                            Text(child.name)
+                                .font(Typography.font(16.5, weight: .medium))
+                                .foregroundStyle(EColor.onSurface)
+                            Spacer(minLength: 10)
+                            Text(child.devices.isEmpty ? "Not paired" : "\(child.devices.count) \(child.devices.count == 1 ? "device" : "devices")")
+                                .font(Typography.font(15, weight: .regular))
+                                .foregroundStyle(Color(.secondaryLabel))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Color(.tertiaryLabel))
+                        }
+                        .frame(minHeight: 62)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(SettingsTapStyle())
+                }
             }
-            .padding(.horizontal, 16)
-            .frame(height: 64)
-            .contentShape(Rectangle())
+            .id(familyRefreshTick)
+            .padding(.horizontal, 22)
+            .padding(.top, 8)
         }
+        .background(EColor.surface)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     // mailto: with the diagnostic context a beta parent's "it's not
@@ -443,335 +337,23 @@ struct ScreenSettings: View {
         return components?.url
     }
 
-    private var appVersionString: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(version) (\(build))"
-    }
-
-    // Small muted centered text, not rows — these are once-ever taps
-    // (legal/version info), so they shouldn't compete with things people
-    // actually use week to week.
-    private var settingsFooter: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 6) {
-                Button { showPrivacyTerms = true } label: {
-                    Text("Privacy and terms")
-                }
-                .buttonStyle(.plain)
-                Text("·")
-                Text("Version \(appVersionString)")
-            }
-            .font(Typography.font(12, weight: .regular))
-            .foregroundStyle(Color(.secondaryLabel))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 10)
-    }
-
-    // Edge-to-edge (spans the same width as the rows above it, not
-    // indented on the trailing side) with only a leading inset, so it
-    // starts under the row's text rather than under its icon/avatar.
-    private var settingsDivider: some View {
-        Rectangle()
-            .fill(Color(.systemGray6))
-            .frame(height: 1)
-            .padding(.leading, 46)
-    }
-
-    // One line — icon, title, an optional trailing value or control, and a
-    // chevron only on rows that actually navigate or act. No subtitle slot
-    // at all: the old two-line rows paid the same ~72pt height whether or
-    // not there was a second line worth showing.
-    private func settingsCompactRow<Trailing: View>(
-        icon: String,
-        title: String,
-        value: String? = nil,
-        showChevron: Bool = true,
-        @ViewBuilder trailing: () -> Trailing = { EmptyView() }
-    ) -> some View {
-        HStack(spacing: 12) {
-            // A plain glyph in one neutral colour: the rows are a short
-            // list, and per-row colours on tinted circles added noise
-            // without helping anyone find a row.
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(EColor.onSurfaceVariant)
-                .frame(width: 30, height: 30)
-            Text(title).font(Typography.font(15.5, weight: .regular)).foregroundStyle(Color.black)
-            Spacer(minLength: 10)
-            if let value {
-                Text(value).font(Typography.font(15, weight: .regular)).foregroundStyle(Color(.secondaryLabel))
-            }
-            trailing()
-            if showChevron {
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(.tertiaryLabel))
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
-        // Without this, only the icon/text/chevron glyphs themselves were
-        // tappable — the Spacer-filled middle of the row (most of its
-        // width) rendered nothing, so it didn't count as part of the
-        // button's hit area at all. That's what made rows like "Share
-        // Evlin" and "Billing and receipts" feel like they needed a
-        // precise tap right on the text instead of anywhere on the row.
-        .contentShape(Rectangle())
-    }
-
-    // MARK: - Billing (net-new — no StoreKit integration exists in this
-    // prototype, so this is mocked plan/cycle state rather than a port)
-
-    private let plusFeatures = [
-        "Unlimited custom rules & app-time limits",
-        "AI-powered de-escalation strategies in chat",
-        "Weekly behavior insights & trend reports",
-        "Priority support",
-    ]
-
-    private var priceLabel: String { billing.billingCycle == .yearly ? "$79.99/yr" : "$9.99/mo" }
-
-    private var billingPage: some View {
-        Form {
-            Section {
-                planHeroCard
-            }
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
-
-            if !billing.isPlus {
-                Section("What you get with Plus") {
-                    ForEach(plusFeatures, id: \.self) { feature in
-                        HStack(spacing: 12) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(EColor.secondary)
-                            Text(feature)
-                                .font(Typography.font(14, weight: .medium))
-                                .foregroundStyle(EColor.onSurface)
-                        }
-                        .padding(.vertical, 3)
-                    }
-                }
-
-                Section("Billing Cycle") {
-                    billingCyclePicker
-                        .padding(.vertical, 4)
-                }
-
-                Section {
-                    PrimaryButton(title: isProcessingUpgrade ? "Upgrading…" : "Upgrade to Plus — \(priceLabel)") {
-                        Task { await upgrade() }
-                    }
-                    .disabled(isProcessingUpgrade)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-
-                    Button("Restore Purchases") {}
-                        .font(Typography.font(13, weight: .semibold))
-                        .foregroundStyle(EColor.onSurfaceVariant)
-                        .frame(maxWidth: .infinity)
-                }
-            } else {
-                Section("Manage") {
-                    settingsRow(
-                        title: "Plan",
-                        subtitle: "Evlin Plus · \(billing.billingCycle == .yearly ? "Yearly" : "Monthly")",
-                        systemImage: "sparkles",
-                        value: priceLabel,
-                        accent: EColor.primary
-                    )
-
-                    Button {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                    } label: {
-                        settingsRow(title: "Manage Subscription", subtitle: "Change plan or payment method in Settings", systemImage: "gearshape", accent: EColor.primary)
-                    }
-
-                    Button(role: .destructive) {
-                        showCancelPlanConfirm = true
-                    } label: {
-                        settingsRow(title: "Cancel Subscription", subtitle: "You'll keep Plus until the period ends", systemImage: "xmark.circle", accent: EColor.danger, danger: true)
-                    }
-                }
-            }
-        }
-        .navigationTitle("Evlin Plan")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) { Button("Done") { showBilling = false } }
-        }
-    }
-
-    private var planHeroCard: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle().fill(billing.isPlus ? EColor.primary : EColor.surfaceContainerHigh).frame(width: 64, height: 64)
-                Image(systemName: billing.isPlus ? "sparkles" : "lock.open")
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(billing.isPlus ? .white : EColor.onSurfaceVariant)
-            }
-            VStack(spacing: 4) {
-                Text(billing.isPlus ? "You're on Evlin Plus" : "You're on the Free plan")
-                    .font(Typography.font(17, weight: .bold))
-                    .foregroundStyle(EColor.onSurface)
-                Text(billing.isPlus ? "Thanks for supporting Evlin." : "Core screen-time controls for one child.")
-                    .font(Typography.font(13, weight: .regular))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-        .padding(.horizontal, 16)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(EColor.surfaceContainerLowest))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(EColor.outlineVariant.opacity(0.7), lineWidth: 1))
-    }
-
-    private var billingCyclePicker: some View {
-        HStack(spacing: 10) {
-            cycleOption(.monthly, title: "Monthly", price: "$9.99/mo", badge: nil)
-            cycleOption(.yearly, title: "Yearly", price: "$79.99/yr", badge: "SAVE 33%")
-        }
-    }
-
-    private func cycleOption(_ cycle: BillingCycle, title: String, price: String, badge: String?) -> some View {
-        let selected = billing.billingCycle == cycle
-        return Button {
-            billing.billingCycle = cycle
-        } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(title).font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
-                    Spacer()
-                    if selected {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(EColor.primary)
-                    } else {
-                        Circle().stroke(EColor.outlineVariant, lineWidth: 1.5).frame(width: 18, height: 18)
-                    }
-                }
-                Text(price).font(Typography.font(13, weight: .semibold)).foregroundStyle(EColor.onSurfaceVariant)
-                if let badge {
-                    Text(badge)
-                        .font(Typography.font(9, weight: .bold))
-                        .foregroundStyle(EColor.secondary)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(EColor.secondaryContainer)
-                        .clipShape(Capsule())
-                } else {
-                    // Keeps both cards the same height regardless of
-                    // whether their option has a savings badge.
-                    Text(" ").font(Typography.font(9, weight: .bold)).opacity(0)
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(selected ? EColor.primary.opacity(0.06) : EColor.surfaceContainerLowest))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(selected ? EColor.primary : EColor.outlineVariant, lineWidth: selected ? 1.5 : 1))
-        }
-        .buttonStyle(.plain)
-    }
-
-    @MainActor
-    private func upgrade() async {
-        isProcessingUpgrade = true
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        isProcessingUpgrade = false
-        withAnimation { billing.isPlus = true }
-    }
-
-    // MARK: - Parent Profile — a flat sheet, same chrome as Add Event/Add
-    // to Calendar exactly: green "Cancel" top-left, bold title, labelled
-    // pale fields, one primary action pinned at the bottom (here, Sign
-    // Out — there's no Save because these fields edit live, same as the
-    // Child sheet). No cards, no icons in rows, no placeholder rows for
-    // things this prototype doesn't actually do.
+    // MARK: - Account: your name, sign-in email, and at the very end Delete
+    // account (Apple requires it to be reachable in the app, not on show).
+    // Opened by the Account row on the Settings list.
     private var parentProfilePage: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Same top-bar placement as every other destructive delete in
-            // this file (ChildSettingsSheet, EventDetailSheet) — a trash
-            // icon beside Cancel, not a text link buried near the bottom.
-            HStack {
-                Button("Cancel") { showParentProfile = false }
-                    .buttonStyle(.plain)
-                    .font(Typography.font(17, weight: .semibold))
-                    .foregroundStyle(FormGreen.accent)
-                    .frame(minHeight: 48, alignment: .leading)
-                    .contentShape(Rectangle())
-
-                Spacer(minLength: 12)
-
-                Button { showDeleteAccountConfirm = true } label: {
-                    Image(systemName: "trash.fill")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(EColor.danger)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Delete account")
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 6)
-
-            Text("Profile")
-                .font(Typography.font(26, weight: .heavy))
-                .foregroundStyle(FormGreen.title)
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 18)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    VStack(spacing: 10) {
-                        parentAvatarView
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 4)
-                    .padding(.bottom, 28)
-
-                    FormField(label: "Your name") {
-                        FormTextField(placeholder: "Your name", text: Binding(get: { profile.name }, set: { profile.name = $0 }))
-                    }
-
-                    // Same block as the root Settings list's account card
-                    // — gone entirely once on Pro, same as there, and
-                    // gated on billingEnabled for the same reason.
-                    if billingEnabled && !billing.isPlus {
-                        upgradeToProRow
-                    }
-                }
-                .padding(.horizontal, 20)
-            }
-            .dismissKeyboardOnTap()
-            .scrollDismissesKeyboard(.interactively)
-
-            // Solid fill, not a soft tint — the same weight every other
-            // destructive primary action in this file already uses
-            // (DestructiveConfirmSheet's own button, ChildSettingsSheet's
-            // Unpair), so this reads as the one real pinned action here,
-            // not a muted secondary option.
-            Button { showSignOutConfirm = true } label: {
-                Text("Sign Out")
-                    .font(Typography.font(15, weight: .heavy))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
-                    .background(EColor.danger)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .shadow(color: EColor.danger.opacity(0.3), radius: 12, y: 6)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
+        NavigationStack {
+            accountHome
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(isPresented: $showEditAccount) { editAccountPage }
+                .navigationDestination(isPresented: $showLegal) { privacyTermsPage }
         }
-        .background(Color.white)
-        // Declared here, not on the Settings root — a second .sheet on the
-        // presenting view doesn't stack on top of this already-presented
-        // one, it replaces it, which read as "the Sign Out button and its
-        // confirmation are two disconnected screens." Attaching it to this
-        // sheet's own view instead is what makes it appear on top of
-        // Profile, the same way ChildSettingsSheet's own confirm sheets do.
+        .background(EColor.surface)
+        .onAppear {
+            if parentNameDraft.isEmpty && savedParentName.isEmpty {
+                parentNameDraft = profile.name
+                savedParentName = profile.name
+            }
+        }
         .sheet(isPresented: $showSignOutConfirm) {
             Group {
             DestructiveConfirmSheet(
@@ -785,7 +367,7 @@ struct ScreenSettings: View {
                     showSignOutConfirm = false
                     showParentProfile = false
                     SessionManager.shared.clear()
-                    FamilyStore.clear() // Clear mock data just in case
+                    FamilyStore.clear()
                     onSignOut?() ?? onSwitchMode()
                 },
                 onCancel: { showSignOutConfirm = false }
@@ -828,16 +410,136 @@ struct ScreenSettings: View {
         }
     }
 
-    // Plain filled circle in the account's own colour (the same one the
-    // Settings list's avatar uses, parentAvatarColor) with
-    // a single initial — no gradient ring, no separate "accent colour,"
-    // matching how every other avatar in Settings (the Family list, the
-    // Child sheet) is drawn.
-    // Evlin doesn't collect profile photos; everyone is an initial.
-    private var parentAvatarView: some View {
-        Circle().fill(parentAvatarColor)
-            .overlay(Text(String(parentName.prefix(1))).font(Typography.font(38, weight: .bold)).foregroundStyle(.white))
-            .frame(width: 104, height: 104)
+    /// The Account sheet: who's signed in, then Edit account, Privacy and
+    /// terms, the version, and Sign out, as rows like the Settings list.
+    private var accountHome: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button { showParentProfile = false } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsTapStyle())
+                .accessibilityLabel("Close")
+            }
+            .overlay {
+                Text("Account")
+                    .font(Typography.font(17, weight: .bold))
+                    .foregroundStyle(EColor.onSurface)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 14) {
+                        Text(String(parentName.prefix(1)).uppercased())
+                            .font(Typography.font(22, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .frame(width: 58, height: 58)
+                            .background(Circle().fill(SettingsTile.account))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(parentName)
+                                .font(Typography.font(20, weight: .heavy))
+                                .foregroundStyle(EColor.onSurface)
+                            if !profile.email.isEmpty {
+                                Text(profile.email)
+                                    .font(SettingsType.value)
+                                    .foregroundStyle(SettingsType.valueColor)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 18)
+
+                    ManageRow(icon: "pencil", title: "Edit account", tile: SettingsTile.account) {
+                        parentNameDraft = profile.name
+                        savedParentName = profile.name
+                        showEditAccount = true
+                    }
+                    ManageRow(icon: "hand.raised.fill", title: "Privacy and terms", tile: SettingsTile.privacy) {
+                        showLegal = true
+                    }
+                    ManageRowLabel(icon: "info", title: "Version", value: appVersionString,
+                                   tile: SettingsTile.report, showChevron: false)
+                    // On its own, apart from the rest, as Apple sets off a
+                    // destructive action.
+                    SettingsGroupGap()
+                    ManageRow(icon: "rectangle.portrait.and.arrow.right", title: "Sign out", tint: EColor.danger,
+                              tile: SettingsTile.notifications, showChevron: false) {
+                        showSignOutConfirm = true
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+            }
+        }
+        .background(EColor.surface)
+    }
+
+    /// Edit account: the name (saved with Save), and at the very end,
+    /// deleting the account.
+    private var editAccountPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                FormField(label: "Your name") {
+                    FormTextField(placeholder: "Your name", text: $parentNameDraft)
+                }
+
+                // No email here (2026-11-17, the user's call): it can't be
+                // changed in the app; the Account page shows it under the name.
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ManageDivider()
+                    ManageRow(icon: "trash", title: "Delete account", tint: EColor.danger, showChevron: false) {
+                        showDeleteAccountConfirm = true
+                    }
+                    Text("Removes every child's profile, tasks and history for good, and signs their devices out.")
+                        .font(Typography.font(12, weight: .regular))
+                        .foregroundStyle(Color(.secondaryLabel))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 16)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+        }
+        .dismissKeyboardOnTap()
+        .scrollDismissesKeyboard(.interactively)
+        .background(EColor.surface)
+        .navigationTitle("Edit account")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if parentNameHasChanges {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        TapHaptic.play()
+                        let name = parentNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        profile.name = name
+                        profile.saveIfChanged()
+                        parentNameDraft = name
+                        savedParentName = name
+                    }
+                    .font(Typography.font(16, weight: .bold))
+                    .foregroundStyle(EvlinPlan.accent)
+                    .disabled(parentNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private var appVersionString: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(version) (\(build))"
+    }
+
+    private var parentNameHasChanges: Bool {
+        parentNameDraft.trimmingCharacters(in: .whitespacesAndNewlines) != savedParentName
     }
 
     // MARK: - Privacy & Terms
@@ -857,11 +559,8 @@ struct ScreenSettings: View {
                 }
             }
         }
-        .navigationTitle("Privacy & Terms")
+        .navigationTitle("Privacy and terms")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) { Button("Done") { showPrivacyTerms = false } }
-        }
     }
 
     private func placeholderPage(title: String, message: String) -> some View {
@@ -992,13 +691,13 @@ private struct DestructiveConfirmSheet: View {
                 Button { onConfirm() } label: {
                     Text(destructiveLabel)
                         .font(Typography.font(16, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(EColor.onDangerFill)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
-                        .background(EColor.danger)
+                        .background(EColor.dangerFill)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsTapStyle())
 
                 Button { onCancel() } label: {
                     Text(cancelLabel)
@@ -1009,10 +708,11 @@ private struct DestructiveConfirmSheet: View {
                         .background(EColor.surfaceContainerHigh)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsTapStyle())
             }
         }
         .padding(24)
+        .presentationBackground(EColor.surface)
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
     }
@@ -1029,6 +729,263 @@ private struct DestructiveConfirmSheet: View {
 // FormShell (green "Done" link, big bold title, mint fields) so this reads
 // as the same family of sheet as Add a Child/Add Task, just without a
 // bottom Save pill — there's nothing queued up to save.
+/// A row on an account or device page, the way modern apps lay them out: a
+/// line icon, the title, an optional grey value, a chevron when it opens a
+/// page. The whole row is the button.
+private struct ManageRow: View {
+    let icon: String
+    let title: String
+    var value: String? = nil
+    var tint: Color = EColor.onSurface
+    /// A coloured tile behind a white icon (the Settings list), or none for
+    /// a plain line icon (rows inside a sheet).
+    var tile: Color? = nil
+    var showChevron = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ManageRowLabel(icon: icon, title: title, value: value, tint: tint, tile: tile, showChevron: showChevron)
+        }
+        .buttonStyle(SettingsTapStyle())
+    }
+}
+
+/// What a ManageRow shows, for rows that aren't plain buttons (a ShareLink).
+private struct ManageRowLabel: View {
+    let icon: String
+    let title: String
+    var value: String? = nil
+    var tint: Color = EColor.onSurface
+    var tile: Color? = nil
+    var showChevron = true
+
+    var body: some View {
+        HStack(spacing: 16) {
+            if let tile {
+                SettingsTileIcon(icon: icon, color: tile)
+            } else {
+                Image(systemName: icon)
+                    .font(.system(size: 21, weight: .regular))
+                    .foregroundStyle(tint)
+                    .frame(width: 28)
+            }
+            Text(title)
+                .font(SettingsType.title)
+                .foregroundStyle(tint)
+            Spacer(minLength: 10)
+            if let value {
+                Text(value)
+                    .font(SettingsType.value)
+                    .foregroundStyle(SettingsType.valueColor)
+                    .lineLimit(1)
+            }
+            if showChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(StatusCardStyle.tertiaryLabel)
+            }
+        }
+        .frame(minHeight: SettingsType.rowHeight)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Settings type: bold is for the page title only. A row's title is
+/// medium, so the list breathes; a value is regular, in a grey dark enough
+/// to read without competing with the title.
+enum SettingsType {
+    static let title = Typography.font(16.5, weight: .medium)
+    static let value = Typography.font(15, weight: .regular)
+    static let valueColor = Color(light: "5F6B7A", dark: "A1A1AA")
+    /// Apple's list rhythm: 52pt rows on a 4pt grid.
+    static let rowHeight: CGFloat = 52
+}
+
+/// "Upgrade your account" for the free plan, one row with an aura: Evlin's
+/// leaf on a green tile in a breathing green and lime glow with sparkles
+/// twinkling round it, a shine across the title now and then, and under
+/// it a line that turns through what Pro gives you. Opens the plan page.
+/// Reduce Motion: the glow and the first line, still. Also at the top of
+/// Profile on the free plan (2026-11-17).
+struct UpgradeAccountRow: View {
+    let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var glow = false
+    @State private var line = 0
+    @State private var shine: CGFloat = -1
+
+    private static let lines = [
+        "Repeat tasks automatically",
+        "Daily downtime, on your schedule",
+        "Apps lock at bedtime",
+        "Less nagging, more routine",
+    ]
+    private static let green = Color(light: "1E9E48", dark: "4CAF6A")
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                aura
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Upgrade your account")
+                        .font(SettingsType.title)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .foregroundStyle(Self.green)
+                        .overlay {
+                            // The shine: a light band passing over the words.
+                            GeometryReader { geo in
+                                LinearGradient(colors: [.clear, .white.opacity(0.75), .clear],
+                                               startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: geo.size.width * 0.45)
+                                    .offset(x: shine * geo.size.width)
+                            }
+                            .mask(Text("Upgrade your account").font(SettingsType.title))
+                            .allowsHitTesting(false)
+                        }
+                    Text(Self.lines[line])
+                        .font(Typography.font(13, weight: .regular))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .foregroundStyle(SettingsType.valueColor)
+                        .id(line)
+                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 4)),
+                                                removal: .opacity.combined(with: .offset(y: -4))))
+                }
+                Spacer(minLength: 10)
+                Text("Pro")
+                    .font(Typography.font(12.5, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(EvlinPlan.gradient, in: Capsule())
+                    .shadow(color: EvlinPlan.accent.opacity(glow ? 0.55 : 0.15), radius: glow ? 8 : 3)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(StatusCardStyle.tertiaryLabel)
+            }
+            .frame(minHeight: SettingsType.rowHeight + 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SettingsTapStyle())
+        .accessibilityLabel("Upgrade your account to Evlin Pro")
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) { glow = true }
+        }
+        // Every few seconds the next thing Pro gives, with a shine across
+        // the title. Stops when the row goes off screen.
+        .task {
+            guard !reduceMotion else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_400_000_000)
+                if Task.isCancelled { return }
+                withAnimation(.easeInOut(duration: 0.35)) { line = (line + 1) % Self.lines.count }
+                shine = -1
+                withAnimation(.easeInOut(duration: 0.9)) { shine = 1.2 }
+            }
+        }
+    }
+
+    // The tile in its aura: two soft glows breathing out of step, and three
+    // sparkles that brighten with them.
+    // The glows are half as strong in Dark, where they'd blaze on the page.
+    private var dim: Double { colorScheme == .dark ? 0.45 : 1 }
+
+    private var aura: some View {
+        ZStack {
+            Circle()
+                .fill(Color(hex: "B9F04F"))
+                .frame(width: 50, height: 50)
+                .blur(radius: 14)
+                .opacity((glow ? 0.25 : 0.55) * dim)
+                .scaleEffect(glow ? 0.9 : 1.25)
+            Circle()
+                .fill(EvlinPlan.accent)
+                .frame(width: 44, height: 44)
+                .blur(radius: 10)
+                .opacity((glow ? 0.65 : 0.25) * dim)
+                .scaleEffect(glow ? 1.25 : 0.9)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(EvlinPlan.gradient)
+                .frame(width: 30, height: 30)
+                .shadow(color: EvlinPlan.accent.opacity(0.4), radius: 4, y: 1)
+            FlameLeaf()
+                .fill(Color.white)
+                .frame(width: 13, height: 17)
+            sparkle(size: 8, x: 17, y: -16, bright: glow)
+            sparkle(size: 6, x: -18, y: -10, bright: !glow)
+            sparkle(size: 5, x: 16, y: 15, bright: !glow)
+        }
+        .frame(width: 30, height: 30)
+    }
+
+    private func sparkle(size: CGFloat, x: CGFloat, y: CGFloat, bright: Bool) -> some View {
+        Image(systemName: "sparkle")
+            .font(.system(size: size, weight: .bold))
+            .foregroundStyle(Color(hex: "7FD65A"))
+            .opacity(bright ? 1 : 0.15)
+            .scaleEffect(bright ? 1 : 0.5)
+            .offset(x: x, y: y)
+    }
+}
+
+/// The line between two groups of rows; rows within a group have none.
+private struct SettingsGroupGap: View {
+    var body: some View {
+        Rectangle().fill(HomeStyle.line).frame(height: 1).padding(.vertical, 10)
+    }
+}
+
+/// The Settings rows, one under another.
+private struct SettingsCard<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 0) { content() }
+    }
+}
+
+
+/// Each Settings row's colour, the way iOS Settings tells rows apart at a
+/// glance. Screen time is Apple's Screen Time purple.
+enum SettingsTile {
+    static let account = Color(hex: "0A84FF")
+    static let plan = Color(hex: "3FCE64")
+    static let children = Color(hex: "FF9500")
+    static let addChild = Color(hex: "30B0C7")
+    static let notifications = Color(hex: "FF3B30")
+    static let screenTime = Color(hex: "5856D6")
+    static let accessCode = Color(hex: "F59E0B")
+    static let report = Color(hex: "8E8E93")
+    static let invite = Color(hex: "FF2D55")
+    static let privacy = Color(hex: "0A84FF")
+    static let appearance = Color(hex: "5856D6")   // indigo: reads on both pages
+}
+
+/// A white icon on a small coloured rounded square.
+struct SettingsTileIcon: View {
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(color))
+    }
+}
+
+/// The hairline between groups of rows.
+private struct ManageDivider: View {
+    var body: some View {
+        Rectangle().fill(HomeStyle.line).frame(height: 1).padding(.vertical, 10)
+    }
+}
+
 private struct ChildSettingsSheet: View {
     @ObservedObject var child: Child
     var onRemoved: () -> Void
@@ -1038,63 +995,20 @@ private struct ChildSettingsSheet: View {
     @State private var showUnpairConfirm = false
     @State private var showRemoveConfirm = false
     @State private var showPairing = false
+    @State private var showDevicePage = false
     @State private var nameOnOpen = ""
     // Screen time (the limit, downtime, custom rules) isn't here: it lives
     // on ChildScreenTimeSheet, opened from the child's card on Home, next to
     // the time left. This page is the child's identity and device: name,
-    // picture, Unpair, and Remove.
+    // picture, and a Device row that opens the device page (Unpair or Pair,
+    // and removing the profile at the end).
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Button("Done") { dismiss() }
-                    .buttonStyle(.plain)
-                    .font(Typography.font(17, weight: .semibold))
-                    .foregroundStyle(FormGreen.accent)
-                    .frame(minHeight: 48, alignment: .leading)
-                    .contentShape(Rectangle())
-
-                Spacer(minLength: 12)
-
-                Button { showRemoveConfirm = true } label: {
-                    Image(systemName: "trash.fill")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(EColor.danger)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Remove child")
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 6)
-
-            VStack(spacing: 14) {
-                childAvatar
-                Text(child.name)
-                    .font(Typography.font(28, weight: .heavy))
-                    .foregroundStyle(FormGreen.title)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 32)
-            .padding(.bottom, 44)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    FormField(label: "Name") {
-                        FormTextField(placeholder: "Child's name", text: $child.name)
-                    }
-
-                    FormField(label: "Device") {
-                        deviceRow
-                    }
-                }
-                .padding(.horizontal, 20)
-            }
-            .dismissKeyboardOnTap()
-            .scrollDismissesKeyboard(.interactively)
+        NavigationStack {
+            profilePage
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(isPresented: $showDevicePage) { devicePage }
         }
-        .background(Color.white)
         .sheet(isPresented: $showUnpairConfirm) {
             Group {
             DestructiveConfirmSheet(
@@ -1130,13 +1044,13 @@ private struct ChildSettingsSheet: View {
         .sheet(isPresented: $showRemoveConfirm) {
             Group {
             DestructiveConfirmSheet(
-                title: "Remove \(child.name)'s profile?",
+                title: "Delete \(child.name)'s account?",
                 consequences: [
                     "Tasks, history, and settings are deleted.",
                     "The device is unpaired and apps unlock.",
                     "This can't be undone.",
                 ],
-                destructiveLabel: "Remove Child",
+                destructiveLabel: "Delete \(child.name)'s Account",
                 onConfirm: {
                     let removedId = child.id
                     FamilyStore.removeChild(removedId)
@@ -1158,6 +1072,84 @@ private struct ChildSettingsSheet: View {
         }
             .presentationDragIndicator(.visible)
         }
+    }
+
+    private var profilePage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Spacer(minLength: 12)
+
+                Button("Done") { dismiss() }
+                    .buttonStyle(SettingsTapStyle())
+                    .font(Typography.font(17, weight: .semibold))
+                    .foregroundStyle(FormGreen.accent)
+                    .frame(minHeight: 48, alignment: .trailing)
+                    .contentShape(Rectangle())
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+
+            VStack(spacing: 14) {
+                childAvatar
+                Text(child.name)
+                    .font(Typography.font(28, weight: .heavy))
+                    .foregroundStyle(FormGreen.title)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 32)
+            .padding(.bottom, 44)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    FormField(label: "Name") {
+                        FormTextField(placeholder: "Child's name", text: $child.name)
+                    }
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        ManageRow(icon: child.devices.isEmpty ? "iphone.slash" : "iphone",
+                                  title: "Device",
+                                  value: child.devices.first?.name ?? "Not paired") {
+                            showDevicePage = true
+                        }
+                    }
+
+                    // At the end of the child's own page, as Delete account is
+                    // on the parent's.
+                    VStack(alignment: .leading, spacing: 0) {
+                        ManageDivider()
+                        ManageRow(icon: "trash", title: "Delete \(child.name)'s account", tint: EColor.danger, showChevron: false) {
+                            showRemoveConfirm = true
+                        }
+                        Text("Deletes their tasks and history for good, and unpairs their device.")
+                            .font(Typography.font(12, weight: .regular))
+                            .foregroundStyle(Color(.secondaryLabel))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 16)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+            }
+            .dismissKeyboardOnTap()
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .background(EColor.surface)
+    }
+
+    /// The device: what's paired, and Unpair (or Pair).
+    private var devicePage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                deviceRow
+
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+        }
+        .background(EColor.surface)
+        .navigationTitle("\(child.name)'s device")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var childAvatar: some View {
@@ -1184,13 +1176,13 @@ private struct ChildSettingsSheet: View {
                 Button(role: .destructive) { showUnpairConfirm = true } label: {
                     Text("Unpair")
                         .font(Typography.font(14, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(EColor.onDangerFill)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                        .background(EColor.danger)
+                        .background(EColor.dangerFill)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsTapStyle())
             }
             .padding(16)
             .background(FormGreen.fieldBg)
@@ -1214,7 +1206,7 @@ private struct ChildSettingsSheet: View {
                         .background(FormGreen.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsTapStyle())
             }
             .padding(16)
             .background(FormGreen.fieldBg)
@@ -1244,19 +1236,16 @@ struct ChildScreenTimeSheet: View {
 
     @State private var editingRule: ChildRule?
     @State private var editingScreenTimeLimit = false
+    @State private var addingBlockedApps = false
 
     var body: some View {
         // The blocked apps list reads the sync cache; this redraws it on each sync.
         let _ = SyncState.shared.version
+        NavigationStack {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Button("Done") { dismiss() }
-                    .buttonStyle(.plain)
-                    .font(Typography.font(17, weight: .semibold))
-                    .foregroundStyle(FormGreen.accent)
-                    .frame(minHeight: 48, alignment: .leading)
-                    .contentShape(Rectangle())
                 Spacer()
+                SheetCloseButton { dismiss() }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 6)
@@ -1270,66 +1259,54 @@ struct ChildScreenTimeSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    FormField(label: "Screen Time") {
-                        screenTimeSection
-                    }
+                    screenTimeSection
 
-                    FormField(label: "Downtime") {
-                        downtimeSection
-                    }
+                    downtimeSection
 
-                    if !customRules.isEmpty {
-                        FormField(label: "Custom Rules") {
-                            customRulesSection
-                        }
-                    }
-
-                    if !blocksInForce.isEmpty {
-                        FormField(label: "Blocked apps") {
-                            blockedAppsSection
-                        }
-                    }
+                    blockedAppsSection
                 }
                 .padding(.horizontal, 20)
             }
         }
-        .background(Color.white)
+        .background(EColor.surface)
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(for: String.self) { blockId in
+            BlockedAppDetail(blockId: blockId, child: child)
+        }
+        .navigationDestination(for: AllBlockedApps.self) { _ in
+            AllBlockedAppsPage(child: child)
+        }
+        }
         .sheet(item: $editingRule) { rule in
             Group {
             EditRuleSheet(rule: rule, onSave: { updated in
-                if let i = child.rules.firstIndex(where: { $0.id == updated.id }) {
-                    child.rules[i] = updated
-                } else {
-                    child.rules.append(updated)   // a downtime set up just now
-                }
-                child.pushRules()
+                child.saveRule(updated)
                 editingRule = nil
             }, onCancel: { editingRule = nil }, onDelete: {
-                child.rules.removeAll { $0.id == rule.id }
                 editingRule = nil
-                if rule.kind == .downtime { exitDowntimeIfActive() }
-                child.pushRules()
+                child.deleteRule(rule)
             })
         }
-            .presentationDragIndicator(.visible)
+            .closesOnlyWithButton()
+        }
+        .sheet(isPresented: $addingBlockedApps) {
+            AddBlockedAppsSheet(child: child) { addingBlockedApps = false }
+                .presentationDragIndicator(.visible)   // held once apps are picked (FormShell)
         }
         .sheet(isPresented: $editingScreenTimeLimit) {
             Group {
-            EditDailyScreenTimeLimitSheet(
+            EditScreenTimeLimitSheet(
                 childName: child.name,
-                current: child.dailyLimitMin,
-                onSave: { limit in
-                    child.dailyLimitMin = limit
-                    if let i = child.rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
-                        child.rules[i].detail = "\(formatMinutes(limit)) per day"
-                    }
-                    child.pushRules()
+                daily: child.dailyLimitMin,
+                weekly: child.weeklySchedule,
+                onSave: { daily, weekly in
+                    child.saveScreenTimeLimit(daily: daily, weekly: weekly)
                     editingScreenTimeLimit = false
                 },
                 onCancel: { editingScreenTimeLimit = false }
             )
         }
-            .presentationDragIndicator(.visible)
+            .presentationDragIndicator(.visible)   // swipes away; held when there are changes (FormShell)
         }
     }
 
@@ -1337,138 +1314,187 @@ struct ChildScreenTimeSheet: View {
 
     private var dailyLimitRule: ChildRule? { child.rules.first { $0.kind == .screenTimeLimit } }
     private var downtimeRule: ChildRule? { child.rules.first { $0.kind == .downtime } }
-    private var customRules: [ChildRule] { child.rules.filter { $0.kind == .custom } }
 
-    // Two explicit, purpose-built rows — not a generic list iterating
-    // child.rules the way this used to (which is also what buried Downtime
-    // as just another row inside a collapsed "Active Rules" accordion).
+    private static let limitGreen = Color(hex: "34C759")
+
+    // The limit as a row, sized like Settings' own rows: what it is, the
+    // amount under it, and when the days differ, the week as small bars
+    // with today's in full colour. The whole card opens the editor.
     private var screenTimeSection: some View {
-        VStack(spacing: 0) {
-            if let rule = dailyLimitRule { screenTimeRow(rule, isBuiltIn: true) }
+        let week = ScreenTimeSchedule.minutes(daily: child.dailyLimitMin, weekly: child.weeklySchedule)
+        let today = ScreenTimeSchedule.todayIndex
+        let varies = Set(week).count > 1
+        return Button { editingScreenTimeLimit = true } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    cardIcon("hourglass", tint: Self.limitGreen)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Screen time")
+                            .font(Typography.font(15.5, weight: .semibold))
+                            .foregroundStyle(EColor.onSurface)
+                        Text(varies ? "\(ScreenTimeSchedule.limitText(week[today])) today · Custom days"
+                                    : "\(ScreenTimeSchedule.limitText(week[0])) every day")
+                            .font(Typography.font(13.5, weight: .regular))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    cardChevron
+                }
+                if varies {
+                    WeekLimitBars(minutes: week, highlighted: today, tint: Self.limitGreen)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(FormGreen.fieldBg, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .background(FormGreen.fieldBg)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .buttonStyle(CardPressStyle(haptic: true))
+        .accessibilityLabel("Daily limit, \(ScreenTimeSchedule.summary(daily: child.dailyLimitMin, weekly: child.weeklySchedule))")
     }
 
-    // Downtime has its own section, always there: the schedule with its
-    // switch once it's set, and a row to set it up before then.
-    private var downtimeSection: some View {
-        VStack(spacing: 0) {
-            if let rule = downtimeRule {
-                screenTimeRow(rule, isBuiltIn: false)
-            } else {
-                Button {
-                    var rule = ChildRule(id: "downtime", kind: .downtime, icon: "dark_mode",
-                                         title: "Downtime", detail: "", on: true)
-                    rule.detail = "\(ChildRule.fmtClock(rule.downtimeFrom)) – \(ChildRule.fmtClock(rule.downtimeTo))"
-                    editingRule = rule
-                } label: {
+    // Downtime as a row: its hours and days under the name, with its
+    // switch; the rest of the row edits it. Before it's set up: what it is,
+    // with a small "Set up" pill.
+    @ViewBuilder private var downtimeSection: some View {
+        if let rule = downtimeRule {
+            HStack(spacing: 12) {
+                Button { editingRule = rule } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: "moon.fill")
-                            .frame(width: 36, height: 36)
-                            .background(EColor.primaryContainer)
-                            .clipShape(RoundedRectangle(cornerRadius: 11))
-                            .foregroundStyle(EColor.primary)
+                        cardIcon("moon.fill", tint: downtimeIndigo)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Set downtime").font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
-                            Text("A daily break from the screen").font(Typography.font(12, weight: .semibold)).foregroundStyle(EColor.onSurfaceVariant)
+                            Text("Downtime")
+                                .font(Typography.font(15.5, weight: .semibold))
+                                .foregroundStyle(EColor.onSurface)
+                            Text(rule.downtimeHours.isEmpty
+                                 ? "\(ChildRule.fmtClock(rule.downtimeFrom)) – \(ChildRule.fmtClock(rule.downtimeTo))"
+                                 : "Hours vary by day")
+                                .font(Typography.font(13.5, weight: .regular))
+                                .foregroundStyle(EColor.onSurfaceVariant)
+                            Text(ScreenTimeSchedule.daysText(rule.downtimeDays))
+                                .font(Typography.font(13.5, weight: .regular))
+                                .foregroundStyle(EColor.onSurfaceVariant)
+                                .lineLimit(2)
                         }
-                        Spacer(minLength: 12)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(EColor.onSurfaceVariant)
+                        Spacer(minLength: 8)
                     }
-                    .padding(16)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-            }
-        }
-        .background(FormGreen.fieldBg)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private var customRulesSection: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(customRules.enumerated()), id: \.element.id) { index, rule in
-                if index > 0 { Divider().padding(.leading, 16) }
-                ruleRow(rule)
-            }
-        }
-        .background(FormGreen.fieldBg)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func screenTimeRow(_ rule: ChildRule, isBuiltIn: Bool) -> some View {
-        ruleRow(rule, onTap: { if isBuiltIn { editingScreenTimeLimit = true } else { editingRule = rule } })
-    }
-
-    private func ruleRow(_ rule: ChildRule, onTap: (() -> Void)? = nil) -> some View {
-        let tap = onTap ?? { editingRule = rule }
-        return HStack(spacing: 12) {
-            Button(action: tap) {
-                HStack(spacing: 12) {
-                    Image(systemName: EIcon.sf(rule.icon))
-                        .frame(width: 36, height: 36)
-                        .background(EColor.primaryContainer)
-                        .clipShape(RoundedRectangle(cornerRadius: 11))
-                        .foregroundStyle(EColor.primary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(rule.title).font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
-                        Text(rule.detail).font(Typography.font(12, weight: .semibold)).foregroundStyle(EColor.primary)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            Spacer(minLength: 12)
-            // The daily limit is always on: only its amount can change. More
-            // time on a given day is an extra-time grant, not switching the
-            // limit off.
-            if rule.kind != .screenTimeLimit {
+                .buttonStyle(CardPressStyle(haptic: true))
+                .accessibilityLabel("Downtime, \(rule.detail), \(ScreenTimeSchedule.daysText(rule.downtimeDays))")
+                .accessibilityHint("Edits the hours and days")
                 EToggle(on: Binding(
                     get: { rule.on },
                     set: { newValue in
                         guard let i = child.rules.firstIndex(where: { $0.id == rule.id }) else { return }
                         child.rules[i].on = newValue
-                        if rule.kind == .downtime && !newValue { exitDowntimeIfActive() }
+                        if !newValue { child.endDowntimeNowIfActive() }
                         child.pushRules()
                     }
-                ))
+                ), color: downtimeIndigo)
             }
-            Button(action: tap) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 15))
-                    .foregroundStyle(EColor.onSurfaceVariant)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
+            .padding(14)
+            .background(FormGreen.fieldBg, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        } else {
+            Button {
+                editingRule = Child.newDowntimeRule()
+            } label: {
+                HStack(spacing: 12) {
+                    cardIcon("moon.fill", tint: downtimeIndigo)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Downtime").font(Typography.font(15.5, weight: .semibold)).foregroundStyle(EColor.onSurface)
+                        Text("A break each night")
+                            .font(Typography.font(13.5, weight: .regular))
+                            .foregroundStyle(EColor.onSurfaceVariant)
+                    }
+                    Spacer(minLength: 8)
+                    Text("Set up")
+                        .font(Typography.font(13.5, weight: .semibold))
+                        .foregroundStyle(downtimeIndigo)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(downtimeIndigo.opacity(0.1), in: Capsule())
+                }
+                .padding(14)
+                .background(FormGreen.fieldBg, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
-            .buttonStyle(.plain)
-            .padding(.leading, 4)
+            .buttonStyle(CardPressStyle(haptic: true))
         }
-        .padding(16)
+    }
+
+    // A white glyph on a coloured rounded square, the size of Settings'.
+    private func cardIcon(_ systemName: String, tint: Color) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(tint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var cardChevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color(.tertiaryLabel))
+    }
+
+}
+
+// The screen time edits, shared by the Screen time sheet and the Profile tab.
+extension Child {
+    func saveRule(_ updated: ChildRule) {
+        if let i = rules.firstIndex(where: { $0.id == updated.id }) {
+            rules[i] = updated
+        } else {
+            rules.append(updated)   // a downtime set up just now
+        }
+        pushRules()
+    }
+
+    func deleteRule(_ rule: ChildRule) {
+        rules.removeAll { $0.id == rule.id }
+        if rule.kind == .downtime { endDowntimeNowIfActive() }
+        pushRules()
+    }
+
+    func saveScreenTimeLimit(daily: Int, weekly: [String: Int]) {
+        dailyLimitMin = daily
+        weeklySchedule = weekly
+        if let i = rules.firstIndex(where: { $0.kind == .screenTimeLimit }) {
+            rules[i].detail = ScreenTimeSchedule.summary(daily: daily, weekly: weekly)
+        }
+        pushRules()
+    }
+
+    /// A downtime about to start, as Profile's and the sheet's "Set up" open it.
+    static func newDowntimeRule() -> ChildRule {
+        var rule = ChildRule(id: "downtime", kind: .downtime, icon: "dark_mode", title: "Downtime", detail: "", on: true)
+        rule.detail = "\(ChildRule.fmtClock(rule.downtimeFrom)) – \(ChildRule.fmtClock(rule.downtimeTo))"
+        return rule
     }
 
     // Downtime is a schedule lock — turning the rule off (or deleting it)
     // while it's actively in effect needs to actually end the lock right
     // now, not just stop applying the *next* time downtime would start.
-    private func exitDowntimeIfActive() {
-        guard child.status == .downtime else { return }
-        child.manualLock = false
-        child.taskGateOverride = true
-        child.timeLeft = formatMinutes(child.dailyLimitMin)
-        child.timePct = 100
-        child.downtimeUntil = nil
-        child.saveState(label: "Unlocking the phone")
+    func endDowntimeNowIfActive() {
+        guard status == .downtime else { return }
+        manualLock = false
+        taskGateOverride = true
+        timeLeft = formatMinutes(dailyLimitMin)
+        timePct = 100
+        downtimeUntil = nil
+        saveState(label: "Unlocking the phone")
     }
 }
 
-// Blocked apps: moved here from Home, so the status card's "View blocked
-// apps & screen time limit" row leads to both.
+// Blocked apps: a list on the Screen time page; each app opens its own
+// page with why and when it's blocked, and Lift.
 extension ChildScreenTimeSheet {
-    /// Blocks still in force for this child — blocking now, or scheduled
-    /// and waiting for their hours — each with Lift. From the sync cache.
-    var blocksInForce: [CachedAppBlock] {
-        LocalStore.shared.cachedAppBlocks(childId: child.id).filter { block in
+    /// Blocks still in force for a child — blocking now, or scheduled and
+    /// waiting for their hours. From the sync cache.
+    static func blocksInForce(childId: String) -> [CachedAppBlock] {
+        LocalStore.shared.cachedAppBlocks(childId: childId).filter { block in
             guard !block.resolved else { return false }
             if block.blockType == "duration", let endsAt = block.endsAt { return Date() < endsAt }
             return block.state == nil || block.state == "active" || block.state == "off_window"
@@ -1476,34 +1502,276 @@ extension ChildScreenTimeSheet {
         .sorted { $0.appName < $1.appName }
     }
 
+    var blocksInForce: [CachedAppBlock] { Self.blocksInForce(childId: child.id) }
+
+    /// One row per app: an app blocked twice (say, for an hour and until
+    /// lifted) is still one blocked app. The row shows the block that lasts
+    /// longest.
+    var blockedApps: [CachedAppBlock] { Self.blockedApps(childId: child.id) }
+
+    static func blockedApps(childId: String) -> [CachedAppBlock] {
+        Dictionary(grouping: blocksInForce(childId: childId), by: { $0.appName })
+            .values
+            .compactMap { group in group.max { BlockedAppDetail.lasting($0) < BlockedAppDetail.lasting($1) } }
+            .sorted { $0.appName < $1.appName }
+    }
+
+    private static let blockedRed = Color(hex: "E5484D")
+    /// Apps listed on the card before "Show all".
+    static let shownBlockedApps = 3
+
+    /// Always shown, so a parent sees that apps can be paused from here: a
+    /// set time, the rest of the day, or until they allow it again. Empty,
+    /// it reads like the downtime row's invitation; with apps, it lists them.
     var blockedAppsSection: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(blocksInForce.enumerated()), id: \.element.id) { index, block in
-                if index > 0 { Divider().padding(.leading, 16) }
-                HStack(spacing: 12) {
-                    AppIconView(appName: block.appName, size: 34)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(block.appName).font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
-                        Text(block.state == "off_window"
-                             ? "\(block.summary ?? "") · not right now"
-                             : (block.summary ?? ""))
-                            .font(Typography.font(12, weight: .semibold))
-                            .foregroundStyle(EColor.onSurfaceVariant)
+        let apps = blockedApps
+        return VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                Button { addingBlockedApps = true } label: {
+                    HStack(spacing: 12) {
+                        cardIcon("nosign", tint: Self.blockedRed)
+                        Text("Blocked apps")
+                            .font(Typography.font(15.5, weight: .semibold))
+                            .foregroundStyle(EColor.onSurface)
+                        Spacer(minLength: 8)
                     }
-                    Spacer()
-                    Button("Lift") {
-                        LocalStore.shared.mirrorBlockLifted(id: block.id)
-                        Outbox.send(APIClient.Write.liftAppBlock(blockId: block.id), childId: child.id, label: "Lifting that block")
-                    }
-                    .font(Typography.font(13, weight: .bold))
-                    .foregroundStyle(Brand.greenDeep)
-                    .buttonStyle(.plain)
+                    .padding(14)
+                    .contentShape(Rectangle())
                 }
-                .padding(16)
+                .buttonStyle(CardPressStyle(haptic: true))
+                .accessibilityLabel(apps.isEmpty ? "Blocked apps, none" : "Blocked apps, \(apps.count)")
+                .accessibilityHint("Adds an app to block")
+
+                ForEach(apps.prefix(Self.shownBlockedApps), id: \.id) { block in
+                    Divider().padding(.leading, 56)
+                    BlockedAppRow(block: block)
+                }
+            }
+            .background(FormGreen.fieldBg)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            // More than fit on the card: the rest are a tap away, on a page of
+            // their own that scrolls. Plain and centred under the card, the
+            // same "Show all N" as the family list in Settings.
+            if apps.count > Self.shownBlockedApps {
+                NavigationLink(value: AllBlockedApps()) {
+                    Text("Show all \(apps.count)")
+                        .font(Typography.font(15, weight: .semibold))
+                        .foregroundStyle(EColor.secondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsTapStyle())
+                .padding(.top, 6)
             }
         }
-        .background(FormGreen.fieldBg)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+/// Marks the "Show all" page in the screen time sheet's navigation.
+struct AllBlockedApps: Hashable {}
+
+/// One blocked app as a row: its icon, name, and until when. Opens its page.
+struct BlockedAppRow: View {
+    let block: CachedAppBlock
+
+    var body: some View {
+        NavigationLink(value: block.id) {
+            HStack(spacing: 12) {
+                AppIconView(appName: block.appName, size: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(block.appName).font(Typography.font(15.5, weight: .semibold)).foregroundStyle(EColor.onSurface)
+                    Text(BlockedAppDetail.when(block))
+                        .font(Typography.font(13.5, weight: .regular))
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(.tertiaryLabel))
+            }
+            .padding(14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SettingsTapStyle())
+    }
+}
+
+/// Every blocked app for a child, when there are more than the card shows.
+struct AllBlockedAppsPage: View {
+    @ObservedObject var child: Child
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let _ = SyncState.shared.version
+        let apps = ChildScreenTimeSheet.blockedApps(childId: child.id)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(EColor.onSurface)
+                        .frame(width: 44, height: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsTapStyle())
+                .accessibilityLabel("Back")
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+
+            Text("Blocked apps")
+                .font(Typography.font(26, weight: .heavy))
+                .foregroundStyle(FormGreen.title)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(apps.enumerated()), id: \.element.id) { i, block in
+                        if i > 0 { Divider().padding(.leading, 56) }
+                        BlockedAppRow(block: block)
+                    }
+                }
+                .background(FormGreen.fieldBg)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+            }
+        }
+        .background(EColor.surface)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+}
+
+/// One blocked app: what it is, whether it's blocked right now, why and
+/// until when, and Lift.
+struct BlockedAppDetail: View {
+    var blockId: String
+    var child: Child
+    @Environment(\.dismiss) private var dismiss
+
+    private var block: CachedAppBlock? {
+        LocalStore.shared.cachedAppBlocks(childId: child.id).first { $0.id == blockId }
+    }
+
+    /// How long a block holds, for choosing which one an app's row shows:
+    /// one that waits on the parent outlasts any with an end time.
+    static func lasting(_ block: CachedAppBlock) -> Date {
+        if block.blockType == "duration", let end = block.endsAt { return end }
+        return .distantFuture
+    }
+
+    /// Every block on this app still in force: Lift ends them all, or the
+    /// app would stay blocked by the one the row didn't show.
+    private var sameApp: [CachedAppBlock] {
+        guard let block else { return [] }
+        return ChildScreenTimeSheet.blocksInForce(childId: child.id)
+            .filter { $0.appName == block.appName }
+    }
+
+    /// Made on this phone and not yet on the server, so it has no id
+    /// there to lift yet. (The Demo build never sends, so it lifts locally.)
+    private var unsent: Bool { !DemoMode.isBuild && sameApp.contains { $0.id.hasPrefix("local-") } }
+
+    /// Why and until when, in the server's own words where it has them.
+    static func when(_ block: CachedAppBlock) -> String {
+        if block.blockType == "duration", let end = block.endsAt {
+            return "Until \(ChildRule.fmtClock(end))"
+        }
+        // Said here rather than taken from the server, which said "until
+        // you lift it" before this wording.
+        if block.blockType == "indefinite" { return "Always" }
+        if let summary = block.summary, !summary.isEmpty {
+            return summary.prefix(1).uppercased() + summary.dropFirst()
+        }
+        switch block.blockType {
+        case "until_task": return "Until a task is approved"
+        case "scheduled": return "On a schedule"
+        default: return "Always"
+        }
+    }
+
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(EColor.onSurface)
+                        .frame(width: 44, height: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsTapStyle())
+                .accessibilityLabel("Back")
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+
+            if let block {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        HStack(spacing: 14) {
+                            AppIconView(appName: block.appName, size: 56)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(block.appName)
+                                    .font(Typography.font(24, weight: .heavy))
+                                    .foregroundStyle(FormGreen.title)
+                                Text(block.state == "off_window" ? "Not blocked right now" : "Blocked now")
+                                    .font(Typography.font(14, weight: .semibold))
+                                    .foregroundStyle(EColor.onSurfaceVariant)
+                            }
+                        }
+                        // One row: blocked until when (2026-11-09; "Blocked: For
+                        // a set time" over "When: Until 5:06 PM" said it twice).
+                        detailRow("Blocked", Self.when(block))
+                        .background(FormGreen.fieldBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                }
+                Button {
+                    for b in sameApp {
+                        LocalStore.shared.mirrorBlockLifted(id: b.id)
+                        if !b.id.hasPrefix("local-") {
+                            Outbox.send(APIClient.Write.liftAppBlock(blockId: b.id), childId: child.id, label: "Lifting that block")
+                        }
+                    }
+                    SyncState.shared.version += 1
+                    dismiss()
+                } label: {
+                    Text(unsent ? "Saving…" : "Lift block")
+                        .font(Typography.font(16, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 54)
+                        .background(Brand.greenDeep, in: RoundedRectangle(cornerRadius: 16))
+                }
+                .buttonStyle(PressedFadeStyle())
+                .disabled(unsent)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+            } else {
+                Spacer()
+            }
+        }
+        .background(EColor.surface)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).font(Typography.font(14, weight: .semibold)).foregroundStyle(EColor.onSurfaceVariant)
+            Spacer(minLength: 12)
+            Text(value).font(Typography.font(14, weight: .bold)).foregroundStyle(EColor.onSurface)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(16)
     }
 }
 
@@ -1519,19 +1787,12 @@ private enum RuleTypeMeta {
         case .screenTimeLimit: return "Screen Time Limit"
         }
     }
-    static func blurb(_ kind: RuleKind) -> String {
-        switch kind {
-        case .downtime: return "A daily break from the screen — only phone calls and apps you allow will work."
-        case .custom: return ""
-        case .screenTimeLimit: return "The daily screen time allowance. It's always on; change the amount, or give extra time on a given day."
-        }
-    }
 }
 
 private func ruleTimeField(label: String?, date: Binding<Date>) -> some View {
     VStack(alignment: .leading, spacing: 6) {
         if let label {
-            Text(label.uppercased()).font(Typography.font(10, weight: .bold)).foregroundStyle(EColor.onSurfaceVariant)
+            Text(label).font(Typography.font(11, weight: .semibold)).foregroundStyle(EColor.onSurfaceVariant)
         }
         DatePicker("", selection: date, displayedComponents: .hourAndMinute)
             .labelsHidden()
@@ -1544,32 +1805,92 @@ private func ruleTimeField(label: String?, date: Binding<Date>) -> some View {
     .frame(maxWidth: .infinity)
 }
 
-private struct EditRuleSheet: View {
+struct EditRuleSheet: View {
     @State var rule: ChildRule
     var onSave: (ChildRule) -> Void
     var onCancel: () -> Void
     var onDelete: (() -> Void)? = nil
 
     @State private var showDeleteConfirm = false
+    /// Downtime set day by day (Customize Days): which days, and each
+    /// day's own hours, as the screen-time limit is (2026-11-08).
+    @State private var customDays = false
+    /// The day whose hours are open (Customize Days).
+    @State private var openDay: Int?
+
+    init(rule: ChildRule, onSave: @escaping (ChildRule) -> Void, onCancel: @escaping () -> Void, onDelete: (() -> Void)? = nil) {
+        _rule = State(initialValue: rule)
+        self.onSave = onSave
+        self.onCancel = onCancel
+        self.onDelete = onDelete
+        _customDays = State(initialValue: (!rule.downtimeDays.isEmpty && rule.downtimeDays.count < 7) || !rule.downtimeHours.isEmpty)
+    }
+
+    /// Downtime as it would be saved: Every Day is one set of hours; days
+    /// set one by one keep their own hours only when they differ.
+    private func downtimeToSave(_ rule: ChildRule) -> ChildRule {
+        var r = rule
+        guard customDays else {
+            r.downtimeDays = []
+            r.downtimeHours = [:]
+            return r
+        }
+        let on = ScreenTimeSchedule.days.filter { r.downtimeDays.contains($0) }
+        let spans = on.map { r.downtimeSpan(on: $0) }
+        if let first = spans.first {
+            r.downtimeFrom = first.from
+            r.downtimeTo = first.to
+        }
+        if Set(spans.map(\.minutes)).count <= 1 {
+            r.downtimeHours = [:]
+        } else {
+            r.downtimeHours = Dictionary(uniqueKeysWithValues: zip(on, spans))
+        }
+        if on.count == 7 { r.downtimeDays = [] }   // every day
+        return r
+    }
 
     var body: some View {
         FormShell(title: rule.kind == .custom ? "Edit Rule" : RuleTypeMeta.label(rule.kind), onCancel: onCancel, onSave: {
             var updated = rule
             if updated.kind == .downtime {
+                updated = downtimeToSave(updated)
                 updated.detail = "\(ChildRule.fmtClock(updated.downtimeFrom)) – \(ChildRule.fmtClock(updated.downtimeTo))"
             }
             onSave(updated)
-        }, canSave: !rule.title.trimmingCharacters(in: .whitespaces).isEmpty, onDelete: onDelete != nil ? { showDeleteConfirm = true } : nil) {
+        }, canSave: !rule.title.trimmingCharacters(in: .whitespaces).isEmpty
+            && !(rule.kind == .downtime && customDays && rule.downtimeDays.isEmpty), onDelete: onDelete != nil ? { showDeleteConfirm = true } : nil, deleteTitle: "Delete rule") {
             switch rule.kind {
             case .downtime:
-                FormField(label: "Schedule") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            ruleTimeField(label: "From", date: $rule.downtimeFrom)
-                            ruleTimeField(label: "To", date: $rule.downtimeTo)
+                // As the screen-time limit asks it: Every Day (one set of
+                // hours) or Customize Days (a row per day with its hours or
+                // Off; a tap opens its switch and hours under it).
+                // Customize Days needs the server to store each day's
+                // downtime (ServerSupport.downtimeByDay).
+                if ServerSupport.downtimeByDay {
+                    EveryDayOrCustom(custom: $customDays)
+                        .padding(.bottom, 18)
+                }
+                if customDays && ServerSupport.downtimeByDay {
+                    FormField(label: "Each day's downtime") {
+                        VStack(spacing: 0) {
+                            ForEach(0..<7, id: \.self) { i in
+                                if i > 0 { Divider().padding(.leading, 16) }
+                                downtimeDayRow(i)
+                                if openDay == i { downtimeDayHours(i).transition(.opacity) }
+                            }
                         }
-                        Text(RuleTypeMeta.blurb(.downtime)).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+                        .background(FormGreen.fieldBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
+                    .transition(.opacity)
+                } else {
+                    HStack(spacing: 12) {
+                        ruleTimeField(label: "from", date: $rule.downtimeFrom)
+                        ruleTimeField(label: "to", date: $rule.downtimeTo)
+                    }
+                    .padding(.bottom, 18)
+                    .transition(.opacity)
                 }
             case .custom:
                 FormField(label: "Rule name") {
@@ -1590,6 +1911,18 @@ private struct EditRuleSheet: View {
                 EmptyView()
             }
         }
+        .animation(.spring(duration: 0.3, bounce: 0), value: customDays)
+        .animation(.spring(duration: 0.3, bounce: 0), value: openDay)
+        .onChange(of: customDays) { _, isCustom in
+            openDay = nil
+            // Customising starts from every day, each with the hours set so
+            // far, to change or switch off.
+            guard isCustom, rule.kind == .downtime else { return }
+            if rule.downtimeDays.isEmpty { rule.downtimeDays = Set(ScreenTimeSchedule.days) }
+            for code in ScreenTimeSchedule.days where rule.downtimeHours[code] == nil {
+                rule.downtimeHours[code] = DowntimeHours(from: rule.downtimeFrom, to: rule.downtimeTo)
+            }
+        }
         // Trash icon lives in FormShell's top header now (next to Cancel),
         // matching EditTaskReviewSheet's delete affordance — same alert,
         // just triggered from the header button instead of a bottom row.
@@ -1600,126 +1933,359 @@ private struct EditRuleSheet: View {
             Text("This can't be undone.")
         }
     }
+
+    /// A day: its name and its hours ("8 PM – 7 AM") or Off; a tap opens it.
+    private func downtimeDayRow(_ i: Int) -> some View {
+        let code = ScreenTimeSchedule.days[i]
+        let on = rule.downtimeDays.contains(code)
+        let span = rule.downtimeSpan(on: code)
+        return Button { openDay = openDay == i ? nil : i } label: {
+            HStack {
+                Text(ScreenTimeSchedule.names[i]).font(Typography.font(15.5, weight: .regular)).foregroundStyle(EColor.onSurface)
+                Spacer()
+                Text(on ? "\(shortClock(span.from)) – \(shortClock(span.to))" : "Off")
+                    .font(Typography.font(15, weight: .regular))
+                    .foregroundStyle(openDay == i ? FormGreen.accent : EColor.onSurfaceVariant)
+                    .monospacedDigit()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(.tertiaryLabel))
+                    .rotationEffect(.degrees(openDay == i ? 90 : 0))
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SettingsTapStyle())
+        .accessibilityValue(on ? "\(ChildRule.fmtClock(span.from)) to \(ChildRule.fmtClock(span.to))" : "Off")
+    }
+
+    /// An open day: downtime on or off that day, and its hours.
+    private func downtimeDayHours(_ i: Int) -> some View {
+        let code = ScreenTimeSchedule.days[i]
+        let on = Binding(
+            get: { rule.downtimeDays.contains(code) },
+            set: { if $0 { rule.downtimeDays.insert(code) } else { rule.downtimeDays.remove(code) } })
+        let from = Binding(
+            get: { rule.downtimeSpan(on: code).from },
+            set: { rule.downtimeHours[code] = DowntimeHours(from: $0, to: rule.downtimeSpan(on: code).to) })
+        let to = Binding(
+            get: { rule.downtimeSpan(on: code).to },
+            set: { rule.downtimeHours[code] = DowntimeHours(from: rule.downtimeSpan(on: code).from, to: $0) })
+        return VStack(spacing: 12) {
+            HStack {
+                Text("Downtime on \(ScreenTimeSchedule.names[i])")
+                    .font(Typography.font(14.5, weight: .medium))
+                    .foregroundStyle(EColor.onSurface)
+                Spacer()
+                EToggle(on: on, color: FormGreen.accent)
+                    .accessibilityLabel("Downtime on \(ScreenTimeSchedule.names[i])")
+            }
+            if on.wrappedValue {
+                HStack(spacing: 12) {
+                    ruleTimeField(label: "from", date: from)
+                    ruleTimeField(label: "to", date: to)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 14)
+        .sensoryFeedback(.selection, trigger: on.wrappedValue)
+    }
+
+    /// "8 PM", or "8:30 PM" when it isn't on the hour.
+    private func shortClock(_ date: Date) -> String {
+        ChildRule.fmtClock(date).replacingOccurrences(of: ":00", with: "")
+    }
 }
 
-// The daily allowance backing the built-in Screen Time Limit rule — a quick-
-// pick row of common limits plus a stepper for fine-tuning, mirroring the
-// preset-chip pattern GrantExtraTimeSheet uses for "how much extra time."
-// A native scrolling wheel picker for the actual minutes rather than
-// tapping a stepper 15 minutes at a time; nothing saves until "Save
-// limits" is tapped, so switching days to peek doesn't lose edits.
-private struct EditDailyScreenTimeLimitSheet: View {
+// The screen-time limit, set as iOS's own Screen Time sets it: Every Day
+// (one amount, on the scrolling wheel) or Customize Days (a row per day;
+// tapping one opens its own wheel under it). Nothing saves until Save.
+struct EditScreenTimeLimitSheet: View {
     var childName: String
-    var current: Int
-    var onSave: (Int) -> Void
+    var onSave: (_ daily: Int, _ weekly: [String: Int]) -> Void
     var onCancel: () -> Void
 
-    @State private var limit: Int
-    @State private var scrollID: Int?
+    @State private var custom: Bool
+    @State private var everyDay: Int
+    @State private var perDay: [Int]
+    /// The day whose wheel is open (Customize Days).
+    @State private var openDay: Int?
 
-    init(childName: String, current: Int, onSave: @escaping (Int) -> Void, onCancel: @escaping () -> Void) {
+    init(childName: String, daily: Int, weekly: [String: Int],
+         onSave: @escaping (_ daily: Int, _ weekly: [String: Int]) -> Void, onCancel: @escaping () -> Void) {
         self.childName = childName
-        self.current = current
         self.onSave = onSave
         self.onCancel = onCancel
-        _limit = State(initialValue: current)
-        _scrollID = State(initialValue: current)
+        let week = ScreenTimeSchedule.minutes(daily: daily, weekly: weekly)
+        _custom = State(initialValue: Set(week).count > 1)
+        _everyDay = State(initialValue: max(15, week[ScreenTimeSchedule.todayIndex]))
+        _perDay = State(initialValue: week)
     }
 
-    private let options: [Int] = Array(stride(from: 15, through: 480, by: 15))
-    private let warningStart = 135 // 2h15m
-    private let threeHours = 180
+    /// The week as it would be saved, Monday first.
+    private var week: [Int] { custom ? perDay : Array(repeating: everyDay, count: 7) }
 
-    // Mirrors the general pediatric guideline that recreational screen time
-    // above ~2 hours/day is worth a second look, and above 3 is worth an
-    // explicit flag — not a hard block, just something a parent should see
-    // before confirming.
+    private func save() {
+        let w = week
+        if Set(w).count == 1 {
+            onSave(w[0], [:])
+        } else {
+            onSave(w[0], Dictionary(uniqueKeysWithValues: zip(ScreenTimeSchedule.days, w)))
+        }
+    }
+
+    // The general guideline: over ~2 hours of recreational screen time a
+    // day is worth a second look, over 3 worth a flag. Not a block, just
+    // something to see before saving.
     private var warning: (color: Color, icon: String, text: String)? {
-        switch limit {
-        case warningStart..<threeHours:
-            return (Color(hex: "B26A00"), "exclamationmark.triangle.fill",
-                    "\(formatMinutes(limit)) a day is at the upper end of the general screen-time guideline for kids.")
-        case threeHours...:
+        let most = week.max() ?? 0
+        let when = Set(week).count == 1 ? "a day" : "on some days"
+        if most >= 180 {
             return (EColor.danger, "exclamationmark.octagon.fill",
-                    "\(formatMinutes(limit)) a day is above the general guideline — extended screen time like this is linked to worse sleep, mood, and attention in children.")
-        default:
-            return nil
+                    "\(formatMinutes(most)) \(when) is above the general guideline. Long screen time is linked to worse sleep, mood and attention in children.")
         }
-    }
-
-    // A UIPickerView-backed wheel Picker only reports its selection on
-    // settle, not continuously during a fast fling — the warning message
-    // below it visibly lagged behind the finger. A ScrollView driven by
-    // live scroll geometry (.scrollPosition) reports position continuously
-    // instead, so the warning keeps pace with the flick.
-    private var limitWheel: some View {
-        let itemHeight: CGFloat = 46
-        let visibleRows: CGFloat = 5
-        return GeometryReader { geo in
-            let topInset = max(0, (geo.size.height - itemHeight) / 2)
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 0) {
-                    ForEach(options, id: \.self) { m in
-                        Text(formatMinutes(m))
-                            .font(Typography.font(m == limit ? 17 : 14, weight: m == limit ? .heavy : .semibold))
-                            .foregroundStyle(m == limit ? EColor.primary : EColor.onSurfaceVariant)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: itemHeight)
-                            .id(m)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.viewAligned)
-            .scrollPosition(id: $scrollID)
-            .contentMargins(.vertical, topInset, for: .scrollContent)
-            .overlay {
-                Capsule()
-                    .fill(EColor.primary.opacity(0.1))
-                    .frame(height: itemHeight - 8)
-                    .padding(.horizontal, 32)
-                    .allowsHitTesting(false)
-            }
+        if most >= 135 {
+            return (Color(hex: "B26A00"), "exclamationmark.triangle.fill",
+                    "\(formatMinutes(most)) \(when) is at the upper end of the general screen-time guideline for kids.")
         }
-        .frame(height: itemHeight * visibleRows)
-        .onChange(of: scrollID) { _, newValue in
-            if let newValue { limit = newValue }
-        }
+        return nil
     }
 
     var body: some View {
-        FormShell(
-            title: "Screen Time Limit",
-            onCancel: onCancel,
-            onSave: { onSave(limit) },
-            canSave: limit > 0,
-            saveLabel: "Save limit"
-        ) {
-            FormField(label: "Daily limit") {
-                limitWheel
+        FormShell(title: "Screen Time Limit", onCancel: onCancel, onSave: save,
+                  canSave: week.contains { $0 > 0 }, saveLabel: "Save limit") {
+            EveryDayOrCustom(custom: $custom)
+                .padding(.bottom, 18)
+
+            if custom {
+                FormField(label: "Each day's limit") {
+                    VStack(spacing: 0) {
+                        ForEach(0..<7, id: \.self) { i in
+                            if i > 0 { Divider().padding(.leading, 16) }
+                            dayRow(i)
+                            if openDay == i {
+                                LimitWheel(minutes: $perDay[i], least: 0)
+                                    .transition(.opacity)
+                            }
+                        }
+                    }
                     .background(FormGreen.fieldBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            } else {
+                FormField(label: "Daily limit") {
+                    LimitWheel(minutes: $everyDay, least: 15)
+                        .background(FormGreen.fieldBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
             }
 
-            // No animation here — the wheel picker can fire many `limit`
-            // changes per second while scrolling, and an animated cross-fade
-            // couldn't keep up, reading as visibly lagging behind the wheel.
-            // Updates instantly instead, in lockstep with the scroll.
+            // No animation: the wheel changes the amount many times a
+            // second, and a cross-fade would lag behind it.
             if let warning {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: warning.icon).foregroundStyle(warning.color)
                     Text(warning.text).font(Typography.font(13, weight: .medium)).foregroundStyle(EColor.onSurface)
                 }
                 .padding(14)
-                .background(warning.color.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(warning.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .transaction { $0.animation = nil }
+                .padding(.bottom, 12)
             }
-
-            Text("\(childName)'s daily allowance resets at midnight.")
-                .font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
         }
+        .animation(.spring(duration: 0.3, bounce: 0), value: custom)
+        .animation(.spring(duration: 0.3, bounce: 0), value: openDay)
+        .onChange(of: custom) { _, isCustom in
+            // Customising starts from the one amount set so far.
+            if isCustom && Set(perDay).count == 1 { perDay = Array(repeating: everyDay, count: 7) }
+            openDay = nil
+        }
+    }
+
+    private func dayRow(_ i: Int) -> some View {
+        Button { openDay = openDay == i ? nil : i } label: {
+            HStack {
+                Text(ScreenTimeSchedule.names[i])
+                    .font(Typography.font(15.5, weight: .regular))
+                    .foregroundStyle(EColor.onSurface)
+                Spacer()
+                Text(ScreenTimeSchedule.limitText(perDay[i]))
+                    .font(Typography.font(15, weight: .regular))
+                    .foregroundStyle(openDay == i ? FormGreen.accent : EColor.onSurfaceVariant)
+                    .monospacedDigit()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(.tertiaryLabel))
+                    .rotationEffect(.degrees(openDay == i ? 90 : 0))
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SettingsTapStyle())
+    }
+}
+
+/// "Every Day" or "Customize Days", as iOS's Screen Time asks it: two rows,
+/// a check beside the chosen one.
+struct EveryDayOrCustom: View {
+    @Binding var custom: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            row("Every Day", chosen: !custom) { custom = false }
+            Divider().padding(.leading, 16)
+            row("Customize Days", chosen: custom) { custom = true }
+        }
+        .background(FormGreen.fieldBg)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .sensoryFeedback(.selection, trigger: custom)
+    }
+
+    private func row(_ title: String, chosen: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title).font(Typography.font(15.5, weight: .regular)).foregroundStyle(EColor.onSurface)
+                Spacer()
+                if chosen {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(FormGreen.accent)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+    }
+}
+
+/// The amount on a scrolling wheel, in 15-minute steps up to 8 hours
+/// (from "None" when `least` is 0). Built on a scroll view rather than a
+/// wheel Picker: a Picker only reports where it stopped, so anything shown
+/// from the amount (the guideline warning) lagged behind a fast flick.
+private struct LimitWheel: View {
+    @Binding var minutes: Int
+    var least: Int
+
+    @State private var scrollID: Int?
+
+    private var options: [Int] { Array(stride(from: least, through: 480, by: 15)) }
+    private let itemHeight: CGFloat = 44
+    private let visibleRows: CGFloat = 5
+
+    var body: some View {
+        GeometryReader { geo in
+            let inset = max(0, (geo.size.height - itemHeight) / 2)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    ForEach(options, id: \.self) { m in
+                        Text(ScreenTimeSchedule.limitText(m))
+                            .font(Typography.font(m == minutes ? 17 : 15, weight: m == minutes ? .semibold : .regular))
+                            .foregroundStyle(m == minutes ? EColor.onSurface : EColor.onSurfaceVariant)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: itemHeight)
+                            .id(m)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $scrollID)
+            .contentMargins(.vertical, inset, for: .scrollContent)
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.black.opacity(0.05))
+                    .frame(height: itemHeight - 6)
+                    .padding(.horizontal, 12)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(height: itemHeight * visibleRows)
+        .onAppear { scrollID = options.contains(minutes) ? minutes : options.first }
+        .onChange(of: scrollID) { _, value in
+            if let value, value != minutes { minutes = value }
+        }
+        .sensoryFeedback(.selection, trigger: minutes)
+        .accessibilityElement()
+        .accessibilityLabel(ScreenTimeSchedule.limitText(minutes))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: minutes = min(480, minutes + 15)
+            case .decrement: minutes = max(least, minutes - 15)
+            @unknown default: break
+            }
+            scrollID = minutes
+        }
+    }
+}
+
+/// The week's limits as seven small bars, Monday first, the highlighted
+/// day (today) in full colour.
+struct WeekLimitBars: View {
+    var minutes: [Int]
+    var highlighted: Int
+    var tint: Color
+
+    var body: some View {
+        let top = max(minutes.max() ?? 1, 1)
+        HStack(alignment: .bottom, spacing: 10) {
+            ForEach(0..<7, id: \.self) { i in
+                VStack(spacing: 6) {
+                    Capsule()
+                        .fill(i == highlighted ? tint : tint.opacity(0.28))
+                        .frame(width: 14, height: minutes[i] > 0 ? max(6, 40 * CGFloat(minutes[i]) / CGFloat(top)) : 4)
+                        .frame(height: 40, alignment: .bottom)
+                    Text(ScreenTimeSchedule.letters[i])
+                        .font(Typography.font(11, weight: i == highlighted ? .bold : .semibold))
+                        .foregroundStyle(i == highlighted ? EColor.onSurface : EColor.onSurfaceVariant)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .animation(.spring(duration: 0.3, bounce: 0), value: minutes)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A card that sinks a little while pressed.
+struct CardPressStyle: ButtonStyle {
+    /// A light tap felt as it's pressed (Settings' buttons, 2026-11-09).
+    var haptic = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.spring(duration: 0.18, bounce: 0), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if haptic && pressed { TapHaptic.play() }
+            }
+    }
+}
+
+/// Settings' buttons (2026-11-09, the user's ask): a light tap felt the
+/// moment a row is pressed, and the row dims while held. Switches and the
+/// Every Day / Customize choice keep their own selection tick instead.
+struct SettingsTapStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .animation(.easeOut(duration: configuration.isPressed ? 0.05 : 0.18), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed { TapHaptic.play() }
+            }
+    }
+}
+
+/// The light tap Settings' buttons play.
+enum TapHaptic {
+    @MainActor static func play() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 }
 
@@ -1776,10 +2342,11 @@ private struct PairingSheet: View {
                 }
                 .padding(24)
             }
+            .background(Rectangle().fill(EColor.surface).ignoresSafeArea())
             .navigationTitle("Pair a Device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(redeemed ? "Done" : "Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(redeemed ? "Done" : "Cancel") { TapHaptic.play(); dismiss() } }
             }
         }
     }
@@ -1796,5 +2363,38 @@ private struct PairingSheet: View {
                 .foregroundStyle(EColor.onSurfaceVariant)
         }
         .padding(.top, 20)
+    }
+}
+
+/// Cream | Dark as a small switch, the picked part raised.
+private struct AppearanceSwitch: View {
+    @Binding var appearance: Appearance
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Appearance.allCases) { a in
+                let on = appearance == a
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) { appearance = a }
+                } label: {
+                    Text(a.name)
+                        .font(Typography.font(13.5, weight: .semibold))
+                        .foregroundStyle(on ? Neutral.ink : Neutral.secondary)
+                        .frame(width: 54, height: 30)
+                        .background {
+                            if on {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(EColor.card)
+                                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(Neutral.tile, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .sensoryFeedback(.selection, trigger: appearance)
     }
 }

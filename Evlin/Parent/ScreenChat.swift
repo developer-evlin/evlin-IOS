@@ -18,7 +18,9 @@ private enum ChatCardKind {
     // clean his room every Saturday morning") hands back a drafted task to
     // confirm/edit rather than a blank form the parent re-types by hand.
     case addTask(draft: TaskDraft)
-    case addEvent(draft: EventDraft)
+    // Several tasks from one reply: one compact card with a row each, not a
+    // tall card per task.
+    case addTasks(drafts: [TaskDraft])
     // Read-only — what's done/pending/overdue for a child today, pulled
     // from the same TaskStore data their profile shows, not a mocked
     // separate figure.
@@ -30,9 +32,8 @@ private struct ChatMessage: Identifiable {
     var fromUser: Bool
     var text: String
     var card: ChatCardKind? = nil
-    // Which assistant said it: "chat" or "youtube". The YouTube agent runs
-    // in the same thread with its own short memory (agent_sessions.py), so
-    // its replies are labelled to tell the two apart.
+    // Which assistant said it. Always "chat" now; the server's column
+    // also holds "youtube" on threads from the removed YouTube agent.
     var agent: String = "chat"
     // A draft card's state lives here, not in the card's own view: the
     // list rebuilds rows as they scroll back into view, which reset a
@@ -41,10 +42,139 @@ private struct ChatMessage: Identifiable {
     // An older draft a newer one replaced, before anything was created
     // from it. Folded to one grey line; tapping it opens the card again.
     var superseded = false
-    // A reply from the model (or the error in its place): the ones that
-    // can be tried again. Local lines ("Added …", a tile's own intro) can't.
-    var fromServer = false
-    var failed = false
+    // What a used card did, as a small card: its icon, what it was, and a
+    // grey detail ("YouTube blocked" / "For 1 hour"). Set a moment after
+    // the tap; the full card then collapses into it.
+    var receipt: ChatReceipt?
+}
+
+/// The chat's start screen, in Gemini's manner: a two-line greeting and a few
+/// plain suggestions; only their icons carry colour. Each piece falls into place from the
+/// top, one after another, when an empty chat appears (a waterfall, quick and
+/// without bounce). Tapping a suggestion does what its help-panel row does.
+private struct WelcomeMessage: View {
+    let childName: String
+    let suggestions: [ChatSuggestion]
+    var onPick: (ChatSuggestion) -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = 0
+
+    /// A suggestion's fill and edge: Apple's soft grey with a firm edge by
+    /// day, the card charcoal at night, so each reads as a button
+    /// (2026-11-19, the user's call: the thin #E3E3E8 edge on the page
+    /// was too faint).
+    private static let chipFill = Color(light: "F2F2F7", dark: "262A30")
+    private static let chipEdge = Color(light: "D1D1D6", dark: "3D424B")
+    /// What this chatbot does, as four small buttons.
+    private static let order = ["Block an app", "Daily screen time", "Add a task", "Suggest an activity"]
+    private var cards: [ChatSuggestion] {
+        Self.order.compactMap { t in suggestions.first { $0.title == t } }
+    }
+
+    private func cell(_ s: ChatSuggestion) -> some View {
+        Button { onPick(s) } label: {
+            HStack(spacing: 10) {
+                // The icon on a soft disc of its own colour.
+                Image(systemName: EIcon.sf(s.icon))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(s.tint)
+                    .frame(width: 30, height: 30)
+                    .background(s.tint.opacity(0.14), in: Circle())
+                Text(label(s))
+                    .font(ChatType.label(16))
+                    .foregroundStyle(EColor.onSurface)
+                    .lineLimit(1)
+            }
+            .padding(.leading, 8)
+            .padding(.trailing, 20)
+            .frame(height: 48)
+            // A soft grey pill with a firm edge and a faint lift
+            // (2026-11-19; a plain pill on the page with a thin #E3E3E8
+            // edge, 2026-11-15, before, too faint to read as a button).
+            .background(Self.chipFill, in: Capsule())
+            .overlay(Capsule().strokeBorder(Self.chipEdge, lineWidth: 1.25))
+            .shadow(color: .black.opacity(0.05), radius: 3, y: 1.5)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressedSurfaceStyle())
+        .accessibilityHint(s.help)
+    }
+
+    private func label(_ s: ChatSuggestion) -> String {
+        s.title == "Add a task" ? "Manage tasks" : s.title
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // Says plainly what this is: a simple chatbot.
+            Text("Just a simple chatbot that helps you block apps, manage screen time, and come up with activity ideas for \(childName) together.")
+                .font(ChatType.body())
+                .lineSpacing(ChatType.lineSpacing)
+                .foregroundStyle(EColor.onSurface)
+                .fixedSize(horizontal: false, vertical: true)
+                .modifier(Waterfall(index: 0, shown: shown))
+
+            // Small rounded buttons listed down, each only as wide as its label.
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(cards.enumerated()), id: \.offset) { i, s in
+                    cell(s)
+                        .modifier(Waterfall(index: i + 1, shown: shown))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task {
+            guard shown == 0 else { return }
+            let total = cards.count + 1
+            if reduceMotion { shown = total; return }
+            for i in 1...total {
+                withAnimation(.spring(duration: 0.45, bounce: 0)) { shown = i }
+                try? await Task.sleep(nanoseconds: 70_000_000)
+                guard !Task.isCancelled else { return }
+            }
+        }
+    }
+}
+
+/// One piece of the welcome falling into place: hidden until its turn, then
+/// fading in as it drops the last few points.
+private struct Waterfall: ViewModifier {
+    let index: Int
+    let shown: Int
+
+    func body(content: Content) -> some View {
+        let on = index < shown
+        content
+            .opacity(on ? 1 : 0)
+            .offset(y: on ? 0 : -10)
+    }
+}
+
+/// The small card a used card collapses into.
+/// Calls `onGrow` when the view gets taller after it first appears (a card
+/// opened up by a tap), not when it first lays out. The two-value form of
+/// onGeometryChange needs iOS 18; this one works back to 17.
+private struct GrowthWatcher: ViewModifier {
+    var onGrow: () -> Void
+    @State private var last: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            if last > 0, height > last + 8 { onGrow() }
+            last = height
+        }
+    }
+}
+
+private struct ChatReceipt {
+    enum Icon {
+        case app(String)               // the app's own icon, by name
+        case symbol(String, Color)     // the action's icon, in its tile colour
+    }
+    var icon: Icon
+    var title: String
+    var detail: String
 }
 
 // A stable id the ScrollViewReader can always target, regardless of how
@@ -154,6 +284,56 @@ let bubbleMaxWidth: CGFloat = 300
 // itself (the user bubble's tighter style, or the assistant's full-width
 // body type) — headings always render larger regardless, since they need
 // to read as structurally different no matter the body size in use.
+/// The conversation's type: Google Sans Flex, the open-source (SIL OFL)
+/// release of the Google Sans family Gemini uses. Its optical-size axis is set
+/// to the point size, so small text gets the open Text shapes and large text
+/// the tighter Display shapes, as Gemini does. Regular for reading; medium and
+/// semibold where something should stand out. The rest of the app keeps
+/// Plus Jakarta Sans.
+enum ChatType {
+    static let size: CGFloat = 17
+    static let lineSpacing: CGFloat = 5
+    // Heavier than the font's 400 everywhere, as Google tunes Gemini for
+    // phone screens: a solid reading weight, and each step up a notch more,
+    // so everything reads firm while titles still lead.
+    static func body() -> Font { font(size, weight: 460) }
+    /// Headings inside replies.
+    static func heading(_ size: CGFloat = 18) -> Font { font(size, weight: 680) }
+    /// The greeting.
+    static func title(_ size: CGFloat) -> Font { font(size, weight: 620) }
+    /// Card and receipt titles.
+    static func strong(_ size: CGFloat) -> Font { font(size, weight: 680) }
+    /// Labels: chips, buttons, secondary lines in cards.
+    static func label(_ size: CGFloat) -> Font { font(size, weight: 540) }
+    /// Secondary text with enough contrast to read at a glance (about 5:1 on
+    /// white), rather than the app's pale grey.
+    static let secondary = Color(hex: "5E6A62")
+    static var font18: Font { font(18, weight: 460) }
+
+    /// The font file ships in the asset catalog (GoogleSansFlex data set,
+    /// licence beside it) and is registered once at launch.
+    static func registerFont() {
+        guard let data = NSDataAsset(name: "GoogleSansFlex")?.data,
+              let provider = CGDataProvider(data: data as CFData),
+              let cgFont = CGFont(provider) else { return }
+        CTFontManagerRegisterGraphicsFont(cgFont, nil)
+    }
+
+    private static func font(_ size: CGFloat, weight: CGFloat) -> Font {
+        let axes: [NSNumber: CGFloat] = [
+            0x7767_6874: weight,                    // wght
+            0x6F70_737A: min(max(size, 6), 144),    // opsz
+        ]
+        let descriptor = UIFontDescriptor(fontAttributes: [
+            .family: "Google Sans Flex",
+            UIFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String): axes,
+        ])
+        let ui = UIFont(descriptor: descriptor, size: size)
+        // Falls back to the system face if the font didn't register.
+        return ui.familyName == "Google Sans Flex" ? Font(ui) : .system(size: size, weight: weight >= 600 ? .semibold : weight >= 500 ? .medium : .regular)
+    }
+}
+
 private struct MessageContent: View {
     var text: String
 
@@ -191,12 +371,12 @@ private struct MessageContent: View {
                 if line.isEmpty {
                     Color.clear.frame(height: 4)
                 } else if line.hasPrefix("## ") {
-                    inline(String(line.dropFirst(3))).font(Typography.font(17, weight: .bold)).padding(.top, 2)
+                    inline(String(line.dropFirst(3))).font(ChatType.heading(18)).padding(.top, 4)
                 } else if line.hasPrefix("# ") {
-                    inline(String(line.dropFirst(2))).font(Typography.font(20, weight: .heavy)).padding(.top, 2)
+                    inline(String(line.dropFirst(2))).font(ChatType.heading(21)).padding(.top, 4)
                 } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
                     HStack(alignment: .top, spacing: 8) {
-                        Circle().fill(EColor.onSurfaceVariant).frame(width: 4, height: 4).padding(.top, 9)
+                        Circle().fill(EColor.onSurfaceVariant).frame(width: 4, height: 4).padding(.top, 11)
                         inline(String(line.dropFirst(2)))
                     }
                 } else {
@@ -280,9 +460,15 @@ private struct AddTaskCard: View {
     @State private var submitted = false
 
     /// `done`: already created; see ChatMessage.cardDone.
-    init(draft: TaskDraft, done: Bool = false, onCreate: @escaping (_ draft: TaskDraft) -> Void) {
+    /// What the button says: "Create task" in chat, "Save" when it edits
+    /// one row of a several-task card.
+    var submitLabel = "Create task"
+
+    init(draft: TaskDraft, done: Bool = false, submitLabel: String = "Create task",
+         onCreate: @escaping (_ draft: TaskDraft) -> Void) {
         self.draft = draft
         self.onCreate = onCreate
+        self.submitLabel = submitLabel
         _submitted = State(initialValue: done)
         _title = State(initialValue: draft.title)
         _whatToDo = State(initialValue: draft.instructions)
@@ -321,7 +507,7 @@ private struct AddTaskCard: View {
             // prominence rather than sitting in an identical box to the
             // optional fields.
             TextField("Task name", text: $title)
-                .font(Typography.font(17, weight: .semibold))
+                .font(ChatType.label(17))
                 .textFieldStyle(.plain)
                 .submitLabel(.done)
 
@@ -346,12 +532,12 @@ private struct AddTaskCard: View {
             if !whatToDo.isEmpty || submitted {
                 Divider()
                 TextField("Notes", text: $whatToDo, axis: .vertical)
-                    .font(Typography.font(14))
+                    .font(ChatType.label(14))
                     .lineLimit(1...4)
             } else {
                 Button { whatToDo = " " } label: {
                     Label("Add notes", systemImage: "text.alignleft")
-                        .font(Typography.font(14))
+                        .font(ChatType.label(14))
                         .foregroundStyle(EColor.primary)
                 }
                 .buttonStyle(PressedFadeStyle())
@@ -362,8 +548,8 @@ private struct AddTaskCard: View {
                 submitted = true
                 onCreate(currentDraft)
             } label: {
-                Text("Create task")
-                    .font(Typography.font(15, weight: .semibold))
+                Text(submitLabel)
+                    .font(ChatType.label(15))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
@@ -380,14 +566,12 @@ private struct AddTaskCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(EColor.outlineVariant))
         .disabled(submitted)
-        // The app's "newly added" tap, once, at the parent's own press.
-        .sensoryFeedback(.impact(weight: .light), trigger: submitted) { old, new in new && !old }
     }
 
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "checklist").font(.system(size: 15)).foregroundStyle(EColor.primary)
-            Text("Add a task").font(Typography.font(15, weight: .bold)).foregroundStyle(EColor.onSurface)
+            Text("Add a task").font(ChatType.strong(15)).foregroundStyle(EColor.onSurface)
             Spacer()
             if submitted {
                 Image(systemName: "checkmark.circle.fill")
@@ -410,7 +594,7 @@ private struct AddTaskCard: View {
                     .font(.system(size: 14))
                     .foregroundStyle(EColor.onSurfaceVariant)
                     .frame(width: 20)
-                Text(label).font(Typography.font(14)).foregroundStyle(EColor.onSurface)
+                Text(label).font(ChatType.label(14)).foregroundStyle(EColor.onSurface)
                 Spacer()
                 content()
                 Button {
@@ -429,7 +613,7 @@ private struct AddTaskCard: View {
                 withAnimation(.easeOut(duration: 0.15)) { isOn.wrappedValue = true }
             } label: {
                 Label(label, systemImage: icon)
-                    .font(Typography.font(14))
+                    .font(ChatType.label(14))
                     .foregroundStyle(EColor.primary)
             }
             .buttonStyle(PressedFadeStyle())
@@ -450,6 +634,146 @@ private struct AddTaskCard: View {
         }
         out.recurrence = recurrence
         return out
+    }
+}
+
+/// Several tasks from one reply, as one compact card: a row each (the title,
+/// and when in short grey words), a tick to leave one out, a tap to change
+/// one in the full task card, and one button for all of them. A single task
+/// keeps AddTaskCard; one tall card per task made three tasks a long scroll.
+private struct TaskBatchCard: View {
+    var done: Bool
+    var onCreate: ([TaskDraft]) -> Void
+
+    @State private var drafts: [TaskDraft]
+    @State private var included: [Bool]
+    @State private var submitted: Bool
+    @State private var editing: Row?
+
+    private struct Row: Identifiable { let id: Int }
+
+    init(drafts: [TaskDraft], done: Bool = false, onCreate: @escaping ([TaskDraft]) -> Void) {
+        self.done = done
+        self.onCreate = onCreate
+        _drafts = State(initialValue: drafts)
+        _included = State(initialValue: drafts.map { _ in true })
+        _submitted = State(initialValue: done)
+    }
+
+    private var chosen: [TaskDraft] { drafts.indices.filter { included[$0] }.map { drafts[$0] } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "checklist").font(.system(size: 15)).foregroundStyle(EColor.primary)
+                Text("\(drafts.count) tasks").font(ChatType.strong(15)).foregroundStyle(EColor.onSurface)
+                Spacer()
+                if submitted {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Brand.greenDeep)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+
+            VStack(spacing: 0) {
+                ForEach(drafts.indices, id: \.self) { i in
+                    if i > 0 { Divider() }
+                    row(i)
+                }
+            }
+
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) { submitted = true }
+                onCreate(chosen)
+            } label: {
+                Text(submitted ? "Created" : chosen.count == 1 ? "Create 1 task" : "Create \(chosen.count) tasks")
+                    .font(ChatType.label(15))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(!chosen.isEmpty || submitted ? Brand.greenDeep : EColor.outlineVariant)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(PressedSurfaceStyle())
+            .disabled(chosen.isEmpty || submitted)
+        }
+        .padding(16)
+        .frame(maxWidth: bubbleMaxWidth + 60, alignment: .leading)
+        .background(EColor.surfaceContainerLowest)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(EColor.outlineVariant))
+        .sheet(item: $editing) { row in
+            NavigationStack {
+                ScrollView {
+                    AddTaskCard(draft: drafts[row.id], submitLabel: "Save") { changed in
+                        drafts[row.id] = changed
+                        editing = nil
+                    }
+                    .padding(16)
+                }
+                .navigationTitle("Change task")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { editing = nil } } }
+            }
+            .presentationDetents([.large])
+        }
+    }
+
+    private func row(_ i: Int) -> some View {
+        let on = included[i]
+        return HStack(spacing: 12) {
+            Button { editing = Row(id: i) } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(drafts[i].title)
+                        .font(ChatType.label(15))
+                        .foregroundStyle(on ? EColor.onSurface : EColor.onSurfaceVariant)
+                        .lineLimit(2)
+                    Text(Self.when(drafts[i]))
+                        .font(ChatType.label(13))
+                        .foregroundStyle(EColor.onSurfaceVariant)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressedFadeStyle())
+            .disabled(submitted)
+            .accessibilityHint("Opens this task to change it")
+
+            Button { included[i].toggle() } label: {
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(on ? Brand.greenDeep : EColor.outlineVariant)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(submitted)
+            .sensoryFeedback(.selection, trigger: on)
+            .accessibilityLabel(on ? "Included" : "Left out")
+        }
+        .padding(.vertical, 6)
+    }
+
+    /// "Mon, Wed, Fri · 4:00 PM", "Tomorrow", "Sat 24 Oct · 10:00 AM".
+    static func when(_ d: TaskDraft) -> String {
+        var parts: [String] = []
+        if d.recurrence != "none", !d.recurrence.isEmpty {
+            parts.append(d.recurrence == "daily" ? "Every day" : repeatDisplayLabel(d.recurrence))
+        } else if let date = d.dueDate {
+            let cal = Calendar.current
+            if cal.isDateInToday(date) { parts.append("Today") }
+            else if cal.isDateInTomorrow(date) { parts.append("Tomorrow") }
+            else {
+                let f = DateFormatter(); f.dateFormat = "EEE d MMM"
+                parts.append(f.string(from: date))
+            }
+        }
+        if let m = d.dueMinutes {
+            let f = DateFormatter(); f.dateFormat = "h:mm a"
+            let t = Calendar.current.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: Date()) ?? Date()
+            parts.append(f.string(from: t))
+        }
+        return parts.isEmpty ? "No day set" : parts.joined(separator: " · ")
     }
 }
 
@@ -486,16 +810,16 @@ private struct ReviewComplianceCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(childName) today")
-                .font(Typography.font(13, weight: .semibold))
+                .font(ChatType.label(13))
                 .foregroundStyle(EColor.onSurfaceVariant)
 
             // The headline is the real count, not three equal-weight boxes.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("\(done.count) of \(tasks.count)")
-                    .font(Typography.font(24, weight: .bold))
+                    .font(ChatType.label(24))
                     .foregroundStyle(EColor.onSurface)
                 Text(tasks.count == 1 ? "task done" : "tasks done")
-                    .font(Typography.font(14, weight: .medium))
+                    .font(ChatType.label(14))
                     .foregroundStyle(EColor.onSurfaceVariant)
             }
 
@@ -511,7 +835,7 @@ private struct ReviewComplianceCard: View {
             .accessibilityHidden(true)
 
             Text(breakdown)
-                .font(Typography.font(13, weight: .medium))
+                .font(ChatType.label(13))
                 .foregroundStyle(overdue.isEmpty ? EColor.onSurfaceVariant : EColor.danger)
 
             if !overdue.isEmpty {
@@ -522,12 +846,12 @@ private struct ReviewComplianceCard: View {
                                 .font(.system(size: 11))
                                 .foregroundStyle(EColor.danger)
                             Text(task.title)
-                                .font(Typography.font(13, weight: .medium))
+                                .font(ChatType.label(13))
                                 .foregroundStyle(EColor.onSurface)
                             Spacer()
                             if let due = task.dueLabel {
                                 Text(due)
-                                    .font(Typography.font(11, weight: .regular))
+                                    .font(ChatType.label(11))
                                     .foregroundStyle(EColor.onSurfaceVariant)
                             }
                         }
@@ -558,7 +882,7 @@ private struct Capability: Identifiable {
 // What the assistant can actually do — its tools are in
 // evlin-backend/tool_calls/. Keep this list to what's true: it drafts, the
 // parent confirms, and nothing here should promise more.
-// Tasks and the calendar are covered by the tiles' own entries in the help
+// Tasks and app blocks are covered by the tiles' own entries in the help
 // panel; these are the two things no tile shows.
 private let capabilities: [Capability] = [
     Capability(icon: "questionmark.bubble", title: "Asks instead of guessing", sub: "One short question when a request is unclear.", tint: Color(hex: "7C5CD9")),
@@ -585,9 +909,6 @@ private struct ChatSuggestion: Identifiable {
     // What the tile does, for the help panel. Keep it to what tapping it
     // really does today.
     var help: String = ""
-    // Switches the composer to the YouTube agent instead of sending
-    // anything: the parent says what to look for in their own words.
-    var startsYouTube: Bool = false
     // The server asks this tile's first question itself, without the model
     // (chat.py SHORTCUT_QUESTIONS): instant instead of 4-5 seconds.
     var shortcut: String? = nil
@@ -611,14 +932,6 @@ private var welcomeSuggestions: [ChatSuggestion] {[
     ChatSuggestion(icon: "sf:checkmark", title: "Review your child's progress", prompt: "How is \(activeChildName) doing with today's tasks?", card: .reviewCompliance(childId: SessionManager.shared.activeChildId ?? "", childName: activeChildName),
                    help: "Today's tasks: done, waiting for you, or not started.",
                    tint: Brand.greenDeep),
-    // Replaced "Set a bedtime rule", which the assistant could only answer
-    // by pointing at the profile. This one hands the composer to the
-    // YouTube agent; the play button by the text field does the same
-    // mid-thread.
-    ChatSuggestion(icon: "sf:play.rectangle.fill", title: "Find YouTube videos", prompt: "",
-                   help: "Videos that fit \(activeChildName)'s settings, for you to approve.",
-                   startsYouTube: true,
-                   tint: Color(hex: "E5322D")),
     // Deliberately open. This used to send a fully-specified sentence
     // ("clean his room every Saturday morning") and pre-fill the card with
     // it, so tapping the tile looked like the assistant inventing a task out
@@ -628,8 +941,11 @@ private var welcomeSuggestions: [ChatSuggestion] {[
                    help: "Say what and when. Nothing's created until you tap Create.",
                    shortcut: "add_task",
                    tint: Color(hex: "3B6FD8")),
-    ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for \(activeChildName)", card: .blockDraft(BlockDraft()),
-                   help: "Pick an app and how long.",
+    // Asks which app first (instantly, chat.py SHORTCUT_QUESTIONS); the
+    // agent then drafts the block card from the answer.
+    ChatSuggestion(icon: "sf:nosign", title: "Block an app", prompt: "Block an app for \(activeChildName)",
+                   help: "Say which app. Evlin suggests how long; change it before you block.",
+                   shortcut: "block_app",
                    tint: Color(hex: "E0574F")),
     ChatSuggestion(
         icon: "sf:lightbulb.fill", title: "Suggest an activity",
@@ -641,30 +957,35 @@ private var welcomeSuggestions: [ChatSuggestion] {[
         shortcut: "suggest_activity",
         tint: Color(hex: "D49A06")
     ),
-    // No hardcoded `reply:` here (used to claim "Added — Soccer Practice
-    // now repeats..." with nothing ever actually written to the
-    // calendar) — this goes to the real model like any other message,
-    // which drafts the event with draft_event for the parent to add.
-    ChatSuggestion(icon: "sf:calendar", title: "Update the calendar",
-                   prompt: "I'd like to add something to the calendar",
-                   help: "Practice, appointments, trips: drafted for you to add.",
-                   shortcut: "add_event",
-                   tint: Color(hex: "1F6390")),
+    // Answered by the chatbot from today's limit and what's been earned.
+    ChatSuggestion(icon: "sf:hourglass", title: "Daily screen time",
+                   prompt: "How much screen time does \(activeChildName) have today?",
+                   help: "Today's limit, and what tasks have added to it.",
+                   tint: Color(light: "1F6390", dark: "6AA9D6")),
 ]}
 
 struct ScreenChat: View {
+    /// The send button with nothing to send: a circle a step deeper than the
+    /// message bar, so it reads as a button (2026-11-14).
+    private static let sendIdle = Color(light: "E5E5EA", dark: "30343B")
+    /// The message bar's edge: none by day (its shadow sets it apart), fine
+    /// at night.
+    private static let composerEdge = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(Color(hex: "353A42")) : .clear })
     @Environment(SessionManager.self) private var session
 
-    // No canned "I'm Evlin" bubble seeded in — the empty state's welcomeGrid
+    // No canned "I'm Evlin" bubble seeded in — the empty state's WelcomeMessage
     // already carries that greeting, so the transcript itself only ever
     // holds real exchanges the user actually sent/received.
     @State private var messages: [ChatMessage] = []
     @State private var draft = ""
-    // On: what the parent sends goes to the YouTube agent, in this same
-    // thread. Off: the main assistant (tasks and calendar).
-    @State private var youtubeMode = false
     // Selection ticks: a tile tapped, an old draft unfolded.
     @State private var tickCount = 0
+    // The app's "newly added" tap, once per card used (task, block).
+    @State private var addedTick = 0
+    // A light tap for each new chat, as for each send.
+    @State private var newChatTick = 0
+    // Block an app, as Profile's sheet (see sendSuggestion).
+    @State private var showBlockSheet = false
     // Set when the parent drags the conversation after sending, so a card
     // landing later doesn't pull the view away from what they're reading.
     @State private var userScrolledSinceSend = false
@@ -716,7 +1037,6 @@ struct ScreenChat: View {
     // pull the view along; scrolled further up, they're left where they are
     // and the jump button appears instead.
     @State private var followsBottom = true
-    @State private var showJumpToLatest = false
     // A reply is writing itself in (after the typing dots).
     @State private var isStreaming = false
     // The move that brings the parent's new message to the top. Separate
@@ -757,12 +1077,14 @@ struct ScreenChat: View {
                     // be built.
                     LazyVStack(alignment: .leading, spacing: 24) {
                         if messages.isEmpty {
-                            // Empty-conversation state: a Gemini/ChatGPT-style
-                            // prompt grid — replaced by (not layered under)
-                            // the transcript once a real exchange starts,
-                            // each swapping in with its own transition rather
-                            // than a flat cut.
-                            welcomeGrid
+                            // Empty-conversation state: Evlin's greeting, written
+                            // in word by word, with what it can do as tappable
+                            // phrases — replaced by the transcript once a real
+                            // exchange starts.
+                            WelcomeMessage(childName: activeChildName, suggestions: welcomeSuggestions) { s in
+                                sendSuggestion(s)
+                            }
+                                .padding(.top, 8)
                                 .transition(.asymmetric(
                                     insertion: .opacity,
                                     removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
@@ -782,7 +1104,8 @@ struct ScreenChat: View {
                                     // 18pt continuous corner keeps a
                                     // one-liner a bubble, not a pill.
                                     MessageContent(text: m.text)
-                                        .font(Typography.font(15, weight: .regular))
+                                        .font(ChatType.body())
+                                        .lineSpacing(ChatType.lineSpacing - 2)
                                         .foregroundStyle(EColor.onSurface)
                                         .padding(.horizontal, 16)
                                         .padding(.vertical, 12)
@@ -815,7 +1138,7 @@ struct ScreenChat: View {
                                         unfold(m.id)
                                     } label: {
                                         Text("Earlier draft: \(draftTitle(card)). Show")
-                                            .font(Typography.font(13, weight: .regular))
+                                            .font(ChatType.label(13))
                                             .foregroundStyle(EColor.onSurfaceVariant)
                                             .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
                                             .contentShape(Rectangle())
@@ -825,19 +1148,14 @@ struct ScreenChat: View {
                                     .id(m.id)
                                 } else {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    if m.agent == "youtube" {
-                                        Label("YouTube agent", systemImage: "play.rectangle.fill")
-                                            .font(Typography.font(12, weight: .semibold))
-                                            .foregroundStyle(Color.red)
-                                    }
                                     // Empty while a reply is about to write
                                     // itself in; nothing to show until a word.
                                     if !m.text.isEmpty {
                                         Group {
                                             if m.card != nil {
                                                 Text(m.text)
-                                                    .font(Typography.font(15, weight: .regular))
-                                                    .lineSpacing(4)
+                                                    .font(ChatType.body())
+                                                    .lineSpacing(ChatType.lineSpacing)
                                                     .foregroundStyle(EColor.onSurface)
                                             } else {
                                                 // No animation on the text: each
@@ -845,24 +1163,14 @@ struct ScreenChat: View {
                                                 // animated the row's height on every
                                                 // word of every reply.
                                                 MessageContent(text: m.text)
-                                                    .font(Typography.font(15, weight: .regular))
+                                                    .font(ChatType.body())
+                                                    .lineSpacing(ChatType.lineSpacing)
                                                     .foregroundStyle(EColor.onSurface)
                                             }
                                         }
                                         .contextMenu { copyButton(m.text) }
                                     }
-                                    if let card = m.card {
-                                        cardView(for: card, in: m.id, done: m.cardDone)
-                                    }
-                                    if canTryAgain(m) {
-                                        Button("Try again", action: tryAgain)
-                                            .font(Typography.font(13, weight: .medium))
-                                            .foregroundStyle(EColor.onSurfaceVariant)
-                                            .frame(minHeight: 32)
-                                            .contentShape(Rectangle())
-                                            .buttonStyle(PressedFadeStyle())
-                                            .accessibilityHint("Asks Evlin to answer your last message again")
-                                    }
+                                    cardArea(for: m)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 // A second card from the same reply sits closer
@@ -959,23 +1267,17 @@ struct ScreenChat: View {
                         commitTailViewport()
                     }
                 }
-                // Plain white — Home, Calendar, and Settings all use it as
-                // their root ground; EColor.surface's faint off-white cast
-                // was the one tab that read as a slightly different shade.
-                .background(Color.white)
+                // The app's one page colour, as on every other tab.
+                .background(EColor.surface)
                 .scrollDismissesKeyboard(.interactively)
                 // A tile tapped or an earlier draft unfolded: the app's
                 // selection tick, once per tap.
                 .sensoryFeedback(.selection, trigger: tickCount)
+                .sensoryFeedback(.impact(weight: .light), trigger: addedTick)
+                // Every send (typed or a suggestion) and every new chat: a light tap.
+                .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
+                .sensoryFeedback(.impact(weight: .light), trigger: newChatTick)
                 .onUserScroll { userScrolledSinceSend = true }
-                // The jump-to-latest arrow, from the scroll view itself: how
-                // far the end of the conversation (less the empty room kept
-                // under the newest exchange) is below what can be seen above
-                // the composer.
-                .onContentBelowChange(tailSpace: tailSpace) { below in
-                    let show = below > 80 && !messages.isEmpty
-                    if show != showJumpToLatest { showJumpToLatest = show }
-                }
                 .onPreferenceChange(ChatBottomAnchorKey.self) {
                     edges.bottomAnchorY = $0
                     // A reply growing past the composer doesn't scroll, so
@@ -1025,32 +1327,11 @@ struct ScreenChat: View {
                 // instead of the bar getting shoved off-screen or content
                 // sliding underneath it.
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    inputBar
-                }
-                // Jump to latest: shown once the newest line is well below
-                // the composer, i.e. there's unread conversation underneath.
-                .overlay(alignment: .bottom) {
-                    if showJumpToLatest {
-                        Button {
-                            scroll(proxy, to: .bottom, animated: true)
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(EColor.onSurface)
-                                .frame(width: 36, height: 36)
-                                .background(Color.white, in: Circle())
-                                .overlay(Circle().strokeBorder(EColor.outlineVariant))
-                        }
-                        .buttonStyle(PressScaleButtonStyle())
-                        .accessibilityLabel("Jump to latest")
-                        // Above the composer, not on it: this overlay spans
-                        // the composer's strip too (its field plus the 16pt
-                        // under it), so 10pt from the bottom sat on the text.
-                        .padding(.bottom, composerHeight + 16 + 10)
-                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    VStack(alignment: .leading, spacing: 10) {
+                        inputBar
                     }
+                    .animation(.easeOut(duration: 0.2), value: inputFocused)
                 }
-                .animation(.easeOut(duration: 0.18), value: showJumpToLatest)
                 // The conversation reads from the top. No bottom anchoring:
                 // that would hold the end of the content in place as a reply
                 // grows, scrolling the parent's message away.
@@ -1092,9 +1373,14 @@ struct ScreenChat: View {
                 }
                 .flatToolbarBackground()
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showHelp = true } label: { flatToolbarIcon("questionmark") }
+                    // New chat in the top bar, so starting over doesn't mean
+                    // opening the history panel first (ChatGPT and Gemini
+                    // keep it there too). No ? button: the start screen's
+                    // list already says what the chatbot does.
+                    Button(action: startNewChat) { flatToolbarIcon("square.and.pencil") }
                         .buttonStyle(PressedFadeStyle())
-                        .accessibilityLabel("What Evlin can do")
+                        .disabled(messages.isEmpty && activeConversationID == nil)
+                        .accessibilityLabel("New chat")
                 }
                 .flatToolbarBackground()
             }
@@ -1118,6 +1404,11 @@ struct ScreenChat: View {
                         .ignoresSafeArea(edges: .top)
                         .transition(.opacity)
                 }
+            }
+        }
+        .sheet(isPresented: $showBlockSheet) {
+            if let id = session.activeChildId {
+                AddBlockedAppsSheet(child: FamilyStore.child(id)) { showBlockSheet = false }
             }
         }
         .sheet(isPresented: $showHelp) {
@@ -1152,11 +1443,7 @@ struct ScreenChat: View {
                         Task { await openConversation(conversation.id) }
                     },
                     onNewChat: {
-                        responseTask?.cancel()
-                        isSending = false
-                        activeConversationID = nil
-                        messages = []
-                        youtubeMode = false
+                        startNewChat()
                         withAnimation(.easeOut(duration: 0.22)) { showHistory = false }
                     },
                     onRename: { conversation, title in
@@ -1168,7 +1455,7 @@ struct ScreenChat: View {
                     onClose: { withAnimation(.easeOut(duration: 0.22)) { showHistory = false } }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white.ignoresSafeArea())
+                .background(Rectangle().fill(EColor.surface).ignoresSafeArea())
                 .transition(.move(edge: .leading))
             }
         }
@@ -1177,7 +1464,14 @@ struct ScreenChat: View {
         // thread's context would steer the reply. Past threads stay one tap
         // away in the sidebar, and what's worth carrying between
         // conversations already does, through the assistant's memory.
-        .task { await reloadConversations() }
+        .task {
+            await reloadConversations()
+            // Demo only: -EvlinChatSay sends one message, to see its reply.
+            if let say = DemoMode.chatSay, messages.isEmpty {
+                draft = say
+                send()
+            }
+        }
         // Switching to a different bottom tab shouldn't leave the history
         // panel stuck open underneath — TabView keeps this tab's state
         // alive, but the content view still disappears while another tab
@@ -1214,61 +1508,6 @@ struct ScreenChat: View {
     // prompts. The logo, name and a greeting that repeated the name used
     // to take a third of the screen above the tiles; the nav bar already
     // says where you are, and the ? button covers what Evlin can do.
-    private var welcomeGrid: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("What do you need help with?")
-                .font(Typography.font(20, weight: .bold))
-                .foregroundStyle(EColor.onSurface)
-
-            // Six tiles, 2x3. Filled rather than white-with-a-hairline: on
-            // the white chat background an outlined white tile read as an
-            // empty frame, most of all while the keyboard slid it under the
-            // header. The icon sits top and the title bottom, so the content
-            // spans the tile instead of leaving its lower half blank.
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(welcomeSuggestions) { s in
-                    Button { sendSuggestion(s) } label: {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Image(systemName: EIcon.sf(s.icon))
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(s.tint)
-                                .frame(width: 38, height: 38)
-                                // The tile's hue, softened, over white so it
-                                // stays clean on the grey tile.
-                                .background(s.tint.opacity(0.13), in: Circle())
-                                .background(EColor.surfaceContainerLowest, in: Circle())
-                            Spacer(minLength: 12)
-                            Text(s.title)
-                                .font(Typography.font(14, weight: .semibold))
-                                .foregroundStyle(EColor.onSurface)
-                                .multilineTextAlignment(.leading)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: 98)
-                        .padding(16)
-                        .background(EColor.surfaceContainerHigh)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    }
-                    .buttonStyle(PressedSurfaceStyle())
-                    .disabled(isSending)
-                }
-            }
-            // While the parent types, the tiles step back: the keyboard
-            // covers the last row, and what was left peeked out around the
-            // composer. They fade and shrink back, timed with the keyboard,
-            // and return when it closes. The question stays, so the screen
-            // isn't blank.
-            .opacity(inputFocused ? 0 : 1)
-            .scaleEffect(inputFocused ? 0.94 : 1, anchor: .top)
-            .offset(y: inputFocused ? -8 : 0)
-            .allowsHitTesting(!inputFocused)
-            .accessibilityHidden(inputFocused)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: inputFocused)
-        }
-    }
 
     // Gemini's proportions, not just its rounded corners: a single-line
     // pill (52pt — 34pt send button + 9pt vertical padding each side) at
@@ -1282,29 +1521,14 @@ struct ScreenChat: View {
     // chat flow takes a file attachment.
     private var inputBar: some View {
         HStack(alignment: .center, spacing: 8) {
-            // Only while the YouTube agent is on, as the way back. In normal
-            // chat the field has no icon: a permanent play button beside it
-            // was a distraction, and the YouTube tile is how you start.
-            if youtubeMode {
-                Button {
-                    tickCount += 1
-                    withAnimation(.easeOut(duration: 0.15)) { youtubeMode.toggle() }
-                    inputFocused = true
-                } label: {
-                    Image(systemName: youtubeMode ? "play.rectangle.fill" : "play.rectangle")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(youtubeMode ? Color.red : EColor.onSurface.opacity(0.55))
-                        .frame(width: 30, height: 34)
-                }
-                .buttonStyle(PressedFadeStyle())
-                .disabled(isSending)
-                .accessibilityLabel("Back to Evlin")
-                .transition(.opacity)
-            }
-
-            TextField(youtubeMode ? "What should \(activeChildName) watch?" : "Help with your child's schedule today",
-                      text: $draft, axis: .vertical)
-                .font(Typography.font(16, weight: .regular))
+            // Gemini-sized: 18pt in full ink, with a placeholder that's
+            // readable rather than faint.
+            TextField("", text: $draft,
+                      prompt: Text("Ask Evlin anything")
+                          .foregroundStyle(EColor.onSurface.opacity(0.45)),
+                      axis: .vertical)
+                .font(ChatType.font18)
+                .foregroundStyle(EColor.onSurface)
                 // Caps at 4 lines (not 8) — past that it scrolls
                 // internally rather than keep growing toward a
                 // full-screen textarea.
@@ -1317,9 +1541,9 @@ struct ScreenChat: View {
                 // as in every current AI chat: a bad reply can be cut short.
                 Button(action: stopReply) {
                     Image(systemName: "stop.fill")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 40, height: 40)
                         .background(Brand.greenDeep)
                         .clipShape(Circle())
                 }
@@ -1329,27 +1553,28 @@ struct ScreenChat: View {
             } else {
             Button(action: send) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(canSend ? .white : EColor.onSurface.opacity(0.55))
-                    .frame(width: 34, height: 34)
+                    .frame(width: 40, height: 40)
                     // A real filled state either way — quiet grey while
                     // empty, not a near-white circle that reads as broken
                     // rather than disabled; solid Evlin green the moment
                     // there's something to send, animating between the
                     // two rather than snapping.
-                    .background(canSend ? Brand.greenDeep : EColor.surfaceContainerHigh)
+                    .background(canSend ? Brand.greenDeep : Self.sendIdle)
                     .clipShape(Circle())
                     .animation(.easeOut(duration: 0.15), value: canSend)
             }
             .buttonStyle(PressScaleButtonStyle())
-            .sensoryFeedback(.impact(weight: .light), trigger: sendCount)
             .disabled(!canSend)
             .accessibilityLabel("Send message")
             .transition(.scale.combined(with: .opacity))
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        // 40pt button + 12pt above and below: a 64pt bar, Gemini's size.
+        .padding(.leading, 20)
+        .padding(.trailing, 12)
+        .padding(.vertical, 12)
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -1357,14 +1582,23 @@ struct ScreenChat: View {
                     .preference(key: ComposerTopKey.self, value: geo.frame(in: .global).minY)
             }
         )
-        .background(EColor.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous))
-        .overlay(
+        // A white pill floating on a soft shadow, as in Gemini, instead of
+        // an outlined box: the outline read as a form field, not a chat.
+        .background(
             RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
-                .strokeBorder(inputFocused ? EColor.outline : EColor.outlineVariant, lineWidth: 1)
+                // The page's colour on a soft shadow, no outline and no green
+                // while typing (2026-11-15, the user's design: "no green light
+                // aura"; a grey fill whose edge turned green while typing,
+                // 2026-11-14, before). At night a fine edge, where a shadow
+                // doesn't show.
+                .fill(EColor.surface)
+                .shadow(color: Color.black.opacity(0.09), radius: 16, x: 0, y: 4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: composerCornerRadius, style: .continuous)
+                        .strokeBorder(Self.composerEdge, lineWidth: 1)
+                )
         )
         .animation(.easeOut(duration: 0.18), value: composerHeight)
-        .animation(.easeOut(duration: 0.15), value: inputFocused)
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
         .onPreferenceChange(ComposerHeightKey.self) { composerHeight = $0 }
@@ -1377,9 +1611,9 @@ struct ScreenChat: View {
     // capsule instead of an ordinary rounded rect once it's grown past
     // one line.
     private var composerCornerRadius: CGFloat {
-        let restHeight: CGFloat = 52
+        let restHeight: CGFloat = 64
         let maxRadius = restHeight / 2
-        let minRadius: CGFloat = 22
+        let minRadius: CGFloat = 26
         let growthRange: CGFloat = 40
         guard composerHeight > restHeight else { return maxRadius }
         let eased = min(1, (composerHeight - restHeight) / growthRange)
@@ -1405,21 +1639,11 @@ struct ScreenChat: View {
     // Near the end means the newest line is at most 100pt below the
     // composer's top (negative when it's visible above it).
     private func updateFollowing() {
-        // The composer's position starts at 0 until it's measured, which
-        // read as "the conversation runs far below it" and showed the
-        // jump-to-latest arrow over a short chat.
+        // The composer's position starts at 0 until it's measured.
         guard edges.composerTopY > 0 else { return }
         let below = edges.bottomAnchorY - edges.composerTopY
         let near = below <= 100
         if near != followsBottom { followsBottom = near }
-        // iOS 18 and later decide the arrow from the scroll view's own
-        // geometry (onContentBelowChange). This measurement can't be trusted
-        // for it there: it comes from a marker at the end of a lazy list,
-        // which isn't built once scrolled far enough away, so its last
-        // reading goes stale. iOS 17 has nothing better.
-        if #available(iOS 18.0, *) { return }
-        let jump = below > 100 && !messages.isEmpty
-        if jump != showJumpToLatest { showJumpToLatest = jump }
     }
 
     private func scroll(_ proxy: ScrollViewProxy, to target: ScrollRequest.Target,
@@ -1452,7 +1676,6 @@ struct ScreenChat: View {
                 move()
             }
             followsBottom = true
-            showJumpToLatest = false
         }
     }
 
@@ -1475,7 +1698,6 @@ struct ScreenChat: View {
                 proxy.scrollTo(id, anchor: .top)
             }
             followsBottom = true
-            showJumpToLatest = false
         }
     }
 
@@ -1515,7 +1737,7 @@ struct ScreenChat: View {
         sendToBackend(text)
     }
 
-    // Tapping a welcomeGrid tile — same flow as send(), just sourced from a
+    // Tapping a WelcomeMessage phrase (or a help panel row) — same flow as send(), just sourced from a
     // preset prompt instead of the draft field. A tile that already knows
     // its own target card (Block an app, Add a task, Review progress) shows
     // it instantly — no ambiguity for the model to resolve, the button
@@ -1525,18 +1747,15 @@ struct ScreenChat: View {
     // backend exactly like a typed message would.
     private func sendSuggestion(_ suggestion: ChatSuggestion) {
         guard !isSending else { return }
-        tickCount += 1
-        userScrolledSinceSend = false
-        if suggestion.startsYouTube {
-            // Nothing is sent: the agent's first message should be the
-            // parent's own request. The prompt line is local, not stored.
-            youtubeMode = true
-            messages.append(ChatMessage(fromUser: false,
-                                        text: "What should \(activeChildName) watch? Tell me a topic, and anything to avoid.",
-                                        agent: "youtube"))
-            inputFocused = true
+        // Until the server drafts blocks (ServerSupport.chatBlocks), Block an
+        // app opens the same sheet as Profile's, which the server takes.
+        if suggestion.shortcut == "block_app", !ServerSupport.chatBlocks {
+            tickCount += 1
+            showBlockSheet = true
             return
         }
+        sendCount += 1
+        userScrolledSinceSend = false
         messages.append(ChatMessage(fromUser: true, text: suggestion.prompt))
         if case .reviewCompliance = suggestion.card {
             // The model answers this one (it has today's tasks and their
@@ -1555,7 +1774,7 @@ struct ScreenChat: View {
                 // kept for the switch to stay exhaustive.
                 case .reviewCompliance(_, let childName): intro = "Here's where \(childName) stands today:"
                 // Not reachable from a tile — only from a real tool call.
-                case .addEvent: intro = ""
+                case .addTasks: intro = ""
                 }
                 messages.append(ChatMessage(fromUser: false, text: intro, card: card))
             }
@@ -1575,11 +1794,10 @@ struct ScreenChat: View {
     // `attaching`: a card shown under this reply, whatever the model says —
     // and under the error line if the model can't be reached, since the
     // card's numbers come from the device, not the model.
-    private func sendToBackend(_ text: String, attaching attached: ChatCardKind? = nil, shortcut: String? = nil,
-                               regenerate: Bool = false) {
+    private func sendToBackend(_ text: String, attaching attached: ChatCardKind? = nil, shortcut: String? = nil) {
         responseTask?.cancel()
         isSending = true
-        let agent = youtubeMode ? "youtube" : "chat"
+        let agent = "chat"
         responseTask = Task { @MainActor in
             guard let childId = session.activeChildId else { isSending = false; return }
             do {
@@ -1591,8 +1809,7 @@ struct ScreenChat: View {
                     conversationId: activeConversationID,
                     startNewConversation: activeConversationID == nil,
                     agent: agent,
-                    shortcut: shortcut,
-                    regenerate: regenerate
+                    shortcut: shortcut
                 )
                 guard !Task.isCancelled else { return }
                 isSending = false
@@ -1603,22 +1820,22 @@ struct ScreenChat: View {
                 await reloadConversations()
                 if reply.toolCall != nil {
                     foldUnusedDrafts()
-                    messages.append(ChatMessage(fromUser: false, text: reply.text, card: attached ?? cardFor(reply),
-                                                agent: reply.agent ?? agent, fromServer: true))
                     // Several things asked for at once: one card each, in
-                    // the order the parent said them. Their text is usually
-                    // empty, which shows just the card.
+                    // the order the parent said them, except tasks, which
+                    // share one compact card (groupedTaskDrafts).
+                    var replyRows = [ChatMessage(fromUser: false, text: reply.text, card: attached ?? cardFor(reply),
+                                                 agent: reply.agent ?? agent)]
                     for extra in reply.extraMessages ?? [] {
-                        messages.append(ChatMessage(fromUser: false, text: extra.text, card: cardFor(extra),
-                                                    agent: extra.agent ?? agent, fromServer: true))
+                        replyRows.append(ChatMessage(fromUser: false, text: extra.text, card: cardFor(extra),
+                                                     agent: extra.agent ?? agent))
                     }
+                    messages.append(contentsOf: Self.groupedTaskDrafts(replyRows))
                     // A card is something to act on, so it's shown whole.
                     scrollRequest.count += 1
                     scrollRequest.target = .reveal
                     scrollRequest.animated = true
                 } else {
-                    messages.append(ChatMessage(fromUser: false, text: "", card: attached, agent: reply.agent ?? agent,
-                                                fromServer: true))
+                    messages.append(ChatMessage(fromUser: false, text: "", card: attached, agent: reply.agent ?? agent))
                     guard let id = messages.last?.id else { return }
                     streamIn(reply.text, into: id)
                 }
@@ -1626,7 +1843,7 @@ struct ScreenChat: View {
                 guard !Task.isCancelled else { return }
                 isSending = false
                 messages.append(ChatMessage(fromUser: false, text: "Couldn't reach Evlin's AI. \(error.apiUserMessage)", card: attached,
-                                            agent: agent, failed: true))
+                                            agent: agent))
             }
         }
     }
@@ -1642,8 +1859,8 @@ struct ScreenChat: View {
             // re-parsed with string matching — which failed on every real
             // tool call, so the card always arrived empty.
             return .addTask(draft: TaskDraft(toolArgs: message.toolArgs))
-        case "draft_event":
-            return .addEvent(draft: EventDraft(toolArgs: message.toolArgs))
+        case "draft_app_block":
+            return .blockDraft(BlockDraft(toolArgs: message.toolArgs))
         // ask_follow_up deliberately has no card: the question is the
         // message text, and the parent answers by typing. Offering tappable
         // answers turned an open question into multiple choice and put the
@@ -1664,10 +1881,10 @@ struct ScreenChat: View {
     private func openConversation(_ id: String) async {
         guard let loaded = try? await APIClient.shared.fetchConversationMessages(conversationId: id) else { return }
         activeConversationID = id
-        messages = loaded.map { m in
+        messages = Self.groupedTaskDrafts(loaded.map { m in
             ChatMessage(fromUser: m.role == "user", text: m.text, card: m.toolCall != nil ? cardFor(m) : nil,
-                        agent: m.agent ?? "chat", fromServer: m.role != "user")
-        }
+                        agent: m.agent ?? "chat")
+        })
         // A reopened thread can't know which drafts were already used, so
         // only the newest reply's stay open; earlier ones fold away rather
         // than offering Create again on something likely already created.
@@ -1675,9 +1892,6 @@ struct ScreenChat: View {
         for i in messages.indices where i < lastUser && isDraft(messages[i].card) {
             messages[i].superseded = true
         }
-        // Pick up where the thread left off: back with the YouTube agent if
-        // that's who was talking last.
-        youtubeMode = loaded.last?.agent == "youtube"
         // A thread with the same number of messages as the last one doesn't
         // trip the messages.count scroll, so ask for it outright.
         scrollRequest.count += 1
@@ -1714,52 +1928,21 @@ struct ScreenChat: View {
     // as when a parent skips "More Options" anywhere else in this app.
     // `repeats` (from inferredRepeats.codes) is already a real recurrence
     // code ("mon,wed,fri"/"daily"/"none") and is used as-is.
-    /// Only under the newest message, and only a model reply or the error in
-    /// its place: an older answer can't be redone without undoing the turns
-    /// after it.
-    private func canTryAgain(_ m: ChatMessage) -> Bool {
-        guard m.id == messages.last?.id, m.fromServer || m.failed, !isSending, !isStreaming else { return false }
-        return messages.contains(where: \.fromUser)
-    }
-
-    /// "Try again" on the newest reply: the parent didn't like it, or it
-    /// failed. The server replaces the reply instead of storing the question
-    /// twice. After a failure the thread is checked first: the reply may have
-    /// been saved after the phone stopped waiting (just show it), or the
-    /// message may never have arrived (send it, rather than redoing the
-    /// answer before it).
-    private func tryAgain() {
-        guard let lastUser = messages.lastIndex(where: \.fromUser) else { return }
-        let text = messages[lastUser].text
-        let failed = messages.last?.failed == true
-        tickCount += 1
-        withAnimation(.easeOut(duration: 0.2)) {
-            messages.removeSubrange((lastUser + 1)...)
-        }
-        guard let conversationID = activeConversationID else {
-            sendToBackend(text)
-            return
-        }
-        guard failed else {
-            sendToBackend(text, regenerate: true)
-            return
-        }
-        Task { @MainActor in
-            let saved = (try? await APIClient.shared.fetchConversationMessages(conversationId: conversationID)) ?? []
-            let lastSavedUser = saved.lastIndex(where: { $0.role == "user" })
-            if let i = lastSavedUser, saved[i].text == text, i < saved.count - 1 {
-                await openConversation(conversationID)   // answered after all
-            } else if let i = lastSavedUser, saved[i].text == text {
-                sendToBackend(text, regenerate: true)    // arrived, never answered
-            } else {
-                sendToBackend(text)                      // never arrived
-            }
-        }
+    /// A fresh, empty chat: from the top bar or the history panel. Nothing
+    /// is created on the server until the first message (see chat.py), so
+    /// tapping it by accident leaves no empty thread behind.
+    private func startNewChat() {
+        newChatTick += 1
+        responseTask?.cancel()
+        isSending = false
+        inputFocused = false
+        activeConversationID = nil
+        withAnimation(.easeOut(duration: 0.2)) { messages = [] }
     }
 
     private func isDraft(_ card: ChatCardKind?) -> Bool {
         switch card {
-        case .addTask, .addEvent: return true
+        case .addTask, .addTasks, .blockDraft: return true
         default: return false
         }
     }
@@ -1767,7 +1950,8 @@ struct ScreenChat: View {
     private func draftTitle(_ card: ChatCardKind) -> String {
         switch card {
         case .addTask(let d): return d.title.isEmpty ? "a task" : d.title
-        case .addEvent(let d): return d.title.isEmpty ? "an event" : d.title
+        case .blockDraft(let d): return "block \(d.appName ?? "an app")"
+        case .addTasks(let ds): return "\(ds.count) tasks"
         default: return "a card"
         }
     }
@@ -1785,9 +1969,73 @@ struct ScreenChat: View {
         withAnimation(.easeOut(duration: 0.2)) { messages[i].superseded = false }
     }
 
-    private func markDone(_ id: UUID) {
+    /// A card was used: it's done at once (no second Create), shows its done
+    /// state for a moment, then collapses into one line saying what it did,
+    /// as ChatGPT and Claude do with a confirmed action. That line replaces
+    /// the separate "Added …" message cards used to post.
+    /// A reply's card, or the receipt it collapsed into once used.
+    @ViewBuilder
+    private func cardArea(for m: ChatMessage) -> some View {
+        if let receipt = m.receipt {
+            receiptView(receipt)
+                .transition(.opacity)
+        } else if let card = m.card {
+            cardView(for: card, in: m.id, done: m.cardDone)
+                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                // A card the parent opens up (Change, Custom, a field added)
+                // grows past the composer; bring the grown part into view,
+                // for the newest card only.
+                .modifier(GrowthWatcher { cardGrew(m) })
+        }
+    }
+
+    private func cardGrew(_ m: ChatMessage) {
+        guard !m.cardDone, m.id == messages.last?.id else { return }
+        userScrolledSinceSend = false
+        scrollRequest.count += 1
+        scrollRequest.target = .reveal
+        scrollRequest.animated = true
+    }
+
+    private func receiptView(_ r: ChatReceipt) -> some View {
+        HStack(spacing: 12) {
+            switch r.icon {
+            case .app(let name):
+                AppIconView(appName: name, size: 34)
+            case .symbol(let name, let tint):
+                Image(systemName: name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 34, height: 34)
+                    .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(r.title)
+                    .font(ChatType.strong(15))
+                    .foregroundStyle(EColor.onSurface)
+                    .lineLimit(1)
+                Text(r.detail)
+                    .font(ChatType.label(13))
+                    .foregroundStyle(EColor.onSurfaceVariant)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.leading, 10)
+        .padding(.trailing, 16)
+        .background(EColor.surfaceContainerHigh, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func markDone(_ id: UUID, receipt: ChatReceipt) {
         guard let i = messages.firstIndex(where: { $0.id == id }) else { return }
         messages[i].cardDone = true
+        addedTick += 1
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard let j = messages.firstIndex(where: { $0.id == id }) else { return }
+            withAnimation(.easeOut(duration: 0.25)) { messages[j].receipt = receipt }
+        }
     }
 
     /// A card-only row right after another reply row: a further card from
@@ -1805,7 +2053,60 @@ struct ScreenChat: View {
             .endEditing(true)
     }
 
-    private func handleAddTask(_ draft: TaskDraft) {
+    /// Task drafts that arrived as rows of one reply (the first carrying the
+    /// text, the rest card-only) become one several-task card. A lone task
+    /// keeps its own card; other cards are left as they are.
+    private static func groupedTaskDrafts(_ rows: [ChatMessage]) -> [ChatMessage] {
+        var out: [ChatMessage] = []
+        for row in rows {
+            if case .addTask(let draft) = row.card, !row.fromUser, row.text.isEmpty, let last = out.last, !last.fromUser {
+                switch last.card {
+                case .addTask(let first):
+                    out[out.count - 1].card = .addTasks(drafts: [first, draft])
+                    continue
+                case .addTasks(let drafts):
+                    out[out.count - 1].card = .addTasks(drafts: drafts + [draft])
+                    continue
+                default: break
+                }
+            }
+            out.append(row)
+        }
+        // The server's line for several cards; tasks say it their own way.
+        for i in out.indices {
+            if case .addTasks(let drafts) = out[i].card, out[i].text.hasPrefix("Here are ") {
+                out[i].text = "Here are \(drafts.count) tasks."
+            }
+        }
+        return out
+    }
+
+    /// Creates the ticked tasks; returns the line the card collapses into.
+    private static let taskTint = Color(hex: "3B6FD8")
+
+    private func handleAddTasks(_ drafts: [TaskDraft]) -> ChatReceipt {
+        let made = drafts.filter { !$0.isEmpty }
+        guard !made.isEmpty, session.activeChildId != nil else {
+            return ChatReceipt(icon: .symbol("checklist", Self.taskTint), title: "Nothing added", detail: "")
+        }
+        made.forEach(createTask)
+        Task { await AppSync.shared.syncBackendData() }
+        return ChatReceipt(icon: .symbol("checklist", Self.taskTint),
+                           title: made.count == 1 ? "1 task added" : "\(made.count) tasks added",
+                           detail: made.map(\.title).joined(separator: ", "))
+    }
+
+    private func handleAddTask(_ draft: TaskDraft) -> ChatReceipt {
+        guard !draft.isEmpty, session.activeChildId != nil else {
+            return ChatReceipt(icon: .symbol("checklist", Self.taskTint), title: "Nothing added", detail: "")
+        }
+        createTask(draft)
+        Task { await AppSync.shared.syncBackendData() }
+        return ChatReceipt(icon: .symbol("checklist", Self.taskTint), title: draft.title,
+                           detail: "Task added · " + TaskBatchCard.when(draft))
+    }
+
+    private func createTask(_ draft: TaskDraft) {
         guard !draft.isEmpty, let childId = session.activeChildId else { return }
         // Queued like every other write; a refusal shows the app's save
         // error. The sync sends it and brings it onto Home and the calendar.
@@ -1813,10 +2114,9 @@ struct ScreenChat: View {
             childId: childId, title: draft.title, instructions: draft.instructions,
             recurrence: draft.recurrence, category: "Chore",
             dueTime: draft.dueTimeString, dueDate: draft.dueDateString,
-            bonusMinutes: draft.bonusMinutes, createdBy: "ai_agent"
+            bonusMinutes: draft.bonusMinutes, createdBy: "ai_agent",
+            icon: draft.emoji
         )
-        messages.append(ChatMessage(fromUser: false, text: confirmation(for: draft, title: draft.title)))
-        Task { await AppSync.shared.syncBackendData() }
     }
 
     /// Says back what was actually saved, including the schedule — so a
@@ -1845,42 +2145,20 @@ struct ScreenChat: View {
         return "Added \"\(title)\"\(when)."
     }
 
-    private func handleAddEvent(_ draft: EventDraft) {
-        // Every event goes on the calendar of the child this chat is about.
-        guard !draft.isEmpty, let childId = session.activeChildId else { return }
-        let id = APIClient.Write.newId()
-        let note = draft.note.isEmpty ? nil : draft.note
-        LocalStore.shared.mirrorEventSaved(ApiEvent(
-            id: id, childId: childId, title: draft.title,
-            startAt: CalendarSync.isoString(draft.startsAt), endAt: CalendarSync.isoString(draft.endsAt),
-            locationOrLink: nil, source: "manual", category: nil, note: note, recurrence: draft.recurrence,
-            createdBy: "parent", status: "approved", reviewNote: nil))
-        Outbox.send(APIClient.Write.createEvent(
-            id: id, childId: childId, title: draft.title, start: draft.startsAt, end: draft.endsAt,
-            category: nil, note: note, location: nil, recurrence: draft.recurrence
-        ), childId: childId, label: "The new event")
-        let f = DateFormatter(); f.dateFormat = "EEEE d MMM 'at' h:mm a"
-        messages.append(ChatMessage(fromUser: false, text: "Added \"\(draft.title)\" on \(f.string(from: draft.startsAt))."))
-        Task { await AppSync.shared.syncBackendData() }
-    }
-
     @ViewBuilder
     private func cardView(for kind: ChatCardKind, in messageID: UUID, done: Bool) -> some View {
         switch kind {
         case .blockDraft(let draft):
-            AppBlockDraftCard(draft: draft, childId: session.activeChildId ?? "",
-                              childName: FamilyStore.child(session.activeChildId ?? "").name) { note in
-                messages.append(ChatMessage(fromUser: false, text: note))
+            AppBlockDraftCard(draft: draft, childId: session.activeChildId ?? "", done: done) { app, length in
+                markDone(messageID, receipt: ChatReceipt(icon: .app(app), title: "\(app) blocked", detail: length))
             }
         case .addTask(let draft):
             AddTaskCard(draft: draft, done: done) { made in
-                markDone(messageID)
-                handleAddTask(made)
+                markDone(messageID, receipt: handleAddTask(made))
             }
-        case .addEvent(let draft):
-            AddEventCard(draft: draft, done: done) { made in
-                markDone(messageID)
-                handleAddEvent(made)
+        case .addTasks(let drafts):
+            TaskBatchCard(drafts: drafts, done: done) { made in
+                markDone(messageID, receipt: handleAddTasks(made))
             }
         case .reviewCompliance(let childId, let childName):
             ReviewComplianceCard(childId: childId, childName: childName)
@@ -1991,7 +2269,7 @@ private struct HelpPanel: View {
     private func helpSection<Rows: View>(_ title: String, @ViewBuilder rows: () -> Rows) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title.uppercased())
-                .font(Typography.font(11.5, weight: .bold))
+                .font(ChatType.label(11.5))
                 .tracking(0.8)
                 .foregroundStyle(EColor.onSurfaceVariant)
                 .padding(.leading, 4)
@@ -2013,11 +2291,11 @@ private struct HelpPanel: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(Typography.font(16, weight: .bold))
+                    .font(ChatType.label(16))
                     .tracking(-0.3)
                     .foregroundStyle(EColor.onSurface)
                 Text(text)
-                    .font(Typography.font(13.5, weight: .medium))
+                    .font(ChatType.label(13.5))
                     .foregroundStyle(EColor.onSurfaceVariant)
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2099,12 +2377,12 @@ private struct ChatHistorySidebar: View {
         NavigationStack {
             panel
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .background(Color.white)
+                .background(EColor.surface)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Text("Chats")
-                            .font(Typography.font(20, weight: .bold))
+                            .font(ChatType.label(20))
                             .foregroundStyle(EColor.onSurface)
                             .fixedSize()
                             .padding(.leading, 4)
@@ -2147,7 +2425,7 @@ private struct ChatHistorySidebar: View {
             if filtered.isEmpty {
                 Spacer()
                 Text("No conversations found")
-                    .font(Typography.font(15, weight: .regular))
+                    .font(ChatType.label(15))
                     .foregroundStyle(EColor.onSurfaceVariant)
                     .frame(maxWidth: .infinity)
                 Spacer()
@@ -2193,7 +2471,7 @@ private struct ChatHistorySidebar: View {
                 .font(.system(size: 15))
                 .foregroundStyle(EColor.onSurfaceVariant)
             TextField("Search conversations", text: $query)
-                .font(Typography.font(15, weight: .regular))
+                .font(ChatType.label(15))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -2215,7 +2493,7 @@ private struct ChatHistorySidebar: View {
                             .foregroundStyle(EColor.primary)
                     )
                 Text("New chat")
-                    .font(Typography.font(15, weight: .semibold))
+                    .font(ChatType.label(15))
                     .foregroundStyle(EColor.onSurface)
                 Spacer()
             }
@@ -2234,11 +2512,11 @@ private struct ChatHistorySidebar: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.title)
-                        .font(Typography.font(15, weight: isActive ? .bold : .semibold))
+                        .font(ChatType.label(15))
                         .foregroundStyle(EColor.onSurface)
                         .lineLimit(1)
                     Text(entry.timeLabel)
-                        .font(Typography.font(12, weight: .regular))
+                        .font(ChatType.label(12))
                         .foregroundStyle(EColor.onSurfaceVariant)
                 }
                 Spacer(minLength: 4)
@@ -2307,25 +2585,6 @@ private struct PressScaleButtonStyle: ButtonStyle {
 }
 
 private extension View {
-    /// Reports how far (in points) the end of a scroll view's content sits
-    /// below its visible area, not counting `tailSpace` of deliberate empty
-    /// room at the end, or what's under the bottom inset (the composer).
-    /// Negative when the end is in view. iOS 18 and later; nothing on 17.
-    @ViewBuilder
-    func onContentBelowChange(tailSpace: CGFloat, _ action: @escaping (CGFloat) -> Void) -> some View {
-        if #available(iOS 18.0, *) {
-            onScrollGeometryChange(for: CGFloat.self) { geo in
-                let contentEnd = geo.contentSize.height - tailSpace
-                let visibleBottom = geo.contentOffset.y + geo.containerSize.height - geo.contentInsets.bottom
-                return (contentEnd - visibleBottom).rounded()
-            } action: { _, below in
-                action(below)
-            }
-        } else {
-            self
-        }
-    }
-
     /// Calls `action` when the parent starts dragging a scroll view. iOS 18
     /// reports that directly; on 17 there's no clean signal (a drag gesture
     /// on a scroll view fights its scrolling), so it's never called there.

@@ -20,27 +20,18 @@ struct ApiTask: Codable {
     // see evlin-backend's TaskBase.
     let bonusMinutes: Int
     let createdBy: String
-}
-
-struct ApiEvent: Codable {
-    let id: String
-    // Every event is one child's: Evlin keeps the children's calendars only.
-    // Optional only so a server still holding an old parent or family-wide
-    // event (before the migration that removes them) can't fail the whole
-    // list; AppSync skips those.
-    let childId: String?
-    let title: String
-    let startAt: String
-    let endAt: String
-    let locationOrLink: String?
-    let source: String
-    let category: String?
-    let note: String?
-    let recurrence: String
-    // Optional so an older server (before kids' plans) still decodes.
-    let createdBy: String?
-    let status: String?
-    let reviewNote: String?
+    /// The task's emoji (tasks.icon), picked by the chat agent or the
+    /// parent; nil means the phone guesses one from the title
+    /// (EmojiSuggest).
+    var icon: String? = nil
+    /// A repeating task's exceptions, as calendars keep them: the days taken
+    /// out of it ("This task", "YYYY-MM-DD") and its last day ("This and
+    /// following tasks"). The server keeps them on the task
+    /// (`tasks.skipped_dates`, `repeat_until`), written by the parent's
+    /// cut and split (`ServerSupport.taskSeriesEdits`); every phone's
+    /// `CalendarSync.RepeatRule` reads them, as `task_applies_on` does.
+    var skippedDates: [String]? = nil
+    var repeatUntil: String? = nil
 }
 
 struct ApiOccurrence: Codable {
@@ -52,6 +43,9 @@ struct ApiOccurrence: Codable {
     let bypassRequested: Bool
     let bypassNote: String?
     let rejectionNote: String?
+    /// When the kid sent it in; nil if they never did (a parent can still
+    /// tick it done themselves).
+    var completedAt: String? = nil
 }
 
 struct ApiChildRule: Codable {
@@ -64,6 +58,15 @@ struct ApiChildRule: Codable {
     // Calendar-style override: weekday code ("mon".."sun") -> minutes.
     // nil/absent means "use dailyLimitMinutes every day."
     let weeklySchedule: [String: Int]?
+    // The weekdays downtime runs on ("mon".."sun"); nil means every day.
+    var downtimeDays: [String]? = nil
+    // Each day's own hours, when they differ: "mon" -> {start, end} ("HH:MM").
+    var downtimeSchedule: [String: ApiDowntimeHours]? = nil
+}
+
+struct ApiDowntimeHours: Codable {
+    let start: String
+    let end: String
 }
 
 struct ApiCustomRule: Codable {
@@ -77,6 +80,8 @@ struct ApiCustomRule: Codable {
 struct ApiChildState: Codable {
     let manualLock: Bool
     let taskGateOverride: Bool
+    /// Nil from a server that doesn't have it yet.
+    var instantUnlock: Bool? = nil
 }
 
 struct ApiChild: Codable {
@@ -84,8 +89,29 @@ struct ApiChild: Codable {
     let name: String
     let colorIndex: Int
     let isPaired: Bool
+    /// The paired device has finished its own setup (GET /children). Nil
+    /// from a server too old to say, which counts as finished.
+    var setupComplete: Bool? = nil
+    /// Family Sharing's hand-off between the devices (`FamilySharingHandOff`):
+    /// "account_created" or nil.
+    var setupStage: String? = nil
+    /// The paired device, "ipad" or "iphone"; nil when it paired from an
+    /// older build or the server is older (`DeviceKind`).
+    var deviceKind: String? = nil
     /// IANA zone this child's device last reported; nil until it has.
     let timezone: String?
+}
+
+/// The parent's screen time access code (`POST /access-code`).
+struct ApiAccessCode: Codable {
+    let code: String
+    /// By the server's clock, so a phone whose clock is off counts down right.
+    let secondsLeft: Double
+    let lifetime: Double
+}
+
+struct ApiAccessCodeCheck: Codable {
+    let ok: Bool
 }
 
 /// One app in Evlin's own catalog. Identified by Evlin's id, never a
@@ -144,7 +170,7 @@ struct ApiChatMessage: Codable {
     let conversationId: String?
     let role: String        // "user" | "assistant"
     let text: String
-    // "draft_task" | "draft_event" | "ask_follow_up" | nil — the list lives
+    // "draft_task" | "draft_app_block" | "ask_follow_up" | nil — the list lives
     // in evlin-backend/tool_calls/. Older messages can carry tool names that
     // no longer exist; those show as plain text with no card.
     let toolCall: String?
@@ -261,82 +287,4 @@ struct ApiAppBlock: Codable {
     let state: String
     /// "until 'Homework' is approved", "school nights 19:00–07:00".
     let description: String
-}
-
-// MARK: - Today's videos
-
-/// One channel in a child's video settings. `id` is YouTube's channel id,
-/// which is what filtering matches; the title is for display.
-struct ApiVideoChannel: Codable, Hashable {
-    let id: String
-    let title: String
-}
-
-/// What a child's videos may be. A child with nothing saved gets the
-/// server's defaults (every category allowed).
-struct ApiVideoProfile: Codable {
-    let childId: String
-    var allowedCategories: [String]
-    var blockedKeywords: [String]
-    var allowedChannels: [ApiVideoChannel]
-    var blockedChannels: [ApiVideoChannel]
-    var dailyMinutes: Int
-    var maxVideoMinutes: Int
-    /// Every category there is, in display order — from the server so the
-    /// chips match what it filters by.
-    let allCategories: [String]
-}
-
-/// One video on a child's list for today. Only a parent's approval puts
-/// one here; the child's player plays nothing else.
-struct ApiVideoQueueItem: Codable, Identifiable, Hashable {
-    let id: String
-    let childId: String
-    let localDate: String
-    let position: Int
-    let videoId: String
-    let title: String
-    let channelId: String?
-    let channelTitle: String?
-    let thumbnailUrl: String?
-    let durationSeconds: Int
-    let category: String?
-    let watchedSeconds: Int
-    let completedAt: String?
-
-    var isDone: Bool { completedAt != nil }
-}
-
-/// Today's list plus how much of the daily allowance is left — computed by
-/// the server from what was watched, on every read.
-struct ApiVideoQueue: Codable {
-    let childId: String
-    let localDate: String
-    let dailyMinutes: Int
-    let watchedSeconds: Int
-    let remainingSeconds: Int
-    let items: [ApiVideoQueueItem]
-}
-
-/// One suggestion on the chat's video card, as the server found and
-/// filtered it. Arrives JSON-encoded in the message's `videos` tool arg,
-/// because every tool arg is a string on the wire.
-struct VideoSuggestion: Codable, Identifiable, Hashable {
-    let videoId: String
-    let title: String
-    let channelId: String
-    let channelTitle: String
-    let thumbnailUrl: String
-    let durationSeconds: Int
-    let category: String
-    let why: String
-
-    var id: String { videoId }
-
-    static func decodeList(_ raw: String?) -> [VideoSuggestion] {
-        guard let data = raw?.data(using: .utf8) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return (try? decoder.decode([VideoSuggestion].self, from: data)) ?? []
-    }
 }

@@ -29,7 +29,9 @@ final class SyncState {
     /// alert on every failed attempt would be its own kind of broken UX —
     /// this drives a quiet, dismissible banner instead. Cleared the moment
     /// any sync succeeds.
-    var syncError: String?
+    var syncError: String? {
+        didSet { ConnectionStatus.shared.setServerTrouble(syncError != nil) }
+    }
 
     private var shown = ""
 
@@ -129,8 +131,8 @@ extension Child {
 extension Child {
     /// Saves the lock and the task-gate override after a local change.
     func saveState(label: String) {
-        LocalStore.shared.mirrorChildState(childId: id, manualLock: manualLock, taskGateOverride: taskGateOverride)
-        Outbox.send(APIClient.Write.updateChildState(childId: id, manualLock: manualLock, taskGateOverride: taskGateOverride),
+        LocalStore.shared.mirrorChildState(childId: id, manualLock: manualLock, taskGateOverride: taskGateOverride, instantUnlock: instantUnlock)
+        Outbox.send(APIClient.Write.updateChildState(childId: id, manualLock: manualLock, taskGateOverride: taskGateOverride, instantUnlock: instantUnlock),
                     childId: id, label: label)
     }
 }
@@ -145,6 +147,8 @@ enum RuleSync {
         let downtime = child.rules.first { $0.kind == .downtime }
         var body: [String: Any] = [
             "daily_limit_minutes": child.dailyLimitMin,
+            // Always sent: {} is "the same every day" and clears a schedule.
+            "weekly_schedule": child.weeklySchedule,
             // The limit can't be switched off in the app any more; saving
             // any rule also turns back on one switched off before.
             "daily_limit_enabled": true,
@@ -156,6 +160,14 @@ enum RuleSync {
         if let downtime {
             body["downtime_start"] = hhmmss(downtime.downtimeFrom)
             body["downtime_end"] = hhmmss(downtime.downtimeTo)
+            // [] is every day.
+            body["downtime_days"] = ScreenTimeSchedule.days.filter { downtime.downtimeDays.contains($0) }
+            // Each day's own hours; {} is one set of hours.
+            var schedule: [String: [String: String]] = [:]
+            for (code, hours) in downtime.downtimeHours {
+                schedule[code] = ["start": String(hhmmss(hours.from).prefix(5)), "end": String(hhmmss(hours.to).prefix(5))]
+            }
+            body["downtime_schedule"] = schedule
         } else {
             body["downtime_clear"] = true
         }
@@ -183,8 +195,8 @@ class AppSync {
 
     // Call this when the app starts or comes foreground, and after onboarding finishes
     func syncBackendData() async {
-        // The debug demo never talks to the server (DemoMode).
-        if DemoMode.isOn { SyncState.shared.hasFinishedFirstSync = true; return }
+        // The Demo build never talks to the server (DemoMode).
+        if DemoMode.isBuild { SyncState.shared.hasFinishedFirstSync = true; return }
         if let existing = inflightSync {
             rerunRequested = true
             await existing.value
@@ -219,7 +231,7 @@ class AppSync {
     /// A kid's phone only holds a device token (no parent login), so it syncs
     /// just its own child through the device endpoints.
     private var isKidDevice: Bool {
-        SessionManager.shared.parentAccessToken == nil && SessionManager.shared.childDeviceToken != nil
+        !SessionManager.shared.isParent && SessionManager.shared.childDeviceToken != nil
     }
 
     /// A write queued after a pass started fetching may not be in what it
@@ -235,10 +247,32 @@ class AppSync {
     /// waiting: fetching then would bring back the server's older picture
     /// over changes that haven't reached it.
     private func sendPendingWrites() async -> Bool {
-        if await Outbox.drain().isEmpty { return true }
-        SyncState.shared.syncError = "Your changes will send when you're back online."
+        let result = await Outbox.drain()
+        if result.isEmpty { return true }
+        // A kid's Send waiting a moment for its photos isn't a connection
+        // problem; the photo finishing drains the outbox again.
+        if !result.waitingOnPhotos {
+            SyncState.shared.syncError = "Your changes will send when you're back online."
+        }
         return false
     }
+
+    /// The kid's onboarding is finished on this device and the server
+    /// hasn't been told yet for this pairing. Not before onboarding ends: a
+    /// background sync can run while the kid is still mid-setup.
+    private static var kidSetupNeedsReporting: Bool {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: RootView.Saved.child),
+              let token = SessionManager.shared.childDeviceToken else { return false }
+        return d.string(forKey: setupReportedKey) != String(token.suffix(12))
+    }
+
+    private static func kidSetupReported() {
+        guard let token = SessionManager.shared.childDeviceToken else { return }
+        UserDefaults.standard.set(String(token.suffix(12)), forKey: setupReportedKey)
+    }
+
+    private static let setupReportedKey = "evlin.kidSetupReportedFor"
 
     private func syncKidDevice() async {
         do {
@@ -247,15 +281,23 @@ class AppSync {
             // scheduled block's window, which day a grant lands on. Sent
             // only when it differs, so an unchanged zone never writes.
             let zone = TimeZone.current.identifier
-            if me.timezone != zone { _ = try? await APIClient.shared.updateMyDevice(timezone: zone) }
+            // Once this device's setup is finished, the parent's onboarding
+            // can end (it waits on this). Told once per pairing, on the
+            // write that's already here for the timezone.
+            let reportSetup = Self.kidSetupNeedsReporting
+            if me.timezone != zone || reportSetup {
+                // Noted as told only when the server says it has it: one that
+                // doesn't know about setup yet gets told again next sync.
+                if let echo = try? await APIClient.shared.updateMyDevice(timezone: zone, setupComplete: reportSetup),
+                   reportSetup, echo.setupComplete == true {
+                    Self.kidSetupReported()
+                }
+            }
             let existing = FamilyStore.children.first(where: { $0.id == me.id })
             let child = try await syncChild(me, index: 0, existing: existing)
             FamilyStore.children = [child]
             SessionManager.shared.activeChildId = me.id
             SyncState.shared.hasFreshChildren = true
-            // The kid's own calendar: their events and tasks for the month.
-            await syncCalendar(children: [child], generation: passGeneration)
-            await VideoQueueStore.shared.refresh(childId: me.id)
             SyncState.shared.publish()
             SyncState.shared.syncError = nil
         } catch is Superseded {
@@ -272,6 +314,14 @@ class AppSync {
         if isKidDevice { await syncKidDevice(); return }
         do {
             let apiChildren = try await APIClient.shared.fetchChildren()
+            // A child whose device hasn't reported its timezone yet gets
+            // this phone's, so the server's "today" (blocks, extra time,
+            // the assistant) is the family's and not UTC's. The kid's
+            // device replaces it with its own on its next sync.
+            let zone = TimeZone.current.identifier
+            for child in apiChildren where child.timezone == nil {
+                _ = try? await APIClient.shared.fillChildTimezone(childId: child.id, timezone: zone)
+            }
             // The parent's own profile doesn't depend on having children yet.
             if let me = try? await APIClient.shared.fetchMe() { ParentProfile.shared.load(me) }
 
@@ -323,54 +373,12 @@ class AppSync {
             }
             SyncState.shared.hasFreshChildren = true
 
-            await syncCalendar(children: syncedChildren, generation: passGeneration)
-            for child in syncedChildren { await VideoQueueStore.shared.refresh(childId: child.id) }
-
             SyncState.shared.publish()
             print("AppSync: Successfully synced backend data into UI state!")
         } catch {
             print("AppSync Failed: \(error.localizedDescription)")
             SyncState.shared.syncError = "Couldn't refresh. \(error.apiUserMessage)"
         }
-    }
-
-    // Moves the calendar to a different month and loads its real data —
-    // used when the parent browses the month picker or steps the day nav
-    // past the edge of the currently loaded month. Only tasks + events need
-    // refetching (rules/state/occurrences are already current from the last
-    // full sync; occurrence status only exists for today regardless of
-    // which month is on screen — see CalendarData.forDay).
-    /// Which children have something on each day of a month, from the
-    /// tasks' and events' own repeat rules. Doesn't move the calendar's
-    /// loaded month: it's for the month picker's dots on any month.
-    func monthDots(year: Int, month: Int) async -> [Int: [String]] {
-        let cal = Calendar(identifier: .gregorian)
-        var c = DateComponents(); c.year = year; c.month = month; c.day = 1
-        guard let first = cal.date(from: c), let days = cal.range(of: .day, in: .month, for: first),
-              let end = cal.date(byAdding: .day, value: days.count, to: first) else { return [:] }
-        var dots: [Int: [String]] = [:]
-        for child in FamilyStore.children {
-            let tasks = (try? await APIClient.shared.fetchTasks(childId: child.id)) ?? []
-            let events = (try? await APIClient.shared.fetchEvents(childId: child.id, from: first, to: end)) ?? []
-            for day in days {
-                guard let date = cal.date(byAdding: .day, value: day - 1, to: first) else { continue }
-                if tasks.contains(where: { CalendarSync.applies($0, on: date) })
-                    || events.contains(where: { CalendarSync.eventApplies($0, on: date) }) {
-                    dots[day, default: []].append(child.id)
-                }
-            }
-        }
-        return dots
-    }
-
-    func loadCalendarMonth(year: Int, month: Int) async {
-        CalendarData.dataYear = year
-        CalendarData.dataMonth = month
-        // What the phone already has for that month shows at once.
-        TaskStore.shared.reload()
-        TaskStore.shared.rebuildCalendar()
-        // Tasks are already on the phone; only the month's events are new.
-        await syncCalendar(children: FamilyStore.children, generation: Outbox.generation)
     }
 
     // MARK: - One child
@@ -530,7 +538,10 @@ class AppSync {
                 photoCount: photoURLs.count,
                 photoURLs: photoURLs,
                 repeats: CalendarSync.repeatCodes(task.recurrence),
+                needsPhoto: task.submissionKind == "photo",
                 redoNote: redoNote,
+                sentIn: occurrence?.completedAt != nil || occurrence?.status == "submitted" || !photoURLs.isEmpty,
+                emoji: task.icon,
                 skipDeclinedNote: skipDeclinedNote,
                 createdAt: CalendarSync.parseTimestamp(task.createdAt)
             )
@@ -544,7 +555,7 @@ class AppSync {
             kind: .screenTimeLimit,
             icon: "sf:hourglass",
             title: "Screen Time Limit",
-            detail: "\(formatMinutes(rules.dailyLimitMinutes)) per day",
+            detail: ScreenTimeSchedule.summary(daily: rules.dailyLimitMinutes, weekly: rules.weeklySchedule ?? [:]),
             on: true
         )]
         // The Downtime rule exists once it has times (it can still be switched off).
@@ -552,6 +563,12 @@ class AppSync {
             var dt = ChildRule(id: "downtime", kind: .downtime, icon: "dark_mode", title: "Downtime", detail: "", on: rules.downtimeEnabled)
             if let m = CalendarSync.parseTime(rules.downtimeStart) { dt.downtimeFrom = CalendarSync.date(on: Date(), minutes: m) }
             if let m = CalendarSync.parseTime(rules.downtimeEnd) { dt.downtimeTo = CalendarSync.date(on: Date(), minutes: m) }
+            dt.downtimeDays = Set(rules.downtimeDays ?? [])
+            for (code, hours) in rules.downtimeSchedule ?? [:] {
+                guard let from = CalendarSync.parseTime(hours.start), let to = CalendarSync.parseTime(hours.end) else { continue }
+                dt.downtimeHours[code] = DowntimeHours(from: CalendarSync.date(on: Date(), minutes: from),
+                                                       to: CalendarSync.date(on: Date(), minutes: to))
+            }
             dt.detail = "\(ChildRule.fmtClock(dt.downtimeFrom)) – \(ChildRule.fmtClock(dt.downtimeTo))"
             childRules.append(dt)
         }
@@ -581,8 +598,10 @@ class AppSync {
             update(\.color, color)
             update(\.rules, childRules)
             update(\.dailyLimitMin, rules.dailyLimitMinutes)
+            update(\.weeklySchedule, rules.weeklySchedule ?? [:])
             update(\.manualLock, state.manualLock)
             update(\.taskGateOverride, state.taskGateOverride)
+            if let instantUnlock = state.instantUnlock { update(\.instantUnlock, instantUnlock) }
             update(\.timeLeft, timeLeft)
             update(\.timePct, availableMinutes > 0 ? 100 : 0)
             // Reflect real pairing state: the "1 device" row is only true
@@ -595,7 +614,7 @@ class AppSync {
             return child
         }
 
-        return Child(
+        let made = Child(
             id: apiChild.id, name: apiChild.name, age: 10, dailyLimitMin: rules.dailyLimitMinutes,
             color: color, manualLock: state.manualLock, taskGateOverride: state.taskGateOverride,
             // No time left today reads as time's up (the header's hourglass).
@@ -604,54 +623,11 @@ class AppSync {
             devices: apiChild.isPaired ? FamilyStore.demoDevice(apiChild.name) : [],
             rules: childRules
         )
+        made.weeklySchedule = rules.weeklySchedule ?? [:]
+        made.instantUnlock = state.instantUnlock ?? false
+        return made
     }
 
-    // MARK: - Calendar
-
-    /// Fetches the displayed month's events, saves them on the phone, and
-    /// builds the calendar.
-    private func syncCalendar(children: [Child], generation: Int) async {
-        let cal = Calendar(identifier: .gregorian)
-        let monthStart = CalendarData.date(day: 1)
-        let monthEnd = cal.date(byAdding: .day, value: CalendarData.daysInDataMonth, to: monthStart) ?? monthStart
-
-        var fetched: [String: [ApiEvent]] = [:]
-        for child in children {
-            do {
-                fetched[child.id] = try await APIClient.shared.fetchEvents(childId: child.id, from: monthStart, to: monthEnd)
-            } catch {
-                print("AppSync: events for \(child.id) failed: \(error.localizedDescription)")
-                return // keep the previous calendar rather than showing a partial one
-            }
-        }
-        guard Outbox.generation == generation else { rerunRequested = true; return }
-        let store = LocalStore.shared
-        store.batch {
-            for child in children {
-                store.saveEvents(fetched[child.id] ?? [], childId: child.id, from: monthStart, to: monthEnd)
-            }
-        }
-    }
-
-    /// The displayed month's calendar from server rows: events, and tasks
-    /// with today's state.
-    static func buildCalendar(events: [ApiEvent], tasks: [String: [ApiTask]], today: [String: [ChildTask]]) -> [Int: [CalEvent]] {
-        var byDay: [Int: [CalEvent]] = [:]
-        var seen = Set<String>()
-        for e in events where seen.insert(e.id).inserted {
-            if let (day, ev) = CalendarSync.calEvent(from: e) { byDay[day, default: []].append(ev) }
-        }
-        for (childId, childTasks) in tasks.sorted(by: { $0.key < $1.key }) {
-            let todays = today[childId] ?? []
-            for task in childTasks {
-                let state = todays.first(where: { $0.id == task.id })?.state ?? .pending
-                if let (day, ev) = CalendarSync.calEvent(from: task, childId: childId, todayState: state) {
-                    byDay[day, default: []].append(ev)
-                }
-            }
-        }
-        return byDay
-    }
 }
 
 // MARK: - Backend row <-> calendar mapping
@@ -690,20 +666,6 @@ enum CalendarSync {
         if let date = parseISO(s) { return date }
         let trimmed = s.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
         return parseISO(trimmed) ?? parseISO(trimmed + "Z")
-    }
-
-    /// A calendar item the parent or kid just saved, in the server's shape,
-    /// for the phone's database until the server's own row comes back.
-    static func apiEvent(_ ev: CalEvent, id: String, start: Date, end: Date) -> ApiEvent {
-        ApiEvent(
-            id: id, childId: ev.personId, title: ev.title,
-            startAt: isoString(start), endAt: isoString(end),
-            locationOrLink: ev.location.isEmpty ? nil : ev.location, source: "manual",
-            category: ev.category, note: ev.note,
-            recurrence: ev.repeats == CalendarData.allDayCodes ? "daily" : ev.repeats,
-            createdBy: ev.isKidPlan ? "child" : "parent", status: ev.planStatus.rawValue,
-            reviewNote: ev.reviewNote
-        )
     }
 
     private static let isoDayFormatter: DateFormatter = {
@@ -767,7 +729,7 @@ enum CalendarSync {
     /// dropped "weekly" (never expanded into a real weekday match, so a
     /// weekly task never applied on any day at all through this function).
     static func applies(_ task: ApiTask, on day: Date) -> Bool {
-        let key = "\(task.id)|\(task.recurrence)|\(task.dueDate ?? "")|\(task.createdAt ?? "")|\(isoDay(day))"
+        let key = "\(task.id)|\(task.recurrence)|\(task.dueDate ?? "")|\(task.createdAt ?? "")|\(task.repeatUntil ?? "")|\(task.skippedDates?.joined() ?? "")|\(isoDay(day))"
         if let known = appliesCache[key] { return known }
         let result = RepeatRule(task, fallbackStart: day).applies(on: day)
         appliesCache[key] = result
@@ -784,14 +746,27 @@ enum CalendarSync {
         private let startDay: Date
         private let boundary: Date
         private let days: Days
+        /// The day the parent added it for (its due_date). A repeating task
+        /// falls on that day too, repeat day or not, then on its repeat days
+        /// from there (2026-11-17, the user's call: added on Tuesday's Today
+        /// to repeat on Fridays, it's on that Tuesday and every Friday
+        /// after). The server's `task_applies_on` must match.
+        private let addedOn: Date?
+        /// Days taken out of the series ("This task") and its last day
+        /// ("This and following tasks"): `ApiTask.skippedDates`, `repeatUntil`.
+        private let skipped: Set<String>
+        private let lastDay: Date?
 
         init(_ task: ApiTask, fallbackStart: Date) {
+            skipped = Set(task.skippedDates ?? [])
+            lastDay = CalendarSync.parseDay(task.repeatUntil)
             let start = CalendarSync.parseDay(task.dueDate) ?? CalendarSync.localDay(ofTimestamp: task.createdAt) ?? fallbackStart
             startDay = cal.startOfDay(for: start)
             // A UTC-anchored created_at fallback (no explicit due_date) can
             // already read as "tomorrow" on a device west of UTC the same
             // evening a task was created: a day of slack, as the server's
             // task_applies_on has. A due_date is an exact day: none.
+            addedOn = task.dueDate == nil ? nil : startDay
             let slackDays = task.dueDate == nil ? 1 : 0
             boundary = cal.date(byAdding: .day, value: -slackDays, to: startDay) ?? startDay
             let rec = task.recurrence.trimmingCharacters(in: .whitespaces).lowercased()
@@ -803,7 +778,10 @@ enum CalendarSync {
 
         func applies(on day: Date) -> Bool {
             let d = cal.startOfDay(for: day)
+            if let lastDay, d > lastDay { return false }
+            if !skipped.isEmpty, skipped.contains(CalendarSync.isoDay(d)) { return false }
             if case .once = days { return cal.isDate(d, inSameDayAs: startDay) }
+            if let addedOn, cal.isDate(d, inSameDayAs: addedOn) { return true }
             if d < boundary { return false }
             switch days {
             case .once: return false
@@ -829,91 +807,39 @@ enum CalendarSync {
     /// occurrences: the server only creates a day's occurrence on that day.
     static func tomorrowTasks(from apiTasks: [ApiTask]) -> [ChildTask] {
         let tomorrow = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date())) ?? Date()
-        return apiTasks.filter { applies($0, on: tomorrow) }.map { task in
-            let time = parseTime(task.dueTime)
-            return ChildTask(
-                id: task.id, occurrenceId: nil, title: task.title, state: .pending,
-                category: task.category ?? task.bucket, description: task.instructions ?? "",
-                note: nil,
-                dueLabel: time.map { clock(minutes: $0) },
-                dueDate: time.map { date(on: tomorrow, minutes: $0) } ?? tomorrow,
-                repeats: repeatCodes(task.recurrence),
-                createdAt: parseTimestamp(task.createdAt)
-            )
-        }
-        .sortedForTomorrow()
+        return tasks(from: apiTasks, on: tomorrow)
     }
 
-    /// Whether an event falls on `day`: its own day, or for a repeat, a
-    /// matching weekday on or after the day it starts.
-    static func eventApplies(_ e: ApiEvent, on day: Date) -> Bool {
-        guard e.childId != nil, let start = parseISO(e.startAt) else { return false }
-        let d = cal.startOfDay(for: day), s = cal.startOfDay(for: start)
-        let rec = e.recurrence.trimmingCharacters(in: .whitespaces).lowercased()
-        if rec.isEmpty || rec == "none" { return cal.isDate(d, inSameDayAs: s) }
-        if d < s { return false }
-        if rec == "daily" { return true }
-        if rec == "weekly" { return weekdayCode(d) == weekdayCode(s) }
-        return rec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.contains(weekdayCode(d))
+    /// The tasks planned for `day`, as they'll be on it: not started yet.
+    /// Home's This week lane lists any day with this.
+    static func tasks(from apiTasks: [ApiTask], on day: Date) -> [ChildTask] {
+        let day = cal.startOfDay(for: day)
+        return apiTasks.filter { applies($0, on: day) }.map { childTask($0, on: day) }
+            .sortedForTomorrow()
+    }
+
+    /// A task as it'll be on `day`: not started yet, at its due time.
+    static func childTask(_ task: ApiTask, on day: Date) -> ChildTask {
+        let day = cal.startOfDay(for: day)
+        let time = parseTime(task.dueTime)
+        return ChildTask(
+            id: task.id, occurrenceId: nil, title: task.title, state: .pending,
+            category: task.category ?? task.bucket, description: task.instructions ?? "",
+            note: nil,
+            dueLabel: time.map { clock(minutes: $0) },
+            dueDate: time.map { date(on: day, minutes: $0) } ?? day,
+            repeats: repeatCodes(task.recurrence),
+            needsPhoto: task.submissionKind == "photo",
+            emoji: task.icon,
+            createdAt: parseTimestamp(task.createdAt)
+        )
     }
 
     static func nextOccurrence(of task: ApiTask, after date: Date) -> Date {
-        let key = "\(task.id)|\(task.recurrence)|\(task.dueDate ?? "")|\(task.createdAt ?? "")|\(isoDay(date))"
+        let key = "\(task.id)|\(task.recurrence)|\(task.dueDate ?? "")|\(task.createdAt ?? "")|\(task.repeatUntil ?? "")|\(task.skippedDates?.joined() ?? "")|\(isoDay(date))"
         if let known = nextOccurrenceCache[key] { return known }
         let next = RepeatRule(task, fallbackStart: date).next(after: date) ?? cal.date(byAdding: .year, value: 1, to: date) ?? date
         nextOccurrenceCache[key] = next
         return next
-    }
-
-    /// Day-of-month a (possibly repeating) item should be filed under in the
-    /// displayed month, or nil if it doesn't appear in it. Repeats that began
-    /// in an earlier month are filed under their first matching day, so the
-    /// calendar's forward expansion covers the rest of the month.
-    private static func placement(start: Date, repeats: String) -> Int? {
-        let y = cal.component(.year, from: start), m = cal.component(.month, from: start)
-        if y == CalendarData.dataYear && m == CalendarData.dataMonth { return cal.component(.day, from: start) }
-        let monthStart = CalendarData.date(day: 1)
-        guard start < monthStart, repeats != "none" else { return nil }
-        let set = Set(repeats.split(separator: ",").map(String.init))
-        return (1...CalendarData.daysInDataMonth).first { set.contains((CalendarData.dayNames[$0] ?? "").lowercased()) }
-    }
-
-    static func calEvent(from e: ApiEvent) -> (Int, CalEvent)? {
-        guard let childId = e.childId,
-              let start = parseISO(e.startAt), let end = parseISO(e.endAt) else { return nil }
-        let repeats = repeatCodes(e.recurrence)
-        guard let day = placement(start: start, repeats: repeats) else { return nil }
-        let category = e.category ?? "Activity"
-        var ev = CalEvent(
-            personId: childId,
-            title: e.title, emoji: emojiForCalendarCategory(category),
-            start: ChildRule.fmtClock(start), end: ChildRule.fmtClock(end),
-            category: category, location: e.locationOrLink ?? "", note: e.note ?? "", repeats: repeats
-        )
-        ev.remoteId = e.id
-        if let id = UUID(uuidString: e.id) { ev.id = id }
-        ev.isKidPlan = e.createdBy == "child"
-        ev.planStatus = PlanStatus(rawValue: e.status ?? "approved") ?? .approved
-        ev.reviewNote = e.reviewNote
-        return (day, ev)
-    }
-
-    static func calEvent(from t: ApiTask, childId: String, todayState: TaskState) -> (Int, CalEvent)? {
-        let repeats = repeatCodes(t.recurrence)
-        guard let startDay = parseDay(t.dueDate) ?? localDay(ofTimestamp: t.createdAt),
-              let day = placement(start: startDay, repeats: repeats) else { return nil }
-        let minutes = parseTime(t.dueTime)
-        let startLabel = minutes.map(clock(minutes:)) ?? "12:00 AM"
-        let endLabel = minutes.map { clock(minutes: min($0 + 30, 23 * 60 + 59)) } ?? "12:00 AM"
-        var ev = CalEvent(
-            personId: childId, title: t.title, emoji: emojiForCalendarCategory("Task"),
-            start: startLabel, end: endLabel, category: "Task", location: "",
-            note: t.instructions ?? "", repeats: repeats, isAnytime: minutes == nil,
-            taskState: todayState == .done ? .done : (todayState == .review ? .submitted : .pending),
-            gatesUnlock: t.gatesApps, linkedTaskId: t.id
-        )
-        ev.remoteId = t.id
-        if let id = UUID(uuidString: t.id) { ev.id = id }
-        return (day, ev)
     }
 }

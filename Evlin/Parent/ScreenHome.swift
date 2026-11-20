@@ -2,11 +2,14 @@ import SwiftUI
 
 struct ScreenHome: View {
     @Environment(SessionManager.self) private var session
+    @Environment(\.colorScheme) private var colorScheme
 
-    @State private var showNotifs = false
+    // The child whose Screen time page is open (the hourglass).
     // A notification naming a specific task opens the review deck straight
     // from Home; closing it leaves Home showing that child.
     @State private var directReview: DirectReviewTarget?
+    /// A child on the free plan's far side (the Demo's Leo): the plan page.
+    @State private var proChild: Child?
 
     private struct DirectReviewTarget: Identifiable {
         var childId: String
@@ -24,7 +27,6 @@ struct ScreenHome: View {
     // time, …) is up; see headerScrim.
     @State private var pageScrim: Double = 0
 
-    private var unreadCount: Int { NotificationsData.notifs.filter(\.unread).count }
 
     var body: some View {
         // Re-evaluate (and re-read FamilyStore.children, so a name the child
@@ -73,24 +75,32 @@ struct ScreenHome: View {
             // The header below is Home's own top bar.
             .toolbar(.hidden, for: .navigationBar)
         }
-        .sheet(isPresented: $showNotifs) {
-            Group {
-            NotificationPanel(onOpenChild: { id, taskId in
-                showNotifs = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    // A real task to jump to goes straight to the review
-                    // deck; a notification with no task behind it (e.g. a
-                    // plain reminder) still falls back to opening the
-                    // profile the same way it always did.
-                    session.activeChildId = id
-                    if let taskId {
-                        directReview = DirectReviewTarget(childId: id, taskId: taskId,
-                                                          group: TaskStore.reviewGroup(for: id, startingAt: taskId))
-                    }
-                }
-            })
+        // Demo: `leopaywall` opens the plan page Leo's avatar opens.
+        .task {
+            guard DemoMode.parentOpen == "leopaywall",
+                  let leo = FamilyStore.children.first(where: { EvlinPlan.needsPro(toOpen: $0.id) }) else { return }
+            try? await Task.sleep(for: .seconds(0.6))
+            session.activeChildId = leo.id
+            proChild = leo
         }
-            .presentationDragIndicator(.visible)
+        // Demo: `noahtrial` picks Noah, the trial with 3 days left.
+        .task {
+            guard ["noahtrial", "noahprofile"].contains(DemoMode.parentOpen ?? ""),
+                  let noah = FamilyStore.children.first(where: { EvlinPlan.trialDaysLeft(on: $0.id) != nil }) else { return }
+            try? await Task.sleep(for: .seconds(0.6))
+            session.activeChildId = noah.id
+            if DemoMode.parentOpen == "noahtrial" { proChild = noah }
+        }
+        // Demo: `review` opens Math homework, sent in without a photo.
+        .task {
+            guard DemoMode.parentOpen == "review", let child = FamilyStore.children.first else { return }
+            try? await Task.sleep(for: .seconds(0.8))
+            review(child.id, String(format: "22222222-2222-4222-8222-%012d", 3))
+        }
+        // The Demo's free-plan example (Leo): his page, with the
+        // trial-ended card over it, then the plan page.
+        .childTrialEnded($proChild, demoOpens: true) { c in
+            withAnimation(.snappy(duration: 0.3)) { session.activeChildId = c.id }
         }
         .fullScreenCover(item: $directReview) { target in
             // Swipes through the tapped task's own group: the tasks still
@@ -135,45 +145,16 @@ struct ScreenHome: View {
         }
     }
 
-    private var parentFirstName: String {
-        let name = ParentProfile.shared.displayName.trimmingCharacters(in: .whitespaces)
-        return name.split(separator: " ").first.map(String.init) ?? name
-    }
-
-    // The design's header: every child's avatar on the right (with two or
-    // more), then the greeting with notifications beside it.
+    // One row at the top: every child's avatar (with two or more), on the
+    // right. No greeting, no screen-time button (Profile shows screen time)
+    // and no notifications: Home's own lanes show what needs the parent.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
             // Only with more than one child: the avatars are how a parent
-            // switches between them, and with one child they just take a row.
+            // switches between them.
             if FamilyStore.children.count > 1 {
-                HStack {
-                    Spacer()
-                    childAvatars
-                }
-            }
-            HStack(alignment: .center) {
-                Text(parentFirstName.isEmpty ? "Hi there" : "Hi, \(parentFirstName)")
-                    .font(Typography.font(32, weight: .heavy))
-                    .foregroundStyle(EColor.onSurface)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Spacer()
-                // Just notifications: Settings is its own tab, and "leave
-                // this mode" lives inside it as Sign Out.
-                Button { showNotifs = true } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "bell")
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(HomeStyle.green)
-                            .frame(width: 40, height: 40)
-                        if unreadCount > 0 {
-                            Circle().fill(HomeStyle.red).frame(width: 8, height: 8).offset(x: -8, y: 8)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(unreadCount > 0 ? "Notifications, \(unreadCount) unread" : "Notifications")
+                childAvatars
             }
         }
         .padding(.horizontal, 20)
@@ -182,26 +163,31 @@ struct ScreenHome: View {
     }
 
     // Two letters per child on a tint of their colour. The selected one is a
-    // little larger with a ring; the others fade back. The amber badge counts
-    // what that child has sent in for review, so a parent sees who needs
-    // them without switching.
+    // little larger with a ring; the others fade back. The orange badge counts
+    // what that child has sent in for review (tasks, and goal check-ins
+    // from today), so a parent sees who needs them without switching.
     private var childAvatars: some View {
         HStack(spacing: 6) {
             ForEach(FamilyStore.children, id: \.id) { child in
                 let selected = child.id == selectedChild?.id
                 let waiting = TaskStore.tasks(for: child.id).filter { $0.isDueToday && ($0.state == .review || $0.state == .bypass) }.count
+                    + GoalStore.shared.goals(for: child.id).filter { !$0.waitingToday.isEmpty }.count
                 Button {
+                    // Leo (the Demo's free-plan example) still opens: his
+                    // page shows, with the trial-ended card over it.
+                    if EvlinPlan.cardOnOpen( child.id) && !selected { proChild = child }
                     withAnimation(.snappy(duration: 0.3)) { session.activeChildId = child.id }
                 } label: {
                     Text(String(child.name.prefix(2)).uppercased())
                         .font(Typography.font(11, weight: .heavy))
                         .foregroundStyle(child.color)
                         .frame(width: 32, height: 32)
-                        .background(child.color.opacity(0.14), in: Circle())
+                        .background(child.color.opacity(colorScheme == .dark ? 0.26 : 0.14), in: Circle())
                         .overlay(Circle().strokeBorder(EColor.surface, lineWidth: 2))
                         .overlay(Circle().strokeBorder(selected ? child.color : .clear, lineWidth: 2).padding(-2))
                         .scaleEffect(selected ? 1.14 : 1)
-                        .opacity(selected ? 1 : 0.45)
+                        // In Dark the others fade less: at 0.45 they vanish.
+                        .opacity(selected ? 1 : (colorScheme == .dark ? 0.75 : 0.45))
                         .overlay(alignment: .topTrailing) {
                             if waiting > 0 {
                                 Text("\(waiting)")
@@ -209,7 +195,7 @@ struct ScreenHome: View {
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 3)
                                     .frame(minWidth: 16, minHeight: 16)
-                                    .background(HomeStyle.amber, in: Capsule())
+                                    .background(HomeStyle.waiting, in: Capsule())
                                     .overlay(Capsule().strokeBorder(EColor.surface, lineWidth: 2))
                                     .offset(x: 6, y: -6)
                             }
@@ -239,63 +225,4 @@ struct ScreenHome: View {
     }
 
 
-}
-
-private struct NotificationPanel: View {
-    var onOpenChild: (String, String?) -> Void
-    @State private var notifs = NotificationsData.notifs
-    @Environment(\.dismiss) private var dismiss
-
-    // No per-child color mapping exists (children only ever have real
-    // backend UUIDs) — this just tints every notification the same until
-    // there's a real reason to tell children apart here.
-    private func color(for childId: String) -> Color { EColor.primary }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(notifs) { n in
-                    Button {
-                        if let i = notifs.firstIndex(where: { $0.id == n.id }) { notifs[i].unread = false }
-                        if n.child != "family" { onOpenChild(n.child, n.taskId) }
-                    } label: {
-                        HStack(alignment: .top, spacing: 12) {
-                            if n.unread {
-                                Circle().fill(color(for: n.child)).frame(width: 6, height: 6).padding(.top, 6)
-                            } else {
-                                Color.clear.frame(width: 6, height: 6)
-                            }
-                            Image(systemName: EIcon.sf(n.icon))
-                                .font(.system(size: 18))
-                                .foregroundStyle(color(for: n.child))
-                                .frame(width: 40, height: 40)
-                                .background(color(for: n.child).opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Text(n.title).font(Typography.font(13, weight: .heavy)).foregroundStyle(EColor.primary)
-                                    Spacer()
-                                    Text(n.time).font(Typography.font(10, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                                }
-                                Text(n.body).font(Typography.font(12, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(n.unread ? color(for: n.child).opacity(0.05) : Color.clear)
-                }
-                .onDelete { idx in notifs.remove(atOffsets: idx) }
-            }
-            .listStyle(.plain)
-            .navigationTitle("Notifications")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Mark all read") { for i in notifs.indices { notifs[i].unread = false } }
-                        .font(Typography.font(12, weight: .semibold))
-                }
-            }
-        }
-    }
 }

@@ -5,6 +5,8 @@ struct KidTask: Identifiable {
     let id: String
     var title: String
     var iconTaskId: String
+    /// What the kid sees beside the task (ChildTask.shownEmoji).
+    var emoji: String = EmojiSuggest.fallback
     // Optional — a task doesn't have to have a deadline. nil tasks sit in
     // the Ring's "anytime" cluster instead of on the clock face.
     var due: String?
@@ -22,6 +24,8 @@ struct KidTask: Identifiable {
     // note again, instead of that evidence vanishing the moment
     // TaskDetailView's local capture state is thrown away on dismiss.
     var submittedPhotoCount: Int = 0
+    /// The parent asked for a photo: "All done!" waits for one.
+    var needsPhoto: Bool = false
     var submissionNote: String? = nil
     // Submitting sets done + pendingApproval together — `done` alone used
     // to mean "fully finished," but a parent still needs to look at it, the
@@ -62,62 +66,4 @@ extension KidTask {
 
 enum TabletData {
     static var tasks: [KidTask] = []
-
-    // Used by ScreenTabletHome's task rows to render each task's icon.
-    static func sfIcon(for taskId: String) -> String {
-        switch taskId {
-        case "t1": return "bed.double.fill"
-        case "t2": return "function"
-        case "t3": return "pawprint.fill"
-        case "t4": return "book.fill"
-        case "t5": return "mouth.fill"
-        case "t6": return "sparkles"
-        case "t7": return "pianokeys"
-        default: return "star.fill"
-        }
-    }
-
-    // Real tasks (created via chat, the "+" flow, or Calendar) don't carry
-    // one of the fixed demo ids sfIcon(for:) above understands — every one
-    // of them fell through to the same plain star. This guesses a more
-    // specific icon from the task's own title instead, for the common
-    // chores a family actually types, and only falls back to the star
-    // placeholder for anything it doesn't recognize. Ordered
-    // specific-phrase-first so e.g. "wash the dishes" doesn't get caught
-    // by a more generic "wash"-style rule before the dish-specific one.
-    // A parent/kid picking a real icon explicitly (tasks.icon, reserved on
-    // the backend for that) is meant to take priority over this guess
-    // whenever that picker exists — this is the sensible default until then.
-    private static let titleIconRules: [(keywords: [String], icon: String)] = [
-        (["dish", "dishes", "plate"], "fork.knife"),
-        (["laundry"], "washer.fill"),
-        (["clothes", "clothing", "fold"], "tshirt.fill"),
-        (["bed", "tidy", "room"], "bed.double.fill"),
-        (["trash", "garbage", "recycl"], "trash.fill"),
-        (["homework", "study", "math", "read"], "book.fill"),
-        (["teeth", "floss", "brush"], "mouth.fill"),
-        (["dog", "cat", "pet", "feed"], "pawprint.fill"),
-        (["plant", "garden", "water"], "leaf.fill"),
-        (["shower", "bath"], "drop.fill"),
-        (["piano", "practice", "instrument", "music"], "pianokeys"),
-        (["backpack", "school bag", "pack bag"], "backpack.fill"),
-        (["grocery", "groceries", "shopping"], "basket.fill"),
-        (["box", "declutter", "organize"], "shippingbox.fill"),
-        (["car"], "car.fill"),
-        (["bike", "bicycle"], "bicycle"),
-        (["walk", "run", "jog", "exercise"], "figure.walk"),
-        (["call", "phone"], "phone.fill"),
-        (["draw", "paint", "art"], "paintpalette.fill"),
-        (["write", "journal", "diary"], "pencil"),
-        (["vacuum", "sweep", "mop", "clean"], "sparkles"),
-    ]
-
-    static func guessedIcon(forTitle title: String) -> String {
-        let lower = title.lowercased()
-        for rule in titleIconRules where rule.keywords.contains(where: { lower.contains($0) }) {
-            return rule.icon
-        }
-        return "star.fill"
-    }
-
 }

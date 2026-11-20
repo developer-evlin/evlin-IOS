@@ -61,19 +61,42 @@ struct TaskReviewDeckView: View {
     @State private var upcomingId: String?
     @State private var incomingX: CGFloat = 400
     @State private var dragSideways: Bool?
+    // A move between tasks is under way (step).
+    @State private var sliding = false
+    // Cards approved or sent back while the deck is open. They stay in the
+    // deck (see plan); the deck closes once every card is decided.
+    @State private var decided: Set<String> = []
+    // Tasks decided while the deck is open, as they were when judged (see
+    // shown), and which of them were sent back.
+    @State private var judgedAs: [String: ChildTask] = [:]
+    @State private var sentBack: Set<String> = []
+    // Opened on completed tasks: a redo there moves to the next card rather
+    // than closing (nothing in such a deck is waiting to be decided).
+    @State private var openedOnCompleted = false
 
 
     private func buttonsKey(for task: ChildTask) -> String {
-        "\(primaryLabel(for: task))|\(secondaryLabel(for: task) ?? "")|\(isResolved(task))"
+        "\(primaryLabel(for: task))|\(secondaryLabel(for: task) ?? "")|\(isResolved(task))|\(sentBack.contains(task.id))|\(task.state == .done)"
     }
 
     // One task's card: white, rounded, hairline border.
     private func cardFace(_ task: ChildTask) -> some View {
-        TaskReviewCard(task: task, childName: childName)
+        TaskReviewCard(task: shown(task), childName: childName, sentBack: sentBack.contains(task.id))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(EColor.surfaceContainerLowest)
+            // The page's cream, edged by a hairline: no white panel on it.
+            .background(EColor.surface)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(EColor.outlineVariant, lineWidth: 1))
+    }
+
+    // A task decided in this deck, as it was when judged (what the kid sent
+    // in, photos and all), in its state now: a redo clears the photos on
+    // the server and on the phone, but the card keeps showing what was
+    // judged until the deck closes.
+    private func shown(_ task: ChildTask) -> ChildTask {
+        guard var judged = judgedAs[task.id] else { return task }
+        judged.state = task.state == .done ? .done : judged.state
+        return judged
     }
 
     private var upcomingTask: ChildTask? {
@@ -81,15 +104,22 @@ struct TaskReviewDeckView: View {
     }
 
     // Pops up in the middle of the card the moment it's decided, fast and a
-    // little springy, then slides off with the task: a green circle with a
-    // check for an approval, an orange one with a back-arrow for a redo.
+    // little springy, then slides off with the task: the green approval
+    // badge, its check drawing in, or an orange circle with a back-arrow
+    // for a redo.
     private var decidedPop: some View {
-        Image(systemName: leavingApproved ? "checkmark" : "arrow.uturn.backward")
-            .font(.system(size: 40, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 104, height: 104)
-            .background(leavingApproved ? Brand.greenDeep : Color(hex: "EF6C00"), in: Circle())
-            .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
+        Group {
+            if leavingApproved {
+                ApproveBadge(drawn: stampShown)
+            } else {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 40, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 104, height: 104)
+                    .background(Color(hex: "EF6C00"), in: Circle())
+                    .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
+            }
+        }
             .scaleEffect(stampShown ? 1 : 0.5)
             .opacity(stampShown ? 1 : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -144,33 +174,39 @@ struct TaskReviewDeckView: View {
         }
     }
 
-    // The next task or the one before, stopping at the ends. From a swipe,
-    // the card first carries on off the side it was dragged toward, then
-    // the next cuts in; from a tap, it just cuts.
-    private func step(by delta: Int, fromSwipe: Bool = false) {
-        guard let i = deckIds.firstIndex(of: currentTask?.id ?? ""),
+    // The next task or the one before, stopping at the ends. A swipe and a
+    // tap at the edge move the same way, like pages: the next task is
+    // placed against the card's far edge (wherever the finger left it) and
+    // both slide together until it's in place, so there's never a blank
+    // between them. Then it becomes the card (the same picture, so the swap
+    // can't be seen), as approving does. A tap mid-move waits for it.
+    private func step(by delta: Int) {
+        guard !sliding,
+              let i = deckIds.firstIndex(of: currentTask?.id ?? ""),
               deckIds.indices.contains(i + delta) else { return }
         pagedTick += 1
         let next = deckIds[i + delta]
-        guard fromSwipe else {
-            cut { currentId = next; cardDrag = 0 }
-            return
-        }
-        // Each move starts in an update of its own. Changes landing in the
-        // same update merge, and the instant placement's "no animation"
-        // won: the card jumped off, and the next one jumped in.
-        // The card's width plus its margins: just past the edge.
-        let offEdge: CGFloat = 384
-        DispatchQueue.main.async {
-            withAnimation(.easeIn(duration: 0.12)) { cardDrag = CGFloat(-delta) * offEdge }
-        }
-        // As it leaves: the next is placed just past the far edge...
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            withoutAnimation { currentId = next; cardDrag = CGFloat(delta) * offEdge }
-            // ...and slides in once that placement is on screen.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) {
-                withAnimation(.spring(duration: 0.3, bounce: 0)) { cardDrag = 0 }
+        sliding = true
+        // The card's width plus the gap between pages.
+        let pageWidth: CGFloat = 384
+        withoutAnimation { upcomingId = next; incomingX = cardDrag + CGFloat(delta) * pageWidth }
+        // A frame later, once the next card is on screen where it was
+        // placed: started together, its text was laid out at its final
+        // place before the card got there, and showed through the old one.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) {
+            withAnimation(.spring(duration: 0.32, bounce: 0)) {
+                cardDrag = CGFloat(-delta) * pageWidth
+                incomingX = 0
             }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
+            withoutAnimation {
+                currentId = next
+                cardDrag = 0
+                upcomingId = nil
+                incomingX = 400
+            }
+            sliding = false
         }
     }
 
@@ -180,9 +216,52 @@ struct TaskReviewDeckView: View {
         self.onDismiss = onDismiss
         _deckIds = State(initialValue: taskIds)
         _currentId = State(initialValue: taskIds.indices.contains(startIndex) ? taskIds[startIndex] : taskIds.first)
+        let opened = TaskStore.tasks(for: childId, ids: taskIds)
+        _openedOnCompleted = State(initialValue: !opened.isEmpty && opened.allSatisfy { $0.state == .done || $0.state == .bypassed })
     }
 
     private var currentTask: ChildTask? { tasks.first { $0.id == currentId } ?? tasks.first }
+
+    private var reviewHeader: some View {
+        HStack {
+            Group {
+                if let task = currentTask, !showCaughtUp {
+                    Button { editingTask = task } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(EColor.onSurface)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit task")
+                } else {
+                    Color.clear.frame(width: 44, height: 44)
+                }
+            }
+
+            Spacer()
+
+            Text(childName)
+                .font(Typography.font(17, weight: .semibold))
+                .foregroundStyle(EColor.onSurface)
+                .lineLimit(1)
+
+            Spacer()
+
+            Button { dismiss(); onDismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(EColor.onSurfaceVariant)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 52)
+    }
 
     // The two buttons per state. Submitted (.review): Approve or Redo.
     // Asked to skip (.bypass): Skip for now, or Keep it (back to to-do).
@@ -209,7 +288,7 @@ struct TaskReviewDeckView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                EColor.surface.ignoresSafeArea()
+                Rectangle().fill(EColor.surface).ignoresSafeArea()
 
                 if showCaughtUp {
                     doneState
@@ -237,10 +316,10 @@ struct TaskReviewDeckView: View {
                                     .transition(.identity)
                             }
                             if let task = currentTask {
-                                // Moving on is otherwise a cut, as between one
-                                // person's Instagram stories: the old task
-                                // goes and the next fades in (cut); a swipe
-                                // moves the card like a page (step). All
+                                // Moving between tasks, by swipe or edge
+                                // tap, slides the card like a page (step);
+                                // a deletion or a decision that moves on
+                                // fades the next in (cut). All
                                 // driven by state on the card's outer frame:
                                 // transitions, and moving what's inside the
                                 // task's scroll view, never animated.
@@ -290,7 +369,7 @@ struct TaskReviewDeckView: View {
                                     let projected = v.predictedEndTranslation.width
                                     let delta = dx < 0 ? 1 : -1
                                     if leavingId == nil, abs(dx) > 70 || abs(projected) > 160, canStep(by: delta) {
-                                        step(by: delta, fromSwipe: true)
+                                        step(by: delta)
                                     } else if cardDrag != 0 {
                                         withAnimation(.spring(duration: 0.3, bounce: 0)) { cardDrag = 0 }
                                     }
@@ -343,25 +422,8 @@ struct TaskReviewDeckView: View {
             .onChange(of: tasks.isEmpty) { _, isEmpty in
                 if isEmpty && !showCaughtUp { dismiss(); onDismiss() }
             }
-            .navigationTitle(childName)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss(); onDismiss() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    if let task = currentTask, !showCaughtUp {
-                        Button { editingTask = task } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(EColor.onSurface)
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
+            .safeAreaInset(edge: .top, spacing: 0) { reviewHeader }
+            .toolbar(.hidden, for: .navigationBar)
         }
         // The send-back runs once the sheet has fully gone, not while it's
         // still sliding down: one thing moving at a time.
@@ -381,19 +443,19 @@ struct TaskReviewDeckView: View {
                 .presentationDetents([.large])
             }
         }
-            .presentationDragIndicator(.visible)
+            .closesOnlyWithButton()
         }
         .sheet(item: $editingTask) { task in
             Group {
             EditTaskReviewSheet(
                 task: task,
-                onSave: { updated in applyEdit(updated) },
-                onDelete: { applyDelete(task) },
+                onSave: { updated, scope in applyEdit(updated, original: task, scope: scope) },
+                onDelete: { scope in applyDelete(task, scope: scope) },
                 onCancel: { editingTask = nil }
             )
             .presentationDetents([.large])
         }
-            .presentationDragIndicator(.visible)
+            .presentationDragIndicator(.visible)   // swipes away; held when there are changes (FormShell)
         }
     }
 
@@ -402,10 +464,7 @@ struct TaskReviewDeckView: View {
     // praise rather than a status report.
     private var doneState: some View {
         VStack(spacing: 14) {
-            ZStack {
-                Circle().fill(Color(hex: "25924A").opacity(0.12)).frame(width: 104, height: 104)
-                Image(systemName: "checkmark.seal.fill").font(.system(size: 56)).foregroundStyle(Color(hex: "25924A"))
-            }
+            ApproveBadge(size: 88, drawn: doneAppeared)
             .scaleEffect(doneAppeared ? 1 : 0.6)
             .opacity(doneAppeared ? 1 : 0)
             .padding(.bottom, 6)
@@ -436,42 +495,79 @@ struct TaskReviewDeckView: View {
                     .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(EColor.outlineVariant, lineWidth: 1.5))
             }
             .buttonStyle(PressScaleStyle())
+        } else if sentBack.contains(task.id) {
+            // Decided: the choice made, filled in, and the other still there
+            // to change one's mind. Moving on is a swipe or an edge tap.
+            HStack(spacing: 12) {
+                chosenBar(tone: Color(hex: "B26A00"), fill: Color(hex: "FFA726").opacity(0.16)) {
+                    Label("Sent back", systemImage: "arrow.uturn.backward")
+                }
+                approveButton(for: shown(task))
+            }
+        } else if task.state == .done {
+            HStack(spacing: 12) {
+                // Ticked done by the parent with nothing sent in: the same
+                // Redo button and move, but no note to write, and the task
+                // just goes back to "to do" (TaskEdits.redo), not sent back.
+                if task.sentIn {
+                    redoButton(label: "Redo")
+                } else {
+                    redoButton(label: "Redo") {
+                        decide(task, approved: false) { TaskEdits.redo(task, note: "", childId: childId) }
+                    }
+                }
+                chosenBar(tone: Color(hex: "25924A"), fill: Color(hex: "25924A").opacity(0.12)) {
+                    ApproveLabel(title: "Approved")
+                }
+            }
         } else {
             HStack(spacing: 12) {
-                if let secondary = secondaryLabel(for: task) {
-                    Button {
-                        showRedoCompose = true
-                    } label: {
-                        Label(secondary, systemImage: "arrow.uturn.backward")
-                            .font(Typography.font(15, weight: .heavy))
-                            .foregroundStyle(Color(hex: "B26A00"))
-                            .frame(maxWidth: .infinity).frame(height: 52)
-                            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(hex: "EF6C00"), lineWidth: 1.5))
-                    }
-                    .buttonStyle(PressScaleStyle())
-                }
-
-                Button {
-                    if task.state == .done {
-                        showNext(after: task.id)
-                    } else {
-                        decide(task, approved: true) { TaskEdits.approve(task, childId: childId) }
-                    }
-                } label: {
-                    Label(primaryLabel(for: task), systemImage: "checkmark")
-                        .font(Typography.font(15, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                        .background {
-                            // The same shape as the "Approved" bar, so on a tap
-                            // this button grows into it.
-                            RoundedRectangle(cornerRadius: 16).fill(Brand.greenDeep)
-                                .matchedGeometryEffect(id: "primaryAction", in: buttonSpace)
-                        }
-                }
-                .buttonStyle(PressScaleStyle())
+                if let secondary = secondaryLabel(for: task) { redoButton(label: secondary) }
+                approveButton(for: task)
             }
         }
+    }
+
+    private func redoButton(label: String, action: (() -> Void)? = nil) -> some View {
+        Button {
+            if let action { action() } else { showRedoCompose = true }
+        } label: {
+            Label(label, systemImage: "arrow.uturn.backward")
+                .font(Typography.font(15, weight: .heavy))
+                .foregroundStyle(Color(hex: "B26A00"))
+                .frame(maxWidth: .infinity).frame(height: 52)
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(hex: "EF6C00"), lineWidth: 1.5))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+
+    private func approveButton(for task: ChildTask) -> some View {
+        Button {
+            decide(task, approved: true) { TaskEdits.approve(task, childId: childId) }
+        } label: {
+            ApproveLabel(title: "Approve")
+                .font(Typography.font(15, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity).frame(height: 52)
+                .background {
+                    // The same shape as the "Approved" bar, so on a tap
+                    // this button grows into it.
+                    RoundedRectangle(cornerRadius: 16).fill(FormGreen.approve)
+                        .matchedGeometryEffect(id: "primaryAction", in: buttonSpace)
+                }
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+
+    // The decision already made on this card: the button it was, filled in
+    // and still, so it reads as chosen rather than as something to press.
+    private func chosenBar(tone: Color, fill: Color, @ViewBuilder label: () -> some View) -> some View {
+        label()
+            .font(Typography.font(15, weight: .heavy))
+            .foregroundStyle(tone)
+            .frame(maxWidth: .infinity).frame(height: 52)
+            .background(fill, in: RoundedRectangle(cornerRadius: 16))
+            .accessibilityAddTraits(.isStaticText)
     }
 
     // A decision: saved at once (Home shows it straight away), stamped on
@@ -479,6 +575,15 @@ struct TaskReviewDeckView: View {
     private func decide(_ task: ChildTask, approved: Bool, _ write: () -> Void) {
         guard leavingId == nil else { return }
         frozen = task
+        if !approved && !task.sentIn {
+            // Taking back a tick the parent made themselves: the card goes
+            // back to the task as it was, not to a "sent back" copy.
+            judgedAs.removeValue(forKey: task.id)
+            sentBack.remove(task.id)
+        } else {
+            if judgedAs[task.id] == nil { judgedAs[task.id] = task }
+            if approved { sentBack.remove(task.id) } else { sentBack.insert(task.id) }
+        }
         write()
         leavingApproved = approved
         if approved { unlockIfEverythingResolved() }
@@ -493,25 +598,22 @@ struct TaskReviewDeckView: View {
         cut { currentId = deckIds[i + 1] }
     }
 
-    // Takes the task out of the deck and slides the next one that still
-    // needs the parent into its place. Nothing left: "Great job" after an
-    // approval, otherwise the deck just closes.
-    /// Where the deck goes after a decision on `id`: the tasks left, and the
-    /// next to show, or nil when the deck is done (closes, or "Great job").
-    /// An approved task stays in the deck (swipe back to see it); one sent
-    /// back is the kid's again, so it leaves the deck and the bar.
+    /// Where the deck goes after a decision on `id`: the next card the
+    /// parent hasn't decided yet, or nil when every card is decided (the
+    /// deck closes, or "Great job" after an approval). Every card stays in
+    /// the deck while it's open, approved or sent back, so the bar and the
+    /// cards don't change under the parent mid-way; Home shows where each
+    /// went once the deck closes. A deck of completed tasks stays open after
+    /// a redo, on the next card.
     private func plan(after id: String, approved: Bool) -> (remaining: [String], next: String?) {
-        let remaining = approved ? deckIds : deckIds.filter { $0 != id }
-        let open = TaskStore.tasks(for: childId, ids: remaining).filter { !isComplete($0) && $0.id != id }
-        // Nothing left at all: close. Approved the last one still needing the
-        // parent: "Great job". Sending one back otherwise keeps the deck open
-        // on what's left, completed tasks included.
-        guard !remaining.isEmpty, !(approved && open.isEmpty) else { return (remaining, nil) }
-        // The next task still needing the parent, after this one, wrapping;
-        // with none (sent back from among completed ones), the next card.
+        let remaining = deckIds
+        let open = TaskStore.tasks(for: childId, ids: remaining)
+            .filter { !isComplete($0) && !decided.contains($0.id) && $0.id != id }
         let position = deckIds.firstIndex(of: id) ?? 0
-        let order = deckIds.indices.map { deckIds[(position + 1 + $0) % deckIds.count] }.filter { remaining.contains($0) }
-        return (remaining, order.first { nextId in open.contains { $0.id == nextId } } ?? order.first)
+        let order = deckIds.indices.map { deckIds[(position + 1 + $0) % deckIds.count] }.filter { $0 != id }
+        if let next = order.first(where: { nextId in open.contains { $0.id == nextId } }) { return (remaining, next) }
+        if !approved && openedOnCompleted { return (remaining, order.first) }
+        return (remaining, nil)
     }
 
     // No withAnimation around the deck's changes: the bar animates itself
@@ -519,6 +621,7 @@ struct TaskReviewDeckView: View {
     // update carried over onto the card's cut.
     private func moveOn(from id: String, approved: Bool) {
         let (remaining, next) = plan(after: id, approved: approved)
+        decided.insert(id)
         guard let next else {
             leavingId = nil
             frozen = nil
@@ -542,6 +645,7 @@ struct TaskReviewDeckView: View {
     // the task slides off to the left and the next slides in from the right.
     private func throwDecided(_ task: ChildTask, approved: Bool) {
         let (remaining, next) = plan(after: task.id, approved: approved)
+        decided.insert(task.id)
         if approved { approvedTick += 1 } else { sentBackTick += 1 }
         withAnimation(.spring(duration: 0.3, bounce: 0)) { leavingId = task.id }
         withAnimation(.spring(duration: 0.26, bounce: 0.4)) { stampShown = true }
@@ -613,19 +717,20 @@ struct TaskReviewDeckView: View {
         child.timePct = 100
     }
 
-    private func applyEdit(_ updated: ChildTask) {
+    private func applyEdit(_ updated: ChildTask, original: ChildTask, scope: TaskScope) {
         let hadDeadline = tasks.first(where: { $0.id == updated.id })?.dueLabel != nil
-        TaskEdits.save(updated, clearDueTime: hadDeadline && updated.dueLabel == nil)
+        TaskEdits.save(updated, original: original, scope: scope, day: original.dueDate ?? Date(),
+                       clearDueTime: hadDeadline && updated.dueLabel == nil)
         editingTask = nil
     }
 
     // One step at a time: the edit sheet slides away first, then the task
     // goes, with the next one cutting in as after an approval. Done
     // together, the card vanished under the sheet before it had closed.
-    private func applyDelete(_ task: ChildTask) {
+    private func applyDelete(_ task: ChildTask, scope: TaskScope) {
         editingTask = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + TaskEdits.sheetCloseDelay) {
-            cut { TaskEdits.delete(task) }
+            cut { TaskEdits.delete(task, scope: scope, day: task.dueDate ?? Date()) }
         }
     }
 
@@ -654,9 +759,8 @@ private struct DecidedBar: View {
     var body: some View {
         Group {
             if approved {
-                Label("Approved", systemImage: "checkmark")
-                    .font(Typography.font(15, weight: .heavy))
-                    .symbolEffect(.bounce, value: shown)
+                ApproveLabel(title: "Approved", progress: shown ? 1 : 0)
+                    .animation(.easeOut(duration: 0.25).delay(0.05), value: shown)
             } else {
                 Image(systemName: "arrow.uturn.backward")
                     .font(.system(size: 20, weight: .bold))
@@ -667,7 +771,7 @@ private struct DecidedBar: View {
         .frame(maxWidth: .infinity).frame(height: 52)
         .background {
             // Grows out of the Approve button it replaces (same id).
-            RoundedRectangle(cornerRadius: 16).fill(approved ? Brand.greenDeep : Color(hex: "EF6C00"))
+            RoundedRectangle(cornerRadius: 16).fill(approved ? FormGreen.approve : Color(hex: "EF6C00"))
                 .matchedGeometryEffect(id: approved ? "primaryAction" : "secondaryAction", in: space)
         }
         .onAppear { shown = true }
@@ -680,6 +784,8 @@ private struct DecidedBar: View {
 private struct TaskReviewCard: View {
     var task: ChildTask
     var childName: String
+    // Sent back in this deck: shown as judged, with a "Sent back" label.
+    var sentBack = false
 
     // Which photo the full-screen viewer opens to
     // — set together right before showPhotoViewer flips true, so the
@@ -688,6 +794,7 @@ private struct TaskReviewCard: View {
     @State private var showPhotoViewer = false
 
     private var statusMeta: (label: String, tone: Color, bg: Color) {
+        if sentBack { return ("Sent back to \(childName)", Color(hex: "B26A00"), Color(hex: "FFA726").opacity(0.12)) }
         switch task.state {
         case .done: return ("Approved", Color(hex: "25924A"), Color(hex: "25924A").opacity(0.10))
         case .bypassed: return ("Skipped", EColor.onSurfaceVariant, EColor.outlineVariant.opacity(0.5))
@@ -710,7 +817,7 @@ private struct TaskReviewCard: View {
                         .font(Typography.font(30, weight: .heavy))
                         .foregroundStyle(EColor.onSurface)
 
-                    if task.state == .review {
+                    if task.state == .review && !sentBack {
                         // Routine, positive state — the kid already did the
                         // work, there's nothing here to flag — so this skips
                         // the colored "Awaiting your review" pill every other
@@ -801,21 +908,16 @@ private struct TaskReviewCard: View {
         }
     }
 
+    // A photo is optional (2026-11-05): sent in without one just says so.
     private var emptySubmissionPlaceholder: some View {
-        VStack(spacing: 8) {
-            ZStack {
-                Circle().fill(EColor.surfaceContainerHigh).frame(width: 48, height: 48)
-                Image(systemName: task.state == .overdue ? "exclamationmark" : "hourglass")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(EColor.outline)
-            }
-            Text(task.state == .overdue ? "No photo submitted" : "Waiting for photo")
-                .font(Typography.font(13, weight: .bold)).foregroundStyle(EColor.onSurface)
-            Text(task.state == .overdue ? "\(childName) missed the deadline" : "\(childName) hasn't uploaded yet")
-                .font(Typography.font(11.5, weight: .regular)).foregroundStyle(EColor.onSurfaceVariant)
+        let sentIn = task.state == .review || task.state == .done || task.sentIn
+        return VStack(spacing: 4) {
+            Text(sentIn ? "No picture submitted"
+                 : task.state == .overdue ? "Not sent in by the deadline" : "Not sent in yet")
+                .font(Typography.font(14, weight: .semibold)).foregroundStyle(EColor.onSurfaceVariant)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 26)
+        .padding(.vertical, 22)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
@@ -927,7 +1029,7 @@ struct RemotePhoto: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(Color(hex: "E4DFCE"), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(Color(light: "E5E5EA", dark: "353A42"), lineWidth: 1))
         .task(id: "\(urlString)#\(retryToken)") {
             failed = false
             guard let url = URL(string: urlString) else {
@@ -949,7 +1051,7 @@ struct RemotePhoto: View {
 
     private func placeholder(failed: Bool) -> some View {
         ZStack {
-            Color(hex: "FFFDF6")
+            Color(light: "F2F2F7", dark: "262A30")
             VStack(spacing: 4) {
                 Image(systemName: failed ? "arrow.clockwise" : "photo")
                     .font(.system(size: 22))
@@ -977,7 +1079,7 @@ struct RemotePhoto: View {
 // zoomed in (.scrollDisabled(isZoomed)) is what keeps the two from
 // fighting: panning a zoomed photo can't also change pages, and once
 // zoomed back out, normal swipe-between-photos comes right back.
-private struct PhotoGalleryViewer: View {
+struct PhotoGalleryViewer: View {
     var urls: [String]
     @Binding var index: Int
     var onClose: () -> Void
@@ -1056,7 +1158,7 @@ private struct PhotoGalleryViewer: View {
                             .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(.white)
                             .frame(width: 40, height: 40)
-                            .background(.white.opacity(0.16))
+                            .background(EColor.card.opacity(0.16))
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -1261,6 +1363,17 @@ private struct RedoComposeSheet: View {
     }
 }
 
+/// Which days of a repeating task an edit or a delete is for, as calendars
+/// ask (2026-11-18, the user's call).
+enum TaskScope {
+    /// The day it was opened on, alone.
+    case thisOne
+    /// That day and every one after it: the series is cut there.
+    case thisAndFollowing
+    /// The whole task.
+    case all
+}
+
 // Every task write, from every screen (Home, the review deck, the calendar,
 // chat): put in the phone's database at once, then sent by the outbox.
 @MainActor enum TaskEdits {
@@ -1268,40 +1381,217 @@ private struct RedoComposeSheet: View {
     /// on screen never changes identity. Returns that id.
     @discardableResult
     static func create(childId: String, title: String, instructions: String?, recurrence: String, category: String,
-                       dueTime: String?, dueDate: String?, bonusMinutes: Int = 0, createdBy: String = "parent") -> String {
+                       dueTime: String?, dueDate: String?, bonusMinutes: Int = 0, createdBy: String = "parent",
+                       icon: String? = nil, needsPhoto: Bool = false, putOnToday: Bool = true,
+                       splitFrom: SeriesCut? = nil) -> String {
+        let submissionKind = needsPhoto ? "photo" : "none"
         let id = APIClient.Write.newId()
+        // Every task leaves with an emoji: the one picked (agent or parent),
+        // else the best guess from its title, so the kid sees the same one
+        // on every phone.
+        let icon = icon ?? EmojiSuggest.best(for: title)
         let task = ApiTask(
             id: id, title: title, instructions: instructions, recurrence: recurrence, gatesApps: true,
-            submissionKind: "none", bucket: "anytime", category: category, dueDate: dueDate, dueTime: dueTime,
-            createdAt: CalendarSync.isoString(Date()), bonusMinutes: bonusMinutes, createdBy: createdBy)
+            submissionKind: submissionKind, bucket: "anytime", category: category, dueDate: dueDate, dueTime: dueTime,
+            createdAt: CalendarSync.isoString(Date()), bonusMinutes: bonusMinutes, createdBy: createdBy, icon: icon)
         let store = LocalStore.shared
+        // `putOnToday` off: today's row comes from the task it was split
+        // from (its skipped day or last day), with whatever was done on it.
+        let today = putOnToday && CalendarSync.applies(task, on: Date())
         store.batch {
             store.mirrorTaskSaved(task, childId: childId)
-            if CalendarSync.applies(task, on: Date()) {
+            if today {
                 store.materializeOccurrence(taskId: id, childId: childId, dueDate: CalendarSync.isoDay(Date()))
             }
         }
         // A new task for today closes the phone again, even if the parent
         // had opened it: the override is cleared here and on the server
         // (routers/tasks.py does the same), so the kid's phone locks at once.
-        if CalendarSync.applies(task, on: Date()) {
+        if today {
             let child = FamilyStore.child(childId)
             if child.taskGateOverride {
                 child.taskGateOverride = false
                 child.saveState(label: "Locking the phone")
             }
         }
-        Outbox.send(APIClient.Write.createTask(
+        let made = APIClient.Write.createTask(
             id: id, childId: childId, title: title, instructions: instructions, recurrence: recurrence,
-            category: category, submissionKind: "none", dueTime: dueTime, dueDate: dueDate,
-            bonusMinutes: bonusMinutes, createdBy: createdBy),
-            childId: childId, label: "The new task")
+            category: category, submissionKind: submissionKind, dueTime: dueTime, dueDate: dueDate,
+            bonusMinutes: bonusMinutes, createdBy: createdBy, icon: icon)
+        if let splitFrom {
+            // Part of a series edited on its own: one write makes the new
+            // task, hands it those days and cuts the series, so the server
+            // is never left with both or neither.
+            Outbox.send(APIClient.Write.splitTask(taskId: splitFrom.taskId, from: splitFrom.from,
+                                                  through: splitFrom.through, newTask: made),
+                        childId: childId, label: "Your task edit")
+        } else {
+            Outbox.send(made, childId: childId, label: "The new task")
+        }
         return id
+    }
+
+    /// Days of a repeating task handed to a new one: `from` alone
+    /// (`through` the same day) or from it on (`through` nil).
+    struct SeriesCut {
+        var taskId: String
+        var from: String
+        var through: String?
+    }
+
+    /// A repeating task edited for one day, or from a day on (`scope`):
+    /// that part becomes a task of its own, with the edits, and the series
+    /// keeps the rest (`ApiTask.skippedDates`, `repeatUntil`). `day` is the day it was opened on.
+    /// The whole task, or a task that doesn't repeat: `save` as ever.
+    static func save(_ updated: ChildTask, original: ChildTask, scope: TaskScope, day: Date,
+                     clearDueTime: Bool = false) {
+        let store = LocalStore.shared
+        // Its repeat days changed (2026-11-18, the user's calls): the new
+        // days apply from the day opened on. Alone, or with "This and
+        // following tasks", the rest of the edit goes the same way; with
+        // "This task", the rest is for that day alone.
+        if ServerSupport.taskSeriesEdits, original.repeats != "none",
+           repeatDays(updated.repeats) != repeatDays(original.repeats),
+           let saved = store.cachedTask(id: original.id), let childId = store.cachedTaskChild(id: original.id) {
+            guard scope == .thisOne else {
+                saveRepeat(updated, saved: saved, childId: childId, day: day, clearDueTime: clearDueTime)
+                return
+            }
+            var series = original
+            series.repeats = updated.repeats
+            series.id = saveRepeat(series, saved: saved, childId: childId, day: day, clearDueTime: false)
+            var edited = updated
+            edited.id = series.id
+            return save(edited, original: series, scope: .thisOne, day: day, clearDueTime: clearDueTime)
+        }
+        guard scope != .all, original.repeats != "none",
+              let saved = store.cachedTask(id: original.id), let childId = store.cachedTaskChild(id: original.id)
+        else { return save(updated, clearDueTime: clearDueTime) }
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: day)
+        // From the series' first day on is the whole series.
+        if scope == .thisAndFollowing, day <= seriesStart(saved, opened: day) {
+            return save(updated, clearDueTime: clearDueTime)
+        }
+        let iso = CalendarSync.isoDay(day)
+        let dueTime = updated.dueLabel == nil ? nil : updated.dueDate.map { format($0, "HH:mm:ss") }
+        // This day alone: a task for that day only. From it on: the new
+        // repeat, starting on its first day from there, so it isn't put on
+        // a day its repeat doesn't fall on.
+        let recurrence = scope == .thisOne ? "none" : updated.repeats
+        let start = scope == .thisOne ? day : firstDay(on: recurrence, from: day)
+        let newId = create(childId: childId, title: updated.title,
+                           instructions: updated.description.isEmpty ? nil : updated.description,
+                           recurrence: recurrence, category: updated.category,
+                           dueTime: dueTime, dueDate: CalendarSync.isoDay(start),
+                           bonusMinutes: saved.bonusMinutes, createdBy: saved.createdBy,
+                           icon: updated.emoji ?? saved.icon, needsPhoto: updated.needsPhoto, putOnToday: false,
+                           splitFrom: SeriesCut(taskId: original.id, from: iso, through: scope == .thisOne ? iso : nil))
+        store.batch {
+            // The days handed over keep what was sent in or approved on them.
+            store.moveOccurrences(of: original.id, to: newId, from: iso, through: scope == .thisOne ? iso : nil)
+            if scope == .thisOne { store.mirrorSeriesCut(taskId: original.id, skip: iso) }
+            else { store.mirrorSeriesCut(taskId: original.id, endBefore: iso) }
+            // Today wasn't on the old task but is on the new one.
+            if let made = store.cachedTask(id: newId), CalendarSync.applies(made, on: Date()) {
+                store.materializeOccurrence(taskId: newId, childId: childId, dueDate: CalendarSync.isoDay(Date()))
+            }
+        }
+    }
+
+    /// A repeat's days as a set ("none" is empty), so the order they're
+    /// written in doesn't count as a change.
+    static func repeatDays(_ repeats: String) -> Set<String> {
+        let codes = CalendarSync.repeatCodes(repeats)
+        return codes == "none" ? [] : Set(codes.split(separator: ",").map(String.init))
+    }
+
+    /// Its repeat days changed (2026-11-18, the user's calls): the day it
+    /// was opened on keeps its task, done or not, and the new days start
+    /// after it; earlier days keep the old repeat; anything edited with it
+    /// goes the same way. The series ends the day before, and a task with
+    /// the edits and the new repeat starts on that day, which it keeps by
+    /// the rule that a task falls on the day it was added for. From the
+    /// series' first day it's the whole task, its first day written down if
+    /// it had none, so that day keeps the task too.
+    /// Returns the id of the task that now holds that day.
+    @discardableResult
+    private static func saveRepeat(_ updated: ChildTask, saved: ApiTask, childId: String, day: Date,
+                                   clearDueTime: Bool) -> String {
+        let store = LocalStore.shared
+        let cut = Calendar.current.startOfDay(for: day)
+        let first = seriesStart(saved, opened: cut)
+        if cut <= first {
+            save(updated, clearDueTime: clearDueTime,
+                 startOn: saved.dueDate == nil ? CalendarSync.isoDay(first) : nil)
+            return saved.id
+        }
+        let iso = CalendarSync.isoDay(cut)
+        let dueTime = updated.dueLabel == nil ? nil : updated.dueDate.map { format($0, "HH:mm:ss") }
+        let newId = create(childId: childId, title: updated.title,
+                           instructions: updated.description.isEmpty ? nil : updated.description,
+                           recurrence: updated.repeats, category: updated.category,
+                           dueTime: dueTime, dueDate: iso,
+                           bonusMinutes: saved.bonusMinutes, createdBy: saved.createdBy,
+                           icon: updated.emoji ?? saved.icon, needsPhoto: updated.needsPhoto, putOnToday: false,
+                           splitFrom: SeriesCut(taskId: saved.id, from: iso, through: nil))
+        store.batch {
+            // That day's task, with whatever was done on it, goes to the new one.
+            store.moveOccurrences(of: saved.id, to: newId, from: iso)
+            store.mirrorSeriesCut(taskId: saved.id, endBefore: iso)
+            if let made = store.cachedTask(id: newId) {
+                store.dropDaysTaskLeft(made)
+                if CalendarSync.applies(made, on: Date()) {
+                    store.materializeOccurrence(taskId: newId, childId: childId, dueDate: CalendarSync.isoDay(Date()))
+                }
+            }
+        }
+        return newId
+    }
+
+    /// A repeating task deleted for one day, or from a day on (`scope`); the
+    /// whole task, or one that doesn't repeat: `delete` as ever.
+    static func delete(_ task: ChildTask, scope: TaskScope, day: Date) {
+        let store = LocalStore.shared
+        guard scope != .all, task.repeats != "none", let saved = store.cachedTask(id: task.id)
+        else { return delete(task) }
+        let day = Calendar.current.startOfDay(for: day)
+        if scope == .thisAndFollowing, day <= seriesStart(saved, opened: day) { return delete(task) }
+        let iso = CalendarSync.isoDay(day)
+        store.batch {
+            store.dropOccurrences(of: task.id, from: iso, through: scope == .thisOne ? iso : nil)
+            if scope == .thisOne { store.mirrorSeriesCut(taskId: task.id, skip: iso) }
+            else { store.mirrorSeriesCut(taskId: task.id, endBefore: iso) }
+        }
+        Outbox.send(APIClient.Write.cutTask(taskId: task.id, from: iso, through: scope == .thisOne ? iso : nil),
+                    childId: store.cachedTaskChild(id: task.id), label: "Deleting the task")
+    }
+
+    /// The first day a series falls on.
+    private static func seriesStart(_ task: ApiTask, opened day: Date) -> Date {
+        let start = CalendarSync.parseDay(task.dueDate) ?? CalendarSync.localDay(ofTimestamp: task.createdAt) ?? day
+        return Calendar.current.startOfDay(for: start)
+    }
+
+    /// The first day on or after `day` that `recurrence` falls on.
+    private static func firstDay(on recurrence: String, from day: Date) -> Date {
+        let codes = CalendarSync.repeatCodes(recurrence)
+        guard codes != "none" else { return day }
+        let cal = Calendar.current
+        let days = Set(codes.split(separator: ","))
+        for offset in 0..<7 {
+            guard let d = cal.date(byAdding: .day, value: offset, to: day) else { continue }
+            let code = weekDayCodes[cal.component(.weekday, from: d) - 1]
+            if days.contains(Substring(code)) { return d }
+        }
+        return day
     }
 
     /// `clearDueTime`: the deadline was removed, so the server's time is
     /// cleared rather than left as it was.
-    static func save(_ updated: ChildTask, clearDueTime: Bool = false) {
+    /// `startOn`: a repeating task's first day ("YYYY-MM-DD"), written when
+    /// it had none, so the day it was added for stays on it.
+    static func save(_ updated: ChildTask, clearDueTime: Bool = false, startOn: String? = nil) {
         // The time is sent only when the task has a deadline (dueLabel);
         // a task with no time keeps its day in dueDate, at midnight,
         // which isn't a deadline.
@@ -1310,14 +1600,30 @@ private struct RedoComposeSheet: View {
         // hand here is only one day it falls on (today, tomorrow, the day
         // open on the calendar). Sending it would move the start and drop
         // the earlier days, so a repeat only ever changes its time.
-        let dueDate = updated.repeats == "none" ? updated.dueDate.map { format($0, "yyyy-MM-dd") } : nil
+        let dueDate = updated.repeats == "none" ? updated.dueDate.map { format($0, "yyyy-MM-dd") } : startOn
         let clear = clearDueTime && dueTime == nil
         if let saved = LocalStore.shared.cachedTask(id: updated.id), let childId = LocalStore.shared.cachedTaskChild(id: updated.id) {
-            LocalStore.shared.mirrorTaskSaved(ApiTask(
+            let edited = ApiTask(
                 id: saved.id, title: updated.title, instructions: updated.description, recurrence: updated.repeats,
-                gatesApps: saved.gatesApps, submissionKind: saved.submissionKind, bucket: saved.bucket,
+                gatesApps: saved.gatesApps, submissionKind: updated.needsPhoto ? "photo" : "none", bucket: saved.bucket,
                 category: updated.category, dueDate: dueDate ?? saved.dueDate, dueTime: clear ? nil : (dueTime ?? saved.dueTime),
-                createdAt: saved.createdAt, bonusMinutes: saved.bonusMinutes, createdBy: saved.createdBy), childId: childId)
+                createdAt: saved.createdAt, bonusMinutes: saved.bonusMinutes, createdBy: saved.createdBy,
+                icon: updated.emoji ?? saved.icon,
+                // Its days taken out and last day stay through an edit.
+                skippedDates: saved.skippedDates, repeatUntil: saved.repeatUntil)
+            let store = LocalStore.shared
+            store.batch {
+                store.mirrorTaskSaved(edited, childId: childId)
+                // Its repeat days changed so it no longer falls today (or a
+                // later day already made): it leaves that day, now.
+                if edited.recurrence != saved.recurrence || edited.dueDate != saved.dueDate {
+                    store.dropDaysTaskLeft(edited)
+                    // Moved onto today: it shows on today's list at once.
+                    if CalendarSync.applies(edited, on: Date()) {
+                        store.materializeOccurrence(taskId: edited.id, childId: childId, dueDate: CalendarSync.isoDay(Date()))
+                    }
+                }
+            }
         }
         Outbox.send(APIClient.Write.updateTask(
             taskId: updated.id,
@@ -1325,10 +1631,11 @@ private struct RedoComposeSheet: View {
             instructions: updated.description,
             recurrence: updated.repeats,
             category: updated.category,
-            submissionKind: updated.photoCount > 0 ? "photo" : "none",
+            submissionKind: updated.needsPhoto ? "photo" : "none",
             dueTime: dueTime,
             dueDate: dueDate,
-            clearDueTime: clear
+            clearDueTime: clear,
+            icon: updated.emoji
         ), label: "Your task edit")
     }
 
@@ -1349,9 +1656,28 @@ private struct RedoComposeSheet: View {
                     occurrenceId: occurrenceId, taskId: task.id, childId: childId, label: "Approving the task")
     }
 
-    /// Sends the task back to the kid, with the note they'll see.
+    /// Takes an approval back: the task is as it was before it, waiting for
+    /// review with what the kid sent (kept on the phone and the server) if
+    /// they sent it in, plain "to do" if they didn't. Nothing the kid reads
+    /// as sent back. (routers/occurrences.py _undo_approval)
+    static func unapprove(_ task: ChildTask, childId: String) {
+        guard let occurrenceId = task.occurrenceId else { return }
+        LocalStore.shared.mirrorOccurrence(id: occurrenceId, status: task.sentIn ? "submitted" : "pending")
+        Outbox.send(APIClient.Write.unapproveTask(occurrenceId: occurrenceId),
+                    occurrenceId: occurrenceId, taskId: task.id, childId: childId, label: "Undoing the approval")
+    }
+
+    /// Sends the task back to the kid, with the note they'll see. For a
+    /// task the kid never sent in (the parent ticked it done), it's an undo
+    /// instead: back to plain "to do", nothing the kid reads as sent back.
+    /// The server decides the same from the same facts (routers/
+    /// occurrences.py _review).
     static func redo(_ task: ChildTask, note: String, childId: String) {
         guard let occurrenceId = task.occurrenceId else { return }
+        if !task.sentIn {
+            unapprove(task, childId: childId)
+            return
+        }
         // What was sent in is discarded (the server deletes it too), so the
         // old photos are gone from this phone at once.
         LocalStore.shared.mirrorOccurrence(id: occurrenceId, status: "rejected", rejectionNote: note, clearPhotos: true)
@@ -1375,19 +1701,30 @@ private struct RedoComposeSheet: View {
 // and More options holds just a deadline time on that day.
 struct EditTaskReviewSheet: View {
     var task: ChildTask
-    var onSave: (ChildTask) -> Void
-    var onDelete: () -> Void
+    /// The edited task, and for a repeating one which of its days
+    /// (`.all` for one that doesn't repeat).
+    var onSave: (ChildTask, TaskScope) -> Void
+    var onDelete: (TaskScope) -> Void
     var onCancel: () -> Void
 
     @State private var title: String
     @State private var description: String
     @State private var hasDeadline: Bool
+    @State private var needsPhoto: Bool
     @State private var deadline: Date
     @State private var repeatDays: Set<String>
     @State private var showDeleteConfirm = false
+    /// A repeating task's save or delete, waiting for which days it's for.
+    @State private var question: ScopeQuestion?
+    private enum ScopeQuestion: Identifiable {
+        /// The name, instructions or time changed: which days.
+        case save(ChildTask)
+        case delete
+        var id: String { if case .delete = self { return "delete" }; return "save" }
+    }
     @Environment(\.scrollFormToBottom) private var scrollFormToBottom
 
-    init(task: ChildTask, onSave: @escaping (ChildTask) -> Void, onDelete: @escaping () -> Void, onCancel: @escaping () -> Void) {
+    init(task: ChildTask, onSave: @escaping (ChildTask, TaskScope) -> Void, onDelete: @escaping (TaskScope) -> Void, onCancel: @escaping () -> Void) {
         self.task = task
         self.onSave = onSave
         self.onDelete = onDelete
@@ -1397,6 +1734,7 @@ struct EditTaskReviewSheet: View {
         // dueLabel is set exactly when the task has a time; dueDate alone
         // can be just its day (an anytime task tomorrow sits at midnight).
         _hasDeadline = State(initialValue: task.dueLabel != nil)
+        _needsPhoto = State(initialValue: task.needsPhoto)
         _deadline = State(initialValue: task.dueLabel != nil ? (task.dueDate ?? Self.parseDueDate(task.dueLabel)) : Date())
         _repeatDays = State(initialValue: task.repeats == "none"
             ? []
@@ -1405,14 +1743,43 @@ struct EditTaskReviewSheet: View {
 
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    /// Anything differs from the task as it was opened.
+    private var hasChanges: Bool { repeatChanged || detailsChanged }
+
+    /// Anything but the repeat differs: the name, instructions or time.
+    private var detailsChanged: Bool {
+        title != task.title || description != task.description
+            || needsPhoto != task.needsPhoto
+            || hasDeadline != (task.dueLabel != nil)
+            || (hasDeadline && ChildRule.fmtClock(deadline) != (task.dueLabel ?? ""))
+    }
+
     // The task's own day; never changed here.
     private var day: Date { Calendar.current.startOfDay(for: task.dueDate ?? Date()) }
 
+    /// A repeating task asks which of its days a change is for, as
+    /// Google Calendar does: this one, or this and the ones after.
+    private var asksWhichDays: Bool { ServerSupport.taskSeriesEdits && task.repeats != "none" }
+
+    /// Its repeat days changed: saved for this and following tasks, unasked.
+    private var repeatChanged: Bool {
+        let originalDays: Set<String> = task.repeats == "none" ? [] : Set(task.repeats.split(separator: ",").map(String.init))
+        return repeatDays != originalDays
+    }
+
     var body: some View {
-        FormShell(title: "Edit task", onCancel: onCancel, onSave: {
+        // Laid out like New task: the name on a blank canvas, Repeats, More
+        // options; delete and close over it, no title.
+        FormShell(title: "", onCancel: onCancel, onSave: {
             var updated = task
             updated.title = title.trimmingCharacters(in: .whitespaces)
+            // Renamed: a guessed emoji follows the new name; one the
+            // agent picked stays.
+            if updated.title != task.title, task.emoji == nil || task.emoji == EmojiSuggest.best(for: task.title) {
+                updated.emoji = EmojiSuggest.best(for: updated.title)
+            }
             updated.description = description
+            updated.needsPhoto = needsPhoto
             if hasDeadline {
                 let due = TaskDeadlineField.moment(deadline, on: day)
                 updated.dueDate = due
@@ -1423,11 +1790,18 @@ struct EditTaskReviewSheet: View {
             }
             let repeatCodes = weekDayCodes.filter { repeatDays.contains($0) }
             updated.repeats = repeatCodes.isEmpty ? "none" : repeatCodes.joined(separator: ",")
-            onSave(updated)
-        }, canSave: canSave, saveLabel: "Save changes", onDelete: { showDeleteConfirm = true }) {
-            FormField(label: "Task name") {
-                FormTextField(placeholder: "e.g. Make your bed", text: $title, scrollToTopOnFocus: true)
-            }
+            // Anything but the days changed (the name, instructions, time):
+            // this task, or this and following. Only the days: saved from
+            // the day opened, unasked, since one day can't take a repeat
+            // (2026-11-18, the user's call). Nothing changed: nothing.
+            if asksWhichDays && detailsChanged { question = .save(updated) }
+            else if asksWhichDays && repeatChanged { onSave(updated, .thisAndFollowing) }
+            else { onSave(updated, .all) }
+        }, canSave: canSave, saveLabel: "Save changes", onDelete: {
+            if asksWhichDays { question = .delete } else { showDeleteConfirm = true }
+        }, deleteTitle: "Delete task",
+           hasChanges: hasChanges) {
+            TaskNameCanvas(text: $title, focusOnAppear: false)
             RepeatPicker(selectedDays: $repeatDays)
             // Starts expanded when there's already something to show (a
             // deadline, or instructions), so editing doesn't hide the
@@ -1450,11 +1824,40 @@ struct EditTaskReviewSheet: View {
             }
         }
         .alert("Delete \"\(task.title)\"?", isPresented: $showDeleteConfirm) {
-            Button("Delete", role: .destructive, action: onDelete)
+            Button("Delete", role: .destructive) { onDelete(.all) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This can't be undone.")
         }
+        // A repeating task: which of its days, as Google Calendar asks: a
+        // dialog in the middle of the screen over a dimmed form (the
+        // system's own doesn't show from a form this size on iOS 26).
+        .overlay {
+            if let asked = question {
+                let deleting: Bool = { if case .delete = asked { return true }; return false }()
+                ZStack {
+                    Color.black.opacity(0.45)
+                        .ignoresSafeArea()
+                        .onTapGesture { withAnimation(.easeOut(duration: 0.18)) { question = nil } }
+                    RepeatScopeCard(
+                        deleting: deleting,
+                        onPick: { scope in
+                            withAnimation(.easeOut(duration: 0.18)) { question = nil }
+                            switch asked {
+                            case .save(let updated): onSave(updated, scope)
+                            case .delete:
+                                // The dialog fades before the form slides away.
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { onDelete(scope) }
+                            }
+                        },
+                        onCancel: { withAnimation(.easeOut(duration: 0.18)) { question = nil } })
+                    .padding(.horizontal, 28)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.spring(duration: 0.28, bounce: 0.12), value: question != nil)
     }
 
     // task.dueLabel is a freeform display string ("Today, 6:00 PM",
@@ -1469,5 +1872,92 @@ struct EditTaskReviewSheet: View {
         guard let time = f.date(from: timeToken.trimmingCharacters(in: .whitespaces)) else { return Date() }
         let comps = Calendar.current.dateComponents([.hour, .minute], from: time)
         return Calendar.current.date(bySettingHour: comps.hour ?? 0, minute: comps.minute ?? 0, second: 0, of: Date()) ?? Date()
+    }
+}
+
+/// Which days of a repeating task a save or delete is for, as Google
+/// Calendar asks it (2026-11-18, the user's calls: two choices, simple, a
+/// dialog in the middle of the screen): the title centred, "This task"
+/// (picked) or "This and following tasks" straight on the card, then
+/// Cancel and OK side by side, the same size: Cancel outlined in the
+/// mascot green, OK solid in the Create task green.
+struct RepeatScopeCard: View {
+    let deleting: Bool
+    let onPick: (TaskScope) -> Void
+    let onCancel: () -> Void
+    @State private var scope: TaskScope = .thisOne
+
+    init(deleting: Bool, onPick: @escaping (TaskScope) -> Void, onCancel: @escaping () -> Void) {
+        self.deleting = deleting
+        self.onPick = onPick
+        self.onCancel = onCancel
+    }
+
+    /// Cancel's words: the mascot green, a step deeper by day so they read
+    /// on the off-white.
+    private static let cancelInk = Color(light: "1F9A45", dark: "3FCE64")
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(deleting ? "Delete repeating task" : "Edit repeating task")
+                .font(Typography.font(22, weight: .bold))
+                .foregroundStyle(EColor.onSurface)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 14)
+            choice("This task", .thisOne)
+            choice("This and following tasks", .thisAndFollowing)
+            HStack(spacing: 12) {
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .font(Typography.font(17, weight: .semibold))
+                        .foregroundStyle(Self.cancelInk)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .overlay(Capsule().strokeBorder(Brand.green, lineWidth: 1.5))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(CardPressStyle(haptic: true))
+                Button { onPick(scope) } label: {
+                    Text("OK")
+                        .font(Typography.font(17, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(FormGreen.accent, in: Capsule())
+                }
+                .buttonStyle(CardPressStyle(haptic: true))
+            }
+            .padding(.top, 20)
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 26)
+        .padding(.bottom, 22)
+        .frame(maxWidth: 380)
+        .background(EColor.raised, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .shadow(color: .black.opacity(0.25), radius: 24, y: 10)
+        .sensoryFeedback(.selection, trigger: scope)
+    }
+
+    private func choice(_ label: String, _ value: TaskScope) -> some View {
+        let on = scope == value
+        return Button { scope = value } label: {
+            HStack(spacing: 18) {
+                ZStack {
+                    Circle().strokeBorder(on ? FormGreen.accent : EColor.onSurfaceVariant, lineWidth: 2)
+                    if on { Circle().fill(FormGreen.accent).padding(5) }
+                }
+                .frame(width: 26, height: 26)
+                Text(label)
+                    .font(Typography.font(17, weight: on ? .semibold : .regular))
+                    .foregroundStyle(EColor.onSurface)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }

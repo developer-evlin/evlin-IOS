@@ -22,6 +22,9 @@ struct TaskDraft: Equatable {
     var recurrence: String = "none"
     var gatesApps: Bool = true
     var bonusMinutes: Int = 0
+    /// The emoji the agent picked for it (draft_task's `emoji`); nil if
+    /// it didn't send a usable one, and the card then guesses.
+    var emoji: String?
 
     var isEmpty: Bool { title.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -43,6 +46,12 @@ struct TaskDraft: Equatable {
         gatesApps = gates.isEmpty ? true : !(gates == "false" || gates == "0")
 
         bonusMinutes = max(0, Int(args["bonus_minutes"] ?? "") ?? 0)
+
+        // One emoji: the first character, kept only if it is one.
+        if let first = args["emoji"]?.trimmingCharacters(in: .whitespaces).first,
+           first.unicodeScalars.contains(where: { $0.properties.isEmoji && $0.value > 0x238C }) {
+            emoji = String(first)
+        }
     }
 
     /// "YYYY-MM-DD" in the device's own calendar — the same local-day

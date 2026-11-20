@@ -13,5 +13,10 @@ final class BillingState: ObservableObject {
     @Published var isPlus = false
     @Published var billingCycle: BillingCycle = .yearly
 
-    private init() {}
+    private init() {
+        #if EVLIN_DEMO
+        // Demo: `-EvlinPro YES` opens on Pro (no Pro badges, no offers).
+        isPlus = UserDefaults.standard.bool(forKey: "EvlinPro")
+        #endif
+    }
 }

@@ -4,9 +4,11 @@ import Security
 /// Minimal Keychain wrapper for the few secrets the app keeps between
 /// launches (login tokens, the kid device token).
 enum KeychainStore {
-    private static let service = "com.evlin.app.session"
+    private static let service = "com.evlin.ios.session"
 
     static func set(_ value: String?, for key: String) {
+        // The Demo build signs in with a stand-in token; it's never kept.
+        if DemoMode.isBuild { return }
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

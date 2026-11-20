@@ -64,7 +64,7 @@ struct SettingsLockListManagerView: View {
             .padding(.top, 6)
             .padding(.bottom, 36)
         }
-        .background(EColor.surface.ignoresSafeArea())
+        .background(Rectangle().fill(EColor.surface).ignoresSafeArea())
         .navigationTitle("App Controls")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -94,7 +94,7 @@ struct SettingsLockListManagerView: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 14) {
             ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous).fill(EColor.primary)
+                RoundedRectangle(cornerRadius: 14, style: .continuous).fill(EColor.inkFill)
                 Image(systemName: "lock.shield.fill").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white)
             }
             .frame(width: 46, height: 46)
@@ -133,7 +133,7 @@ struct SettingsLockListManagerView: View {
             .padding(.vertical, 14)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(tint))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SettingsTapStyle())
     }
 
     // MARK: - Sections
@@ -185,7 +185,7 @@ struct SettingsLockListManagerView: View {
             Button(action: onDelete) {
                 Image(systemName: "trash").font(.system(size: 16, weight: .semibold))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SettingsTapStyle())
             .foregroundStyle(EColor.danger)
         }
         .padding(.horizontal, 16)

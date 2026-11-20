@@ -8,10 +8,21 @@ struct ScreenTabletHome: View {
     // same shared `tasks` array, so this can't be this screen's own local
     // @State any more.
     var onSelectTask: (KidTask) -> Void
+    // The play-time bar, above this tab's own navigation (owned by
+    // TabletRootView, which has the numbers). Drawn here rather than above
+    // the whole tab view: there, shown on this tab only, it changed the tab
+    // view's height on every switch, and the other tabs kept a shorter
+    // frame, so the bottom of their screens (the calendar's +) didn't
+    // answer taps until a sheet made the layout run again.
+    var topBar: AnyView = AnyView(EmptyView())
     // Settings/Parent Controls used to be its own bottom tab — its only
     // content was this one request, so it's a toolbar icon here instead,
     // out of the kid's main navigation entirely (see TabletRootView).
     @State private var showSettings = false
+    /// The right code typed: the settings, until the sheet closes. The next
+    /// tap on the gear asks again.
+    @State private var settingsOpen = false
+    @MainActor private static var demoSettingsShown = false
     @Environment(SessionManager.self) private var session
     // The name the parent sees for this child (synced from the backend).
     private var childName: String {
@@ -45,7 +56,6 @@ struct ScreenTabletHome: View {
     private var nameFont: CGFloat { kid.of(30, 36) }
     private var sectionTitleFont: CGFloat { kid.of(20, 24) }
     private var sectionCountFont: CGFloat { kid.of(13.5, 15) }
-    private var nextTaskId: String? { tasks.first { !$0.done }?.id }
     // Done means approved (or a skip said yes to), the same count the
     // parent's phone shows. A task sent in and waiting isn't done yet.
     private var doneCount: Int { tasks.filter(\.approved).count }
@@ -56,12 +66,126 @@ struct ScreenTabletHome: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Good \(greeting)").font(Typography.font(greetingFont, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
-                    Text("Hey \(childName)! 👋").font(Typography.display(nameFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
+        Group {
+            if kid.isRegular { regularBody } else { compactBody }
+        }
+        .task {
+            guard DemoMode.kidParentGate || DemoMode.kidParentSettings else { return }
+            try? await Task.sleep(for: .seconds(1))
+            showSettings = true
+        }
+        // The gear: straight to "Parents only" and the screen time access
+        // code from the parent's phone (2026-11-19, the user's call; a
+        // Parent Controls list with one row in front of it before).
+        // The right code opens this device's settings (2026-11-19, the
+        // user's call), every time: closed, the gear asks again.
+        .sheet(isPresented: $showSettings, onDismiss: { settingsOpen = false }) {
+            Group {
+                if settingsOpen {
+                    KidParentSettings(onDone: { showSettings = false })
+                        .transition(.opacity)
+                } else {
+                    ParentAccessGate(onUnlocked: { withAnimation(.easeInOut(duration: 0.25)) { settingsOpen = true } },
+                                     onCancel: { showSettings = false })
+                        .transition(.opacity)
+                        // Demo: `-EvlinKidParentSettings`, as if the code was typed, once.
+                        .task {
+                            guard DemoMode.kidParentSettings, !Self.demoSettingsShown else { return }
+                            Self.demoSettingsShown = true
+                            try? await Task.sleep(for: .seconds(0.8))
+                            withAnimation(.easeInOut(duration: 0.25)) { settingsOpen = true }
+                        }
+                }
+            }
+            .presentationDragIndicator(.visible)
+        }
+    }
 
+    // iPad, either way up: one scrolling page using the whole width, the
+    // gear beside the greeting, and the tasks as a grid that gets another
+    // column when there's room (two upright, three sideways).
+    private var regularBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Good \(greeting)").font(Typography.font(greetingFont, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
+                        Text("Hey \(childName)! 👋").font(Typography.display(nameFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                    }
+                    Spacer()
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(KidTheme.inkSoft)
+                            .frame(width: 48, height: 48)
+                            .background(Circle().fill(KidTheme.cream))
+                            .overlay(Circle().strokeBorder(KidTheme.line))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Settings")
+                }
+
+                topBar.kidTourSpot(.playTime).padding(.top, 20)
+
+                HStack {
+                    Text("Today").font(Typography.display(sectionTitleFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                    Spacer()
+                    Text("\(doneCount) of \(tasks.count) done")
+                        .font(Typography.font(sectionCountFont, weight: .heavy))
+                        .foregroundStyle(doneCount == tasks.count ? KidTheme.greenDeep : KidTheme.inkSoft)
+                }
+                .modifier(KidTourFirst(on: tasks.isEmpty, spot: .task))
+                .padding(.top, 28).padding(.bottom, 14)
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: taskCardSpacing, alignment: .top)],
+                          spacing: taskCardSpacing) {
+                    ForEach(tasks) { task in
+                        Button { onSelectTask(task) } label: {
+                            taskCard(task)
+                        }
+                        .buttonStyle(.plain)
+                        .modifier(KidTourFirst(on: task.id == tasks.first?.id, spot: .task))
+                    }
+                }
+            }
+            .padding(.horizontal, 32)
+            .padding(.top, 12)
+            .padding(.bottom, 40)
+        }
+        .background(EPaperBackground())
+    }
+
+    // A phone: the iPad's page in one column (2026-11-12): the greeting with
+    // the gear beside it, the play-time card, then Today's tasks, all on the
+    // page. Before, the card sat above the page (on black by night) over a
+    // navigation bar holding only the gear, which left an empty band.
+    private var compactBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Good \(greeting)").font(Typography.font(greetingFont, weight: .semibold)).foregroundStyle(KidTheme.inkSoft)
+                        Text("Hey \(childName)! 👋").font(Typography.display(nameFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
+                    }
+                    Spacer()
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(KidTheme.inkSoft)
+                            .frame(width: 44, height: 44)
+                            .background(Circle().fill(KidTheme.cream))
+                            .overlay(Circle().strokeBorder(KidTheme.line))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Settings")
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 12)
+
+                // Its own side padding (22) and a gap over it.
+                topBar.kidTourSpot(.playTime)
+
+                VStack(alignment: .leading, spacing: 0) {
                     HStack {
                         Text("Today").font(Typography.display(sectionTitleFont, weight: .heavy)).foregroundStyle(KidTheme.ink)
                         Spacer()
@@ -69,79 +193,24 @@ struct ScreenTabletHome: View {
                             .font(Typography.font(sectionCountFont, weight: .heavy))
                             .foregroundStyle(doneCount == tasks.count ? KidTheme.greenDeep : KidTheme.inkSoft)
                     }
+                    .modifier(KidTourFirst(on: tasks.isEmpty, spot: .task))
                     .padding(.top, 22).padding(.bottom, 13)
 
                     VStack(spacing: taskCardSpacing) {
                         ForEach($tasks) { $task in
                             Button { onSelectTask(task) } label: {
-                                taskCard(task, isNext: task.id == nextTaskId)
+                                taskCard(task)
                             }
                             .buttonStyle(.plain)
+                            .modifier(KidTourFirst(on: task.id == tasks.first?.id, spot: .task))
                         }
                     }
-
-                    blockedNowSection
-
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 4)
-                .padding(.bottom, 100)
-                .kidContentColumn(kid.contentMaxWidth)
             }
-            .background(KidTheme.background)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: {
-                        Image(systemName: "gearshape.fill")
-                            .foregroundStyle(KidTheme.inkSoft)
-                    }
-                    .accessibilityLabel("Settings")
-                }
-            }
+            .padding(.bottom, 100)
         }
-        .sheet(isPresented: $showSettings) {
-            Group {
-            ScreenTabletSettings(onSwitchMode: onSwitchMode)
-        }
-            .presentationDragIndicator(.visible)
-        }
-    }
-
-    /// What's blocked right now and why, in the same words the parent saw.
-    /// Re-read every minute as well as on every sync: a scheduled block
-    /// starts at 7pm whether or not anything synced at 7pm.
-    private var blockedNowSection: some View {
-        TimelineView(.everyMinute) { context in
-            let _ = SyncState.shared.version
-            let blocked = session.activeChildId.map { LocalStore.shared.blockedNow(childId: $0, at: context.date) } ?? []
-            if !blocked.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Blocked right now")
-                        .font(Typography.display(sectionTitleFont, weight: .heavy))
-                        .foregroundStyle(KidTheme.ink)
-                        .padding(.top, 26)
-                    ForEach(blocked) { app in
-                        HStack(spacing: 12) {
-                            AppIconView(appName: app.name, size: kid.of(40, 48))
-                                .opacity(0.55)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(app.name)
-                                    .font(Typography.font(taskTitleFont, weight: .heavy))
-                                    .foregroundStyle(KidTheme.ink)
-                                Text(app.detail)
-                                    .font(Typography.font(taskMetaFont, weight: .semibold))
-                                    .foregroundStyle(KidTheme.inkSoft)
-                            }
-                            Spacer(minLength: 0)
-                            Image(systemName: "lock.fill")
-                                .foregroundStyle(KidTheme.inkSoft)
-                        }
-                        .padding(taskCardPadding)
-                        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(KidTheme.muted))
-                    }
-                }
-            }
-        }
+        .background(EPaperBackground())
     }
 
     private var greeting: String {
@@ -157,27 +226,29 @@ struct ScreenTabletHome: View {
     // text stays legible on a light background.
     private let redoOrangeTint = Color(hex: "FFEDD5")
     private let redoOrangeText = Color(hex: "EA580C")
-    // The parent's "waiting for you" amber (HomeStyle.amber).
-    private let waitingAmber = Color(hex: "E8962C")
+    // The parent's "waiting for you" colour.
+    private let waitingColor = HomeStyle.waiting
 
-    private func taskCard(_ task: KidTask, isNext: Bool) -> some View {
+    // No NEXT card (2026-11-17, the user's call: removed; the first task not
+    // done was a green card with a NEXT tag). The approved tick is the
+    // kid's button green at full strength (the same day: the mascot green
+    // faded with the card read washed out).
+    private func taskCard(_ task: KidTask) -> some View {
         let awaitingBypass = task.bypassRequested && !task.done
         // The kid's ask to skip, answered: yes reads as "skipped", not as a
         // finished task; no reads as "still on", with the parent's words.
         let skipped = task.bypassRequested && task.approved
         let skipKept = !task.done && task.skipDeclinedNote != nil
         let needsRedo = task.redoRequested
-        // Sent in, not checked yet: the parent's phone lists it under
-        // "Waiting for you", so the kid's shows it waiting too, in the same
-        // amber, rather than looking finished. Only an approval (or a skip
-        // said yes to) gets the green tick.
+        // Sent in, not checked yet: keep its ring orange rather than making
+        // it look finished. Only an approval (or a skip said yes to) gets
+        // the green tick.
         let waitingReview = task.pendingApproval && !task.bypassRequested && !needsRedo
         let doneLook = task.approved && !needsRedo
 
         let chipColor = needsRedo ? redoOrangeTint : (awaitingBypass ? KidTheme.lavender : KidTheme.cream)
-        let chipIconColor = needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : KidTheme.greenDeep)
-        let chipIcon = awaitingBypass ? "hand.raised.fill" : TabletData.guessedIcon(forTitle: task.title)
-        let ringColor = doneLook ? KidTheme.green : (waitingReview ? waitingAmber : (needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : (isNext ? KidTheme.green : Color(hex: "D5DED8")))))
+        let chipEmoji = awaitingBypass ? "✋" : task.emoji
+        let ringColor = doneLook ? KidTheme.paperButton : (waitingReview ? waitingColor : (needsRedo ? redoOrangeText : (awaitingBypass ? KidTheme.lavenderText : Color(hex: "D5DED8"))))
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 16) {
@@ -185,29 +256,20 @@ struct ScreenTabletHome: View {
                     .fill(chipColor)
                     .frame(width: taskIconSize, height: taskIconSize)
                     .overlay(
-                        Image(systemName: chipIcon)
-                            .font(.system(size: taskIconFont))
-                            .foregroundStyle(chipIconColor)
-                            .opacity(doneLook ? 0.5 : 1)
+                        Text(chipEmoji)
+                            .font(.system(size: taskIconFont * 1.3))
+                            .opacity(doneLook ? 0.45 : 1)
                     )
 
                 VStack(alignment: .leading, spacing: 5) {
-                    if isNext && !task.done && !awaitingBypass && !needsRedo {
-                        Text("NEXT").font(Typography.font(10.5, weight: .bold)).tracking(0.6)
-                            .foregroundStyle(KidTheme.greenDeep)
-                            .padding(.horizontal, 8).padding(.vertical, 2)
-                            .background(.white).clipShape(Capsule())
-                    }
                     Text(task.title)
                         .font(Typography.font(taskTitleFont, weight: .semibold))
                         .foregroundStyle(doneLook ? KidTheme.inkSoft : KidTheme.ink)
                         .strikethrough(doneLook, color: Color(hex: "B5C8BC"))
+                        .opacity(doneLook ? 0.65 : 1)
                     if needsRedo {
                         Label("Parent asked for a redo", systemImage: "arrow.counterclockwise")
                             .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(redoOrangeText)
-                    } else if waitingReview {
-                        Label("Waiting for a grown-up", systemImage: "hourglass")
-                            .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(waitingAmber)
                     } else if awaitingBypass {
                         Label("Waiting on a parent", systemImage: "hand.raised.fill")
                             .font(Typography.font(taskMetaFont, weight: .medium)).foregroundStyle(KidTheme.lavenderText)
@@ -224,7 +286,7 @@ struct ScreenTabletHome: View {
                 }
                 Spacer()
                 Circle()
-                    .fill(doneLook ? KidTheme.green : .white)
+                    .fill(doneLook ? KidTheme.paperButton : KidTheme.cream)
                     .frame(width: taskCheckSize, height: taskCheckSize)
                     .overlay(Circle().strokeBorder(ringColor, lineWidth: 2))
                     .overlay {
@@ -259,9 +321,8 @@ struct ScreenTabletHome: View {
             }
         }
         .padding(taskCardPadding)
-        .background(needsRedo ? redoOrangeTint.opacity(0.55) : (awaitingBypass ? KidTheme.lavender.opacity(0.5) : (isNext && !task.done ? KidTheme.greenTint : KidTheme.cream)))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(needsRedo ? redoOrangeText.opacity(0.4) : (awaitingBypass ? KidTheme.lavenderText : (isNext && !task.done ? KidTheme.green : KidTheme.line))))
+        .background(needsRedo ? redoOrangeTint.opacity(0.55) : (awaitingBypass ? KidTheme.lavender.opacity(0.5) : KidTheme.cream))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(needsRedo ? redoOrangeText.opacity(0.4) : (awaitingBypass ? KidTheme.lavenderText : KidTheme.line)))
         .clipShape(RoundedRectangle(cornerRadius: 18))
-        .opacity(doneLook ? 0.65 : 1)
     }
 }
