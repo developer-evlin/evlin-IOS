@@ -10,6 +10,7 @@ from access import assert_child_access, get_occurrence_for_parent
 from routers.time_grants import award_time_grant
 from routers.submissions import confirm_in_storage
 import storage
+import instant_unlock
 
 router = APIRouter(tags=["occurrences"])
 
@@ -285,6 +286,7 @@ def _review(occurrence_id: UUID, approved: bool, parent: models.Parent, db: Sess
         occurrence.approved_by = parent.id
         _award_task_bonus(occurrence, task, parent, db)
         _resolve_app_blocks(task, db)
+        instant_unlock.note_approval(db, occurrence.child_id)
     elif not occurrence.bypass_requested and not _sent_in(occurrence, db):
         # Nothing was ever sent in: the parent ticked it done themselves and
         # is taking that back. That's an undo, not a redo: the task goes

@@ -26,6 +26,7 @@ from routers.apps import child_apps
 from routers.app_blocks import blocks_in_force
 from routers.occurrences import _generate_occurrences_for_date
 from routers.time_grants import _base_limit_for
+import instant_unlock
 
 
 def compute_policy(db: Session, child: models.Child, now: datetime | None = None) -> dict:
@@ -45,7 +46,7 @@ def compute_policy(db: Session, child: models.Child, now: datetime | None = None
     # The occurrence's own gates_apps snapshot, not the task's current flag:
     # editing a task later doesn't rewrite what today already required.
     # With Instant unlock, sent in is enough; a redo locks it again.
-    finished = ("approved", "submitted") if state and state.instant_unlock else ("approved",)
+    finished = ("approved", "submitted") if instant_unlock.is_on(state) else ("approved",)
     outstanding = [o for o in occurrences if o.gates_apps and o.status not in finished]
 
     reasons = []

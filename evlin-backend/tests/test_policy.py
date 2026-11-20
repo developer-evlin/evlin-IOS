@@ -74,8 +74,17 @@ def test_the_task_gate_override_lifts_only_the_task_gate(client, db_session, fam
     assert _policy(client, c)["lock_reasons"] == ["manual_lock"]
 
 
+def _earn(db_session, c):
+    """Instant unlock earned (3 approved days; instant_unlock.py), so it can go on."""
+    from datetime import datetime, timezone
+    state = db_session.query(models.ChildState).filter_by(child_id=c.id).one()
+    state.instant_unlock_earned_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+
 def test_instant_unlock_opens_on_work_sent_in(client, db_session, fam):
     _, c = fam
+    _earn(db_session, c)
     task = _task(client, c)
     occurrence = db_session.get(models.Occurrence, uuid.UUID(_occ(client, c, task["id"])["id"]))
 
@@ -103,6 +112,7 @@ def test_without_instant_unlock_work_sent_in_stays_locked(client, db_session, fa
 
 def test_an_older_app_leaves_instant_unlock_as_it_is(client, db_session, fam):
     _, c = fam
+    _earn(db_session, c)
     h = auth("pa")
     client.put(f"/children/{c.id}/state", headers=h,
                json={"manual_lock": False, "task_gate_override": False, "instant_unlock": True})

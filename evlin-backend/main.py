@@ -5,7 +5,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, children, compliance, time_grants, chat, app_blocks, live, apps, policy, access_codes
+from routers import auth, tasks, occurrences, submissions, rules, children, compliance, time_grants, chat, app_blocks, live, apps, policy, access_codes, habits
 from routers.auth import limiter
 from storage import storage_configured
 import app_catalog
@@ -411,6 +411,42 @@ _MIGRATIONS = [
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS field_edits jsonb",
     "ALTER TABLE app.occurrences ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()",
     "ALTER TABLE app.child_state ADD COLUMN IF NOT EXISTS field_edits jsonb",
+    # Instant unlock earned by 3 approved days (instant_unlock.py).
+    "ALTER TABLE app.child_state ADD COLUMN IF NOT EXISTS instant_unlock_earned_at timestamptz",
+    "ALTER TABLE app.child_state ADD COLUMN IF NOT EXISTS instant_unlock_reset_on date",
+    "ALTER TABLE app.child_state ADD COLUMN IF NOT EXISTS instant_unlock_changed_by uuid REFERENCES app.parents(id) ON DELETE SET NULL",
+    # Habits (models.Habit, models.HabitCheckIn; routers/habits.py), 2026-11-19.
+    """CREATE TABLE IF NOT EXISTS app.habits (
+        id uuid PRIMARY KEY,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        title text NOT NULL,
+        picture text,
+        target integer NOT NULL CHECK (target > 0),
+        unit text NOT NULL DEFAULT 'days' CHECK (unit IN ('days', 'times', 'streak')),
+        prize text NOT NULL DEFAULT '',
+        color_index integer NOT NULL DEFAULT 0,
+        done integer NOT NULL DEFAULT 0,
+        last_counted_day date,
+        finished_at timestamptz,
+        created_by text NOT NULL DEFAULT 'parent',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        field_edits jsonb
+    )""",
+    "CREATE INDEX IF NOT EXISTS habits_child_idx ON app.habits (child_id)",
+    """CREATE TABLE IF NOT EXISTS app.habit_checkins (
+        id uuid PRIMARY KEY,
+        habit_id uuid NOT NULL REFERENCES app.habits(id) ON DELETE CASCADE,
+        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
+        day date NOT NULL,
+        at timestamptz NOT NULL DEFAULT now(),
+        status text NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'approved')),
+        reviewed_at timestamptz,
+        reviewed_by uuid REFERENCES app.parents(id) ON DELETE SET NULL,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT habit_checkins_habit_day_uniq UNIQUE (habit_id, day)
+    )""",
+    "CREATE INDEX IF NOT EXISTS habit_checkins_child_day_idx ON app.habit_checkins (child_id, day)",
 ]
 
 
@@ -445,6 +481,7 @@ app.include_router(auth.router)
 app.include_router(children.router)
 app.include_router(tasks.router)
 app.include_router(access_codes.router)
+app.include_router(habits.router)
 app.include_router(occurrences.router)
 app.include_router(submissions.router)
 app.include_router(rules.router)
@@ -484,6 +521,8 @@ _EXPECTED_COLUMNS = [
     ("app.access_codes", "code"),
     ("app.idempotency_keys", "key"), ("app.tasks", "updated_at"), ("app.tasks", "field_edits"),
     ("app.occurrences", "updated_at"), ("app.child_state", "field_edits"),
+    ("app.child_state", "instant_unlock_earned_at"), ("app.child_state", "instant_unlock_reset_on"),
+    ("app.habits", "done"), ("app.habit_checkins", "status"),
 ]
 
 

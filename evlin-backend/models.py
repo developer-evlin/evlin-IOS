@@ -267,6 +267,12 @@ class ChildState(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     # Per-field last write wins for the lock flags (edits.py).
     field_edits = Column(JSON)
+    # Instant unlock (instant_unlock.py): earned by 3 approved days, counted
+    # from `instant_unlock_reset_on` (turning it off restarts the count);
+    # the server refuses "on" until `instant_unlock_earned_at` is set.
+    instant_unlock_earned_at = Column(DateTime(timezone=True))
+    instant_unlock_reset_on = Column(Date)
+    instant_unlock_changed_by = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
 
 class TimeGrant(Base):
     """One append-only entry in a child's screen-time pool — never a
@@ -491,3 +497,52 @@ class IdempotencyKey(Base):
     status = Column(Integer, nullable=False)
     body = Column(String)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class Habit(Base):
+    """A habit the parent set for a child (routers/habits.py; "goal" in the
+    app's code). Counted only by the parent approving the child's check-ins:
+    `done` is kept by the server, and `finished_at` makes it a completed
+    milestone."""
+    __tablename__ = "habits"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String, nullable=False)
+    # The drawing (HabitArt key, or "leaf"); NULL: the title's own drawing.
+    picture = Column(String)
+    target = Column(Integer, nullable=False)
+    # "days" (one a day), "times", or "streak" (days in a row; a missed day
+    # starts it again).
+    unit = Column(String, nullable=False, default="days")
+    prize = Column(String, nullable=False, default="")
+    color_index = Column(Integer, nullable=False, default=0)
+    done = Column(Integer, nullable=False, default=0)
+    # The child's local day of the last approved check-in (the streak rule).
+    last_counted_day = Column(Date)
+    finished_at = Column(DateTime(timezone=True))
+    created_by = Column(String, nullable=False, default="parent")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    field_edits = Column(JSON)
+
+
+class HabitCheckIn(Base):
+    """The child's "I did it" on a habit, one a day, waiting until the
+    parent approves it."""
+    __tablename__ = "habit_checkins"
+    __table_args__ = (UniqueConstraint("habit_id", "day", name="habit_checkins_habit_day_uniq"),
+                      {"schema": "app"})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    habit_id = Column(UUID(as_uuid=True), ForeignKey("app.habits.id", ondelete="CASCADE"), nullable=False)
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
+    # The child's local day it's for.
+    day = Column(Date, nullable=False)
+    at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # "waiting" | "approved"
+    status = Column(String, nullable=False, default="waiting")
+    reviewed_at = Column(DateTime(timezone=True))
+    reviewed_by = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

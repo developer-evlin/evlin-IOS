@@ -4,6 +4,7 @@ from uuid import UUID
 from datetime import datetime, timezone, time
 import models, schemas
 import edits
+import instant_unlock
 from database import get_db
 from routers.auth import get_current_parent
 from access import assert_parent_owns_child, assert_child_access
@@ -64,7 +65,11 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
     return rules
 
 def _state_response(db: Session, state: models.ChildState) -> schemas.ChildStateResponse:
-    return schemas.ChildStateResponse.model_validate(state)
+    # With Instant unlock's earning: "2 of 3 days" on every phone, from here.
+    out = schemas.ChildStateResponse.model_validate(state)
+    for k, v in instant_unlock.progress(db, state, state.child_id).items():
+        setattr(out, k, v)
+    return out
 
 
 @router.get("/children/{child_id}/state", response_model=schemas.ChildStateResponse)
@@ -90,7 +95,19 @@ def update_child_state(child_id: UUID, state_update: schemas.ChildStateUpdate, r
         db.add(state)
     values = {f: getattr(state_update, f) for f in ("manual_lock", "task_gate_override", "instant_unlock")
               if f in state_update.model_fields_set and getattr(state_update, f) is not None}
-    edits.apply(state, values, edits.edited_at(request))
+    was_on = bool(state.instant_unlock)
+    # Instant unlock can't go on before it's earned (instant_unlock.py).
+    if values.get("instant_unlock") is True and not was_on and not instant_unlock.earned(state):
+        raise HTTPException(status_code=409, detail="Instant unlock isn't earned yet")
+    applied = edits.apply(state, values, edits.edited_at(request))
+    if "instant_unlock" in applied and bool(state.instant_unlock) != was_on:
+        state.instant_unlock_changed_by = current_parent.id
+        if not state.instant_unlock:
+            # Off: earned again from today, 3 more approved days.
+            from blocks import local_now
+            child = db.query(models.Child).filter(models.Child.id == child_id).first()
+            state.instant_unlock_earned_at = None
+            state.instant_unlock_reset_on = local_now(child).date()
     state.updated_at = datetime.now(timezone.utc)
 
     db.commit()

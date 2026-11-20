@@ -445,6 +445,10 @@ class ChildStateUpdate(BaseModel):
 
 class ChildStateResponse(ChildStateBase):
     instant_unlock: bool = False
+    # Earned by 3 approved days (instant_unlock.py); every phone shows this.
+    instant_unlock_earned: bool = False
+    instant_unlock_days: int = 0
+    instant_unlock_needed: int = 3
     child_id: UUID
     updated_at: datetime
 
@@ -752,3 +756,115 @@ class AccessCodeCheck(BaseModel):
 
 class AccessCodeCheckResponse(BaseModel):
     ok: bool
+
+
+# ---- Habits (routers/habits.py) -------------------------------------------
+
+_HABIT_UNITS = {"days", "times", "streak"}
+
+
+class HabitCreate(BaseModel):
+    # Made on the phone, so a create retried from its outbox is recognised.
+    id: Optional[UUID] = None
+    title: str
+    picture: Optional[str] = None
+    target: int
+    unit: str = "days"
+    prize: str = ""
+    color_index: int = 0
+    created_by: str = "parent"
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v):
+        if not v or not v.strip():
+            raise ValueError("title must not be blank")
+        return v.strip()
+
+    @field_validator("target")
+    @classmethod
+    def _target(cls, v):
+        if v < 1 or v > 1000:
+            raise ValueError("target must be between 1 and 1000")
+        return v
+
+    @field_validator("unit")
+    @classmethod
+    def _unit(cls, v):
+        if v not in _HABIT_UNITS:
+            raise ValueError("unit must be days, times or streak")
+        return v
+
+
+class HabitUpdate(BaseModel):
+    """Only the fields sent change, newest edit wins (edits.py)."""
+    title: Optional[str] = None
+    picture: Optional[str] = None
+    target: Optional[int] = None
+    prize: Optional[str] = None
+    color_index: Optional[int] = None
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v):
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("title must not be blank")
+        return v.strip()
+
+    @field_validator("target")
+    @classmethod
+    def _target(cls, v):
+        if v is not None and (v < 1 or v > 1000):
+            raise ValueError("target must be between 1 and 1000")
+        return v
+
+
+class HabitCheckInCreate(BaseModel):
+    # Made on the device. `day`: the child's day it was done, when it was
+    # sent later (offline); the server's own today for the child otherwise.
+    id: Optional[UUID] = None
+    day: Optional[date] = None
+
+
+class HabitCheckInResponse(BaseModel):
+    id: UUID
+    habit_id: UUID
+    child_id: UUID
+    day: date
+    at: datetime
+    status: str
+    reviewed_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class HabitResponse(BaseModel):
+    id: UUID
+    child_id: UUID
+    title: str
+    picture: Optional[str] = None
+    target: int
+    unit: str
+    prize: str
+    color_index: int
+    # Approved so far as it stands today: a streak with a missed day reads 0
+    # (worked out, never written on a read).
+    done: int
+    last_counted_day: Optional[date] = None
+    finished_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    # The last week's check-ins, newest first: today's waiting one included.
+    check_ins: list[HabitCheckInResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+class HabitApproveResponse(BaseModel):
+    check_in: HabitCheckInResponse
+    habit: HabitResponse
