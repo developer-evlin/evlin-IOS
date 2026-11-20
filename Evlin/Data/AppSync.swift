@@ -130,10 +130,26 @@ extension Child {
 
 extension Child {
     /// Saves the lock and the task-gate override after a local change.
+    /// Only the flags that changed since the phone's last saved state go to
+    /// the server (per field: a lock tapped here never undoes an unlock the
+    /// other parent made; evlin-backend edits.py). Nothing saved yet: all.
     func saveState(label: String) {
+        let before = LocalStore.shared.cachedChildState(childId: id)
+        let change = Self.stateChange(from: before.map { ($0.manualLock, $0.taskGateOverride, $0.instantUnlock) },
+                                      to: (manualLock, taskGateOverride, instantUnlock))
         LocalStore.shared.mirrorChildState(childId: id, manualLock: manualLock, taskGateOverride: taskGateOverride, instantUnlock: instantUnlock)
-        Outbox.send(APIClient.Write.updateChildState(childId: id, manualLock: manualLock, taskGateOverride: taskGateOverride, instantUnlock: instantUnlock),
+        guard change.manualLock != nil || change.taskGateOverride != nil || change.instantUnlock != nil else { return }
+        Outbox.send(APIClient.Write.updateChildState(childId: id, manualLock: change.manualLock,
+                                                     taskGateOverride: change.taskGateOverride,
+                                                     instantUnlock: change.instantUnlock),
                     childId: id, label: label)
+    }
+
+    /// The flags that differ (nil: unchanged); every flag when nothing was saved.
+    nonisolated static func stateChange(from before: (Bool, Bool, Bool)?, to now: (Bool, Bool, Bool))
+        -> (manualLock: Bool?, taskGateOverride: Bool?, instantUnlock: Bool?) {
+        guard let before else { return (now.0, now.1, now.2) }
+        return (before.0 != now.0 ? now.0 : nil, before.1 != now.1 ? now.1 : nil, before.2 != now.2 ? now.2 : nil)
     }
 }
 

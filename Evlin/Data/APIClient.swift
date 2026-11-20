@@ -306,13 +306,27 @@ class APIClient {
         return try await send(method, path, bodyData: data, signOutOnUnauthorized: signOutOnUnauthorized, timeout: timeout)
     }
 
-    /// Sends one of the app's writes (see `APIClient.Write`).
+    /// Sends one of the app's writes (see `APIClient.Write`). From the
+    /// outbox it carries the entry's id as `Idempotency-Key`, so a retry
+    /// after a lost answer is answered once (evlin-backend idempotency.py),
+    /// and when it was made as `X-Edited-At`, so an older edit never undoes
+    /// a newer one (edits.py).
     @discardableResult
-    func send(_ write: WriteRequest) async throws -> Data {
-        try await send(write.method, write.path, bodyData: write.body)
+    func send(_ write: WriteRequest, idempotencyKey: String? = nil, editedAt: Date? = nil) async throws -> Data {
+        var headers: [String: String] = [:]
+        if let idempotencyKey { headers["Idempotency-Key"] = idempotencyKey }
+        if let editedAt { headers["X-Edited-At"] = Self.editTime.string(from: editedAt) }
+        return try await send(write.method, write.path, bodyData: write.body, headers: headers)
     }
 
-    private func send(_ method: String, _ path: String, bodyData body: Data?,
+    /// "2026-11-19T20:41:07.123Z": UTC, to the millisecond.
+    static let editTime: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private func send(_ method: String, _ path: String, bodyData body: Data?, headers: [String: String] = [:],
                       signOutOnUnauthorized: Bool = true, timeout: TimeInterval? = nil) async throws -> Data {
         // The Demo build never talks to the server (DemoMode). Sync and the
         // outbox already stop short; this catches the screens that call the
@@ -324,7 +338,7 @@ class APIClient {
         await startParentSession()
         await refreshParentTokenIfExpiring()
         do {
-            return try await sendOnce(method, path, body: body, timeout: timeout)
+            return try await sendOnce(method, path, body: body, headers: headers, timeout: timeout)
         } catch let failure as APIFailure where failure.status == 401 {
             guard signOutOnUnauthorized else { throw failure }
             let s = SessionManager.shared
@@ -338,7 +352,7 @@ class APIClient {
                 // Supabase access tokens last about an hour: trade the refresh
                 // token for a new one and retry once.
                 switch await refreshParentToken() {
-                case .refreshed: return try await sendOnce(method, path, body: body, timeout: timeout)
+                case .refreshed: return try await sendOnce(method, path, body: body, headers: headers, timeout: timeout)
                 case .unreachable: throw failure // don't sign out over a network blip
                 case .rejected: break
                 }
@@ -395,10 +409,11 @@ class APIClient {
             .contains { detail.contains($0) }
     }
 
-    private func sendOnce(_ method: String, _ path: String, body: Data?,
+    private func sendOnce(_ method: String, _ path: String, body: Data?, headers: [String: String] = [:],
                           timeout: TimeInterval? = nil) async throws -> Data {
         var request = URLRequest(url: URL(string: "\(baseURL)\(path)")!)
         request.httpMethod = method
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         if let timeout { request.timeoutInterval = timeout }
         let session = timeout == nil ? self.session : slowSession
         if let token = SessionManager.shared.activeToken {

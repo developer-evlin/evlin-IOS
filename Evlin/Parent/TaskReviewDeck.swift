@@ -1602,6 +1602,13 @@ enum TaskScope {
         // the earlier days, so a repeat only ever changes its time.
         let dueDate = updated.repeats == "none" ? updated.dueDate.map { format($0, "yyyy-MM-dd") } : startOn
         let clear = clearDueTime && dueTime == nil
+        // What goes to the server: only the fields this edit changed (per
+        // field, so it never overwrites another phone's change to the rest;
+        // evlin-backend edits.py). Not saved on this phone: everything.
+        var changes: [String: Any] = APIClient.Write.allTaskFields(
+            title: updated.title, instructions: updated.description, recurrence: updated.repeats,
+            category: updated.category, submissionKind: updated.needsPhoto ? "photo" : "none",
+            dueTime: dueTime, dueDate: dueDate, clearDueTime: clear, icon: updated.emoji)
         if let saved = LocalStore.shared.cachedTask(id: updated.id), let childId = LocalStore.shared.cachedTaskChild(id: updated.id) {
             let edited = ApiTask(
                 id: saved.id, title: updated.title, instructions: updated.description, recurrence: updated.repeats,
@@ -1611,6 +1618,7 @@ enum TaskScope {
                 icon: updated.emoji ?? saved.icon,
                 // Its days taken out and last day stay through an edit.
                 skippedDates: saved.skippedDates, repeatUntil: saved.repeatUntil)
+            changes = APIClient.Write.taskChanges(from: saved, to: edited)
             let store = LocalStore.shared
             store.batch {
                 store.mirrorTaskSaved(edited, childId: childId)
@@ -1625,18 +1633,9 @@ enum TaskScope {
                 }
             }
         }
-        Outbox.send(APIClient.Write.updateTask(
-            taskId: updated.id,
-            title: updated.title,
-            instructions: updated.description,
-            recurrence: updated.repeats,
-            category: updated.category,
-            submissionKind: updated.needsPhoto ? "photo" : "none",
-            dueTime: dueTime,
-            dueDate: dueDate,
-            clearDueTime: clear,
-            icon: updated.emoji
-        ), label: "Your task edit")
+        // Saved with nothing changed: nothing to send.
+        guard !changes.isEmpty else { return }
+        Outbox.send(APIClient.Write.updateTask(taskId: updated.id, fields: changes), label: "Your task edit")
     }
 
     /// How long a sheet takes to slide away: a delete confirmed in an edit

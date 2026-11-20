@@ -358,6 +358,21 @@ parent or kid does is lost to a bad connection or a closed app.
 - **"Today" is live.** `CalendarData.todayYear`, `todayMonth` and `dataDay`
   read the clock. `DayClock` notices midnight and a return to the
   foreground on a new day, rebuilds today's lists, and syncs.
+- **Retries count once; edits never undo each other** (2026-11-19, the
+  user's checklist). Every queued write carries its outbox entry's id as
+  `Idempotency-Key` and when it was made as `X-Edited-At`
+  (`APIClient.send(_:idempotencyKey:editedAt:)`, from `Outbox.run`). The
+  server answers a repeated key from the same caller with the first answer,
+  kept a day in `app.idempotency_keys` (`evlin-backend/idempotency.py`, a
+  pure ASGI middleware; 5xx not kept), so extra time and blocks, which have
+  no phone-made id, are never applied twice. Task edits and the lock flags
+  are per field: the phone sends only what changed
+  (`Write.taskChanges(from:to:)`, `Child.stateChange`), and the server sets
+  a field only if the edit is at least as new as that field's last change
+  (`edits.py`, `field_edits` on `tasks` and `child_state`; a future time
+  counts as now; no header, as from an older build, counts as arrival).
+  `updated_at` on tasks and occurrences. Occurrence status keeps its own
+  rules (`_review`: an approval stands, a second one is 409).
 - **Leaving the app never loses a write** (2026-11-19, Apple's practice):
   every change and its queued request are saved to disk as they're made
   (`LocalStore.save`, a failure reported to Sentry); each outbox send asks

@@ -110,11 +110,35 @@ extension APIClient {
             return WriteRequest("POST", "/children/\(childId)/tasks", body: body)
         }
 
-        /// A nil `dueTime` leaves the time as it is; `clearDueTime` removes it
-        /// (sent as an explicit null, which the server reads as "no time").
-        static func updateTask(taskId: String, title: String, instructions: String?, recurrence: String, category: String,
-                               submissionKind: String, dueTime: String? = nil, dueDate: String? = nil,
-                               clearDueTime: Bool = false, icon: String? = nil) -> WriteRequest {
+        /// An edit to a task: only `fields` change on the server (per field,
+        /// last write wins by edit time; evlin-backend edits.py). Build them
+        /// with `taskChanges(from:to:)`, or `allTaskFields` when the phone has
+        /// no saved copy to compare with.
+        static func updateTask(taskId: String, fields: [String: Any]) -> WriteRequest {
+            WriteRequest("PUT", "/tasks/\(taskId)", body: fields)
+        }
+
+        /// The fields that differ between the phone's saved task and the
+        /// edited one, in the server's spelling. A time removed is sent as
+        /// null; an unchanged field isn't sent at all.
+        static func taskChanges(from saved: ApiTask, to edited: ApiTask) -> [String: Any] {
+            var out: [String: Any] = [:]
+            if edited.title != saved.title { out["title"] = edited.title }
+            if (edited.instructions ?? "") != (saved.instructions ?? "") { out["instructions"] = edited.instructions ?? "" }
+            if edited.recurrence != saved.recurrence { out["recurrence"] = edited.recurrence }
+            if (edited.category ?? "") != (saved.category ?? "") { out["category"] = edited.category ?? "" }
+            if edited.submissionKind != saved.submissionKind { out["submission_kind"] = edited.submissionKind }
+            if edited.dueTime != saved.dueTime { out["due_time"] = edited.dueTime ?? NSNull() }
+            if edited.dueDate != saved.dueDate, let day = edited.dueDate { out["due_date"] = day }
+            if edited.icon != saved.icon, let icon = edited.icon { out["icon"] = icon }
+            return out
+        }
+
+        /// Every editable field, for a task this phone has no saved copy of.
+        /// A nil `dueTime` leaves the time as it is; `clearDueTime` removes it.
+        static func allTaskFields(title: String, instructions: String?, recurrence: String, category: String,
+                                  submissionKind: String, dueTime: String? = nil, dueDate: String? = nil,
+                                  clearDueTime: Bool = false, icon: String? = nil) -> [String: Any] {
             var body: [String: Any] = [
                 "title": title,
                 "instructions": instructions ?? "",
@@ -125,7 +149,7 @@ extension APIClient {
             if let dueTime { body["due_time"] = dueTime } else if clearDueTime { body["due_time"] = NSNull() }
             if let dueDate { body["due_date"] = dueDate }
             if let icon { body["icon"] = icon }
-            return WriteRequest("PUT", "/tasks/\(taskId)", body: body)
+            return body
         }
 
         static func deleteTask(taskId: String) -> WriteRequest {
@@ -201,12 +225,15 @@ extension APIClient {
             WriteRequest("PUT", "/children/\(childId)/rules", body: body)
         }
 
-        static func updateChildState(childId: String, manualLock: Bool, taskGateOverride: Bool, instantUnlock: Bool) -> WriteRequest {
-            WriteRequest("PUT", "/children/\(childId)/state", body: [
-                "manual_lock": manualLock,
-                "task_gate_override": taskGateOverride,
-                "instant_unlock": instantUnlock,
-            ])
+        /// Only the flags given are sent (nil: unchanged), so two parents
+        /// never undo each other's flag (evlin-backend edits.py).
+        static func updateChildState(childId: String, manualLock: Bool? = nil, taskGateOverride: Bool? = nil,
+                                     instantUnlock: Bool? = nil) -> WriteRequest {
+            var body: [String: Any] = [:]
+            if let manualLock { body["manual_lock"] = manualLock }
+            if let taskGateOverride { body["task_gate_override"] = taskGateOverride }
+            if let instantUnlock { body["instant_unlock"] = instantUnlock }
+            return WriteRequest("PUT", "/children/\(childId)/state", body: body)
         }
 
         /// Grants (or, with a negative value, deducts) minutes for today.
@@ -400,7 +427,7 @@ enum Outbox {
             let writeId = write.id, childId = write.childId
             do {
                 let sent = try await resolve(request)
-                let answer = try await APIClient.shared.send(sent)
+                let answer = try await APIClient.shared.send(sent, idempotencyKey: write.id, editedAt: write.createdAt)
                 LocalStore.shared.removePendingWrite(write)
                 outcomes[writeId] = true
                 adoptServerId(sent: sent, answer: answer)
