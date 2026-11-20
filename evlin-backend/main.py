@@ -16,6 +16,9 @@ app = FastAPI(title="Evlin Backend API", description="API for the Evlin iOS app"
 # M-5: Explicit CORS policy — this is a mobile-only backend, so allow_origins
 # is empty. The middleware is present so any future web surface (admin dash,
 # web app) must consciously add itself here rather than opening everything.
+# Retried writes answered once (idempotency.py).
+from idempotency import IdempotencyMiddleware
+app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[],         # No browser origins permitted by default
@@ -392,6 +395,22 @@ _MIGRATIONS = [
         used_at timestamptz
     )""",
     "CREATE INDEX IF NOT EXISTS access_codes_parent_idx ON app.access_codes (parent_id, expires_at)",
+    # Retried writes answered once (idempotency.py) and per-field last write
+    # wins by edit time (edits.py), 2026-11-19.
+    """CREATE TABLE IF NOT EXISTS app.idempotency_keys (
+        caller text NOT NULL,
+        key text NOT NULL,
+        method text NOT NULL,
+        path text NOT NULL,
+        status integer NOT NULL,
+        body text,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (caller, key)
+    )""",
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()",
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS field_edits jsonb",
+    "ALTER TABLE app.occurrences ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()",
+    "ALTER TABLE app.child_state ADD COLUMN IF NOT EXISTS field_edits jsonb",
 ]
 
 
@@ -463,6 +482,8 @@ _EXPECTED_COLUMNS = [
     ("app.child_rules", "downtime_schedule"), ("app.devices", "setup_stage"),
     ("app.tasks", "skipped_dates"), ("app.tasks", "repeat_until"),
     ("app.access_codes", "code"),
+    ("app.idempotency_keys", "key"), ("app.tasks", "updated_at"), ("app.tasks", "field_edits"),
+    ("app.occurrences", "updated_at"), ("app.child_state", "field_edits"),
 ]
 
 

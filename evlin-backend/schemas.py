@@ -134,6 +134,17 @@ class TaskBase(BaseModel):
     # AI-suggested-then-parent-confirmed task apart from a parent-typed one.
     created_by: str = "parent"
 
+def _single_emoji(v):
+    """A task's emoji, shown beside it on the kid's phone: one emoji (a ZWJ
+    family or flag is several code points), never text. Blank means none."""
+    if v is None or not v.strip():
+        return None
+    v = v.strip()
+    if len(v) > 16 or any(c.isascii() and c.isalnum() for c in v) or not any(ord(c) > 0x238C for c in v):
+        raise ValueError("icon must be a single emoji")
+    return v
+
+
 class TaskCreate(TaskBase):
     # Made on the phone, so a create retried from its outbox is recognised
     # instead of saved twice. Ignored by updates.
@@ -152,12 +163,7 @@ class TaskCreate(TaskBase):
         """The task's emoji, shown beside it on the kid's phone: one emoji
         (a ZWJ family or flag is several code points), never text. Blank
         means none."""
-        if v is None or not v.strip():
-            return None
-        v = v.strip()
-        if len(v) > 16 or any(c.isascii() and c.isalnum() for c in v) or not any(ord(c) > 0x238C for c in v):
-            raise ValueError("icon must be a single emoji")
-        return v
+        return _single_emoji(v)
 
 class TaskResponse(TaskBase):
     # ORM rows hold time/date objects; the API exposes them as strings.
@@ -173,6 +179,39 @@ class TaskResponse(TaskBase):
     # its last day, "YYYY-MM-DD". The phones' repeat rule reads them.
     skipped_dates: Optional[list[str]] = None
     repeat_until: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class TaskUpdate(BaseModel):
+    """An edit to a task: only the fields sent change (edits.py, per field).
+    An older build sends them all, which still works."""
+    title: Optional[str] = None
+    instructions: Optional[str] = None
+    category: Optional[str] = None
+    icon: Optional[str] = None
+    bucket: Optional[str] = None
+    due_time: Optional[str] = None
+    due_date: Optional[str] = None
+    recurrence: Optional[str] = None
+    gates_apps: Optional[bool] = None
+    submission_kind: Optional[str] = None
+    active: Optional[bool] = None
+    bonus_minutes: Optional[int] = None
+    created_by: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, v):
+        if v is None:
+            return v
+        if not v.strip():
+            raise ValueError("title must not be blank")
+        return v.strip()
+
+    @field_validator("icon")
+    @classmethod
+    def _one_emoji(cls, v):
+        return _single_emoji(v)
 
 
 class TaskCut(BaseModel):
@@ -219,6 +258,7 @@ class OccurrenceResponse(OccurrenceBase):
     due_time: Optional[str] = None
     completed_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -396,8 +436,11 @@ class ChildStateBase(BaseModel):
     manual_lock: bool
     task_gate_override: bool
 
-class ChildStateUpdate(ChildStateBase):
-    # Left out (an older app): stays as it is.
+class ChildStateUpdate(BaseModel):
+    # Only the flags sent change (edits.py, per field); an older app sends
+    # the lock and unlock together, which still works.
+    manual_lock: Optional[bool] = None
+    task_gate_override: Optional[bool] = None
     instant_unlock: Optional[bool] = None
 
 class ChildStateResponse(ChildStateBase):

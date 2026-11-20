@@ -44,6 +44,8 @@ def _sqlite_ready_metadata():
             if col.server_default is not None:
                 col.server_default = None
                 col.default = ColumnDefault(lambda: datetime.now(timezone.utc))
+            if col.onupdate is not None:
+                col.onupdate = ColumnDefault(lambda: datetime.now(timezone.utc), for_update=True)
 
 
 _sqlite_ready_metadata()

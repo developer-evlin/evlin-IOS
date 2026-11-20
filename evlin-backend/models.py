@@ -190,6 +190,10 @@ class Task(Base):
     # 'parent' | 'ai_agent' | 'system' — who/what authored this task.
     created_by = Column(String, nullable=False, default="parent")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # When it last changed, and when each field last changed by the phone's
+    # edit time (edits.py: per-field last write wins).
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    field_edits = Column(JSON)
 
 class Occurrence(Base):
     __tablename__ = "occurrences"
@@ -210,6 +214,7 @@ class Occurrence(Base):
     rejection_note = Column(String)
     bypass_requested = Column(Boolean, nullable=False, default=False)
     bypass_note = Column(String)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 class Submission(Base):
     __tablename__ = "submissions"
@@ -260,6 +265,8 @@ class ChildState(Base):
     # Work sent in opens the device, without waiting for the parent's approval.
     instant_unlock = Column(Boolean, nullable=False, default=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Per-field last write wins for the lock flags (edits.py).
+    field_edits = Column(JSON)
 
 class TimeGrant(Base):
     """One append-only entry in a child's screen-time pool — never a
@@ -467,4 +474,20 @@ class AuditLog(Base):
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id"))
     kind = Column(String, nullable=False)
     payload = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class IdempotencyKey(Base):
+    """A phone's write already answered (idempotency.py): the same key from
+    the same caller gets this answer back instead of running again. Kept a
+    day."""
+    __tablename__ = "idempotency_keys"
+    __table_args__ = {"schema": "app"}
+
+    caller = Column(String, primary_key=True)
+    key = Column(String, primary_key=True)
+    method = Column(String, nullable=False)
+    path = Column(String, nullable=False)
+    status = Column(Integer, nullable=False)
+    body = Column(String)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

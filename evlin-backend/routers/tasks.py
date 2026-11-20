@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from uuid import UUID
 from datetime import timedelta, time, date
 from sqlalchemy.exc import IntegrityError
 from typing import Optional
 import models, schemas
+import edits
 from database import get_db
 from routers.auth import get_current_parent
 from access import assert_parent_owns_child, assert_child_access, get_task_for_parent
@@ -142,37 +143,56 @@ def _lock_again_for_new_task(db: Session, child_id: UUID, task: models.Task):
         state.task_gate_override = False
 
 @router.put("/tasks/{task_id}", response_model=schemas.TaskResponse)
-def update_task(task_id: UUID, task_update: schemas.TaskCreate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
-    """Update an existing task"""
+def update_task(task_id: UUID, task_update: schemas.TaskUpdate, request: Request,
+                current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    """An edit to a task. Only the fields sent change, and each only if this
+    edit is at least as new as that field's last change (edits.py): a title
+    edit on one phone never overwrites a repeat edit made on the other, and
+    an old edit replayed late never undoes a newer one."""
     db_task = get_task_for_parent(db, current_parent, task_id)
-    parsed_time, parsed_date = _parse_due(task_update)
-    schedule_before = (db_task.recurrence, db_task.due_date, db_task.active)
+    sent = task_update.model_fields_set
+    values = {}
+    for field in ("title", "instructions", "category", "icon", "recurrence", "gates_apps", "active", "bonus_minutes"):
+        if field in sent:
+            value = getattr(task_update, field)
+            # A required column sent empty keeps what it had.
+            if value is None and field in ("title", "recurrence", "gates_apps", "active", "bonus_minutes"):
+                continue
+            values[field] = value
+    if "submission_kind" in sent and task_update.submission_kind is not None:
+        values["submission_kind"] = _safe_submission_kind(task_update.submission_kind)
+    if "due_time" in sent:
+        values["due_time"] = _parse_time(task_update.due_time)
+    if "due_date" in sent:
+        values["due_date"] = _parse_date(task_update.due_date)
 
-    db_task.title = task_update.title
-    db_task.instructions = task_update.instructions
-    if "category" in task_update.model_fields_set:
-        db_task.category = task_update.category
-    if "icon" in task_update.model_fields_set:
-        db_task.icon = task_update.icon
-    # Only touch the schedule when the client actually sent it, so a partial
-    # edit (e.g. a title change from the review screen) doesn't wipe it.
-    if "due_time" in task_update.model_fields_set:
-        db_task.due_time = parsed_time
-    if "due_date" in task_update.model_fields_set:
-        db_task.due_date = parsed_date
+    schedule_before = (db_task.recurrence, db_task.due_date, db_task.active, db_task.due_time)
+    edits.apply(db_task, values, edits.edited_at(request))
     db_task.bucket = _derive_bucket(db_task.due_time)  # keep in sync either way
-    db_task.recurrence = task_update.recurrence
-    db_task.gates_apps = task_update.gates_apps
-    db_task.submission_kind = _safe_submission_kind(task_update.submission_kind)
-    db_task.active = task_update.active
-    if "bonus_minutes" in task_update.model_fields_set:
-        db_task.bonus_minutes = task_update.bonus_minutes
 
-    if (db_task.recurrence, db_task.due_date, db_task.active) != schedule_before:
+    if (db_task.recurrence, db_task.due_date, db_task.active) != schedule_before[:3]:
         _drop_days_it_no_longer_falls_on(db, db_task)
     _commit_or_400(db)
     db.refresh(db_task)
     return db_task
+
+
+def _parse_time(raw: Optional[str]) -> Optional[time]:
+    if not raw:
+        return None
+    try:
+        return time.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid time format. Use HH:MM:SS")
+
+
+def _parse_date(raw: Optional[str]) -> Optional[date]:
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
 
 def _drop_days_it_no_longer_falls_on(db: Session, task: models.Task):

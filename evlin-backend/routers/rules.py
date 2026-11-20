@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Request, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID
 from datetime import datetime, timezone, time
 import models, schemas
+import edits
 from database import get_db
 from routers.auth import get_current_parent
 from access import assert_parent_owns_child, assert_child_access
@@ -77,17 +78,19 @@ def get_child_state(child_id: UUID, db: Session = Depends(get_db), _access: None
     return _state_response(db, state)
 
 @router.put("/children/{child_id}/state", response_model=schemas.ChildStateResponse)
-def update_child_state(child_id: UUID, state_update: schemas.ChildStateUpdate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+def update_child_state(child_id: UUID, state_update: schemas.ChildStateUpdate, request: Request,
+                       current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    """The lock, the unlock and Instant unlock: only the flags sent change,
+    each only if this edit is at least as new as its last change (edits.py),
+    so two parents never undo each other's flag."""
     assert_parent_owns_child(db, current_parent, child_id)
     state = db.query(models.ChildState).filter(models.ChildState.child_id == child_id).first()
     if not state:
-        state = models.ChildState(child_id=child_id)
+        state = models.ChildState(child_id=child_id, manual_lock=False, task_gate_override=False, instant_unlock=False)
         db.add(state)
-        
-    state.manual_lock = state_update.manual_lock
-    state.task_gate_override = state_update.task_gate_override
-    if state_update.instant_unlock is not None:
-        state.instant_unlock = state_update.instant_unlock
+    values = {f: getattr(state_update, f) for f in ("manual_lock", "task_gate_override", "instant_unlock")
+              if f in state_update.model_fields_set and getattr(state_update, f) is not None}
+    edits.apply(state, values, edits.edited_at(request))
     state.updated_at = datetime.now(timezone.utc)
 
     db.commit()
