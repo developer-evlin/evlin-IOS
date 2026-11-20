@@ -1,6 +1,8 @@
 """The policy: one answer to what a child's device should be doing now."""
 from datetime import date, datetime, time, timedelta, timezone
 
+import uuid
+
 import pytest
 
 import app_catalog
@@ -70,6 +72,42 @@ def test_the_task_gate_override_lifts_only_the_task_gate(client, db_session, fam
     _task(client, c)
     client.put(f"/children/{c.id}/state", headers=auth("pa"), json={"manual_lock": True, "task_gate_override": True})
     assert _policy(client, c)["lock_reasons"] == ["manual_lock"]
+
+
+def test_instant_unlock_opens_on_work_sent_in(client, db_session, fam):
+    _, c = fam
+    task = _task(client, c)
+    occurrence = db_session.get(models.Occurrence, uuid.UUID(_occ(client, c, task["id"])["id"]))
+
+    client.put(f"/children/{c.id}/state", headers=auth("pa"),
+               json={"manual_lock": False, "task_gate_override": False, "instant_unlock": True})
+    assert _policy(client, c)["lock_reasons"] == ["unfinished_tasks"], "not sent in yet"
+
+    occurrence.status = "submitted"
+    db_session.commit()
+    assert _policy(client, c)["locked"] is False
+
+    occurrence.status = "rejected"
+    db_session.commit()
+    assert _policy(client, c)["lock_reasons"] == ["unfinished_tasks"], "a redo locks it again"
+
+
+def test_without_instant_unlock_work_sent_in_stays_locked(client, db_session, fam):
+    _, c = fam
+    task = _task(client, c)
+    occurrence = db_session.get(models.Occurrence, uuid.UUID(_occ(client, c, task["id"])["id"]))
+    occurrence.status = "submitted"
+    db_session.commit()
+    assert _policy(client, c)["lock_reasons"] == ["unfinished_tasks"]
+
+
+def test_an_older_app_leaves_instant_unlock_as_it_is(client, db_session, fam):
+    _, c = fam
+    h = auth("pa")
+    client.put(f"/children/{c.id}/state", headers=h,
+               json={"manual_lock": False, "task_gate_override": False, "instant_unlock": True})
+    r = client.put(f"/children/{c.id}/state", headers=h, json={"manual_lock": True, "task_gate_override": False})
+    assert r.json()["instant_unlock"] is True
 
 
 def test_todays_requirement_is_the_occurrence_snapshot_not_the_tasks_current_flag(client, db_session, fam):

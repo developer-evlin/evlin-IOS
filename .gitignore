@@ -23,3 +23,17 @@ evlin-backend/tests/__pycache__/
 
 # scripts/test_child.py: which test children it added (local, per machine)
 evlin-backend/scripts/test-children.json
+
+# One-off local scripts: some hold the live database password. Never commit.
+evlin-backend/get_user.py
+evlin-backend/test_db.py
+evlin-backend/create_tables.py
+evlin-backend/debug_register.py
+evlin-backend/patch_backend_placeholder.py
+evlin-backend/patch_pair_child.py
+evlin-backend/test_local.py
+evlin-backend/test_pair.py
+evlin-backend/test_register.py
+evlin-backend/uvicorn.log
+evlin-backend/venv/
+evlin-backend/.pytest_cache/

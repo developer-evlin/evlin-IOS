@@ -44,7 +44,9 @@ def compute_policy(db: Session, child: models.Child, now: datetime | None = None
     ).all()
     # The occurrence's own gates_apps snapshot, not the task's current flag:
     # editing a task later doesn't rewrite what today already required.
-    outstanding = [o for o in occurrences if o.gates_apps and o.status != "approved"]
+    # With Instant unlock, sent in is enough; a redo locks it again.
+    finished = ("approved", "submitted") if state and state.instant_unlock else ("approved",)
+    outstanding = [o for o in occurrences if o.gates_apps and o.status not in finished]
 
     reasons = []
     if outstanding and not (state and state.task_gate_override):

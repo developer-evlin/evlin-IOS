@@ -60,6 +60,24 @@ class Child(Base):
     # window, which day a grant lands on — rather than the server's UTC.
     timezone = Column(String)
 
+class AccessCode(Base):
+    """The screen time access code (2026-11-19): six random digits a parent
+    types on their child's device to get into its settings. One parent's
+    code opens any of their children's devices. Made on the server when the
+    parent's phone asks (routers/access_codes.py), good for a minute and
+    once only, and checked only here: it never lives on a device."""
+    __tablename__ = "access_codes"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), nullable=False)
+    code = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    # Typed on a child's device: it opens nothing again.
+    used_at = Column(DateTime(timezone=True))
+
+
 class ParentChild(Base):
     __tablename__ = "parent_children"
     __table_args__ = {"schema": "app"}
@@ -83,6 +101,15 @@ class Device(Base):
     acked_version = Column(Integer, nullable=False, default=0)
     paired_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     revoked_at = Column(DateTime(timezone=True))
+    # When the kid finished setting this device up (permissions, apps to
+    # lock). Until then the parent's onboarding waits; a new pairing is a
+    # new row, so it waits again.
+    setup_completed_at = Column(DateTime(timezone=True))
+    # Where the kid's device is in setting up Family Sharing (2026-11-11):
+    # "account_created" once the parent has made the child's Apple Account
+    # (the parent's phone then shows how to sign this device in with it);
+    # NULL otherwise. Only onboarding reads it.
+    setup_stage = Column(String)
 
 class ParentSession(Base):
     """A parent's phone, signed in. Like a kid's device token: issued once
@@ -147,6 +174,12 @@ class Task(Base):
     # "the day it was created".
     due_date = Column(Date)
     recurrence = Column(String, nullable=False, default="daily")
+    # A repeating task's exceptions, as calendars keep them: the days taken
+    # out of it ("This task" deleted or edited on its own), as a list of
+    # "YYYY-MM-DD", and its last day ("This and following tasks"). NULL for
+    # none. Written only by routers/tasks.py's cut and split.
+    skipped_dates = Column(JSON)
+    repeat_until = Column(Date)
     gates_apps = Column(Boolean, nullable=False, default=True)
     submission_kind = Column(String, nullable=False, default="none")
     active = Column(Boolean, nullable=False, default=True)
@@ -204,6 +237,13 @@ class ChildRule(Base):
     # Calendar-style override: {"mon": 120, ...}. NULL (every child today)
     # means "use daily_limit_minutes every day" — see routers/time_grants.py.
     weekly_schedule = Column(JSON)
+    # The weekdays downtime runs on, as ["mon", ...] (tasks' and
+    # weekly_schedule's codes). NULL means every day.
+    downtime_days = Column(JSON)
+    # Each day's own downtime hours, when they differ by day:
+    # {"mon": {"start": "20:00", "end": "07:00"}, ...}. NULL means every day
+    # it runs uses downtime_start/downtime_end.
+    downtime_schedule = Column(JSON)
     # Whether the daily screen-time limit is switched on, and the parent's
     # free-form rules (from chat): [{"id","title","detail","icon","on"}].
     daily_limit_enabled = Column(Boolean, nullable=False, default=True)
@@ -217,6 +257,8 @@ class ChildState(Base):
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), primary_key=True)
     manual_lock = Column(Boolean, nullable=False, default=False)
     task_gate_override = Column(Boolean, nullable=False, default=False)
+    # Work sent in opens the device, without waiting for the parent's approval.
+    instant_unlock = Column(Boolean, nullable=False, default=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 class TimeGrant(Base):
@@ -327,11 +369,11 @@ class ChatMessage(Base):
     parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id"))
     role = Column(String, nullable=False)  # 'user' | 'assistant'
     text = Column(String, nullable=False)
-    tool_call = Column(String)             # 'draft_task' | 'draft_event' | 'ask_follow_up' | null — see tool_calls/
+    tool_call = Column(String)             # 'draft_task' | 'draft_app_block' | 'ask_follow_up' | null — see tool_calls/
     tool_args = Column(JSON)
-    # Which assistant this message is part of: 'chat' (the main assistant)
-    # or 'youtube' (the YouTube agent, run inside the same thread). Each one
-    # is only ever sent its own messages — see agent_sessions.py.
+    # Which assistant this message is part of. Always 'chat' now; older
+    # threads also hold 'youtube' rows from the removed YouTube agent, which
+    # chat leaves out of what it sends the model.
     agent = Column(String, nullable=False, default="chat", server_default="chat")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -405,98 +447,6 @@ class AppBlock(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at = Column(DateTime(timezone=True))
 
-
-class ChildVideoProfile(Base):
-    """What this child's videos may be: which categories, how long, and what
-    to keep out. One row per child, created on first save; a child with no
-    row gets video_filter's defaults (every category allowed).
-
-    Channels are stored as [{"id", "title"}] so a list can be shown without
-    asking YouTube; the id is what filtering matches.
-    """
-    __tablename__ = "child_video_profiles"
-    __table_args__ = {"schema": "app"}
-
-    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), primary_key=True)
-    allowed_categories = Column(JSON, nullable=False, default=list)
-    blocked_keywords = Column(JSON, nullable=False, default=list)
-    allowed_channels = Column(JSON, nullable=False, default=list)
-    blocked_channels = Column(JSON, nullable=False, default=list)
-    daily_minutes = Column(Integer, nullable=False, default=30)
-    max_video_minutes = Column(Integer, nullable=False, default=10)
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-
-class VideoQueueItem(Base):
-    """One video on a child's list for one day — the only videos the child's
-    device will play.
-
-    Only a parent's approval writes these (POST /children/{id}/video-queue,
-    from the chat card or the profile). The metadata is a snapshot taken
-    when it was approved, so the child's device never talks to YouTube's API
-    and a later title change can't alter what the parent agreed to.
-    local_date is the child's day (blocks.local_now), not the server's.
-    How much of today's allowance is left is computed from watched_seconds
-    on read, never stored.
-    """
-    __tablename__ = "video_queue_items"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
-    local_date = Column(Date, nullable=False)
-    position = Column(Integer, nullable=False, default=0)
-    video_id = Column(String, nullable=False)
-    title = Column(String, nullable=False)
-    channel_id = Column(String)
-    channel_title = Column(String)
-    thumbnail_url = Column(String)
-    duration_seconds = Column(Integer, nullable=False)
-    category = Column(String)
-    added_by_parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
-    watched_seconds = Column(Integer, nullable=False, default=0)
-    completed_at = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-
-class ICSFeed(Base):
-    __tablename__ = "ics_feeds"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), nullable=False)
-    feed_url = Column(String, nullable=False)
-    last_synced_at = Column(DateTime(timezone=True))
-    active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-class Event(Base):
-    __tablename__ = "events"
-    __table_args__ = {"schema": "app"}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # Every event is one child's. Evlin manages the children's calendars
-    # only: there are no parent or family-wide events.
-    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
-    title = Column(String, nullable=False)
-    start_at = Column(DateTime(timezone=True), nullable=False)
-    end_at = Column(DateTime(timezone=True), nullable=False)
-    gates_apps = Column(Boolean, nullable=False, default=False)
-    location_or_link = Column(String)
-    source = Column(String, nullable=False, default="manual")
-    category = Column(String)
-    note = Column(String)
-    # Comma-joined weekday codes ("mon,wed") or "none".
-    recurrence = Column(String, nullable=False, default="none")
-    ics_feed_id = Column(UUID(as_uuid=True), ForeignKey("app.ics_feeds.id", ondelete="CASCADE"))
-    external_uid = Column(String)
-    # 'parent' | 'child'. A child's event is their own plan.
-    created_by = Column(String, nullable=False, default="parent")
-    # 'approved' (on the calendar) | 'proposed' (a child's plan waiting on
-    # the parent) | 'declined' (the parent said "Not this one"; it stays,
-    # with review_note, until the child dismisses it).
-    status = Column(String, nullable=False, default="approved")
-    review_note = Column(String)
 
 class Consent(Base):
     __tablename__ = "consent"

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
-from typing import Literal, Optional, List
-from datetime import datetime, date
+from typing import Dict, Literal, Optional, List
+from datetime import datetime, date, time
 from uuid import UUID
 
 class ParentBase(BaseModel):
@@ -43,6 +43,13 @@ class ChildResponse(ChildBase):
     id: UUID
     activated_at: Optional[datetime] = None
     is_paired: bool = False
+    # The paired device has finished its setup (GET /children sets it).
+    setup_complete: bool = False
+    # Family Sharing's hand-off between the devices (models.Device).
+    setup_stage: Optional[str] = None
+    # What the paired device is, "ipad" or "iphone", from the platform it
+    # paired with; None for one that paired as plain "ios" (2026-11-13).
+    device_kind: Optional[str] = None
     timezone: Optional[str] = None
 
     class Config:
@@ -78,7 +85,8 @@ class ChildUpdate(BaseModel):
 class PairingRequest(BaseModel):
     """Sent by the kid's device to start pairing."""
     child_name: Optional[str] = None
-    platform: str = "ios"
+    # "ipad" or "iphone" (2026-11-13), "ios" from older builds.
+    platform: str = Field("ios", max_length=20)
 
 class PairingRequestResponse(BaseModel):
     code: str
@@ -153,7 +161,7 @@ class TaskCreate(TaskBase):
 
 class TaskResponse(TaskBase):
     # ORM rows hold time/date objects; the API exposes them as strings.
-    @field_validator("due_time", "due_date", mode="before")
+    @field_validator("due_time", "due_date", "repeat_until", mode="before")
     @classmethod
     def _iso(cls, v):
         return v.isoformat() if hasattr(v, "isoformat") else v
@@ -161,6 +169,26 @@ class TaskResponse(TaskBase):
     id: UUID
     child_id: UUID
     created_at: datetime
+    # A repeating task's exceptions (models.Task): days taken out of it and
+    # its last day, "YYYY-MM-DD". The phones' repeat rule reads them.
+    skipped_dates: Optional[list[str]] = None
+    repeat_until: Optional[str] = None
+
+
+class TaskCut(BaseModel):
+    """Days taken off a repeating task: `from` alone ("This task", with
+    `through` the same day) or from that day on (`through` null)."""
+    from_: date = Field(alias="from")
+    through: Optional[date] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class TaskSplit(TaskCut):
+    """One day of a repeating task, or the rest of it, edited on its own:
+    `task` is the new task holding those days (its id made on the phone),
+    and what was done on them moves to it."""
+    task: TaskCreate
 
     class Config:
         from_attributes = True
@@ -202,12 +230,30 @@ class OccurrenceStatusUpdate(BaseModel):
 class OccurrenceBypassRequest(BaseModel):
     bypass_note: Optional[str] = None
 
+class OccurrenceSubmitRequest(BaseModel):
+    bypass_note: Optional[str] = None
+    # The photos sent in with the task (submission ids). Each is checked in
+    # R2 before it counts; left out (an older app), nothing is checked.
+    photo_ids: Optional[List[UUID]] = None
+
+class OccurrenceSubmitResponse(OccurrenceResponse):
+    # Photos named in photo_ids that aren't in R2 (or aren't this task's):
+    # the task is still sent in, and the phone uploads these again.
+    missing_photo_ids: List[UUID] = []
+
+# A kid's photo is made at most 1600 px on the device, a few hundred KB.
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+
 class SubmissionBase(BaseModel):
     kind: str  # 'photo'; older rows can still say 'voice'
     content_type: str
     bytes_size: Optional[int] = None
 
 class SubmissionCreate(SubmissionBase):
+    # Made on the phone, so a retry answers with the same photo, not a new
+    # one. Older apps leave it out.
+    id: Optional[UUID] = None
+
     # Voice notes were removed: a new piece of evidence is a photo. Checked
     # here and not on SubmissionBase, so listing a task that still has an
     # old voice submission keeps working.
@@ -216,6 +262,20 @@ class SubmissionCreate(SubmissionBase):
     def _photo_only(cls, v):
         if v != "photo":
             raise ValueError("kind must be 'photo'")
+        return v
+
+    @field_validator("content_type")
+    @classmethod
+    def _image_only(cls, v):
+        if not v.startswith("image/"):
+            raise ValueError("content_type must be an image")
+        return v
+
+    @field_validator("bytes_size")
+    @classmethod
+    def _small_enough(cls, v):
+        if v is not None and not (0 < v <= MAX_PHOTO_BYTES):
+            raise ValueError(f"a photo must be under {MAX_PHOTO_BYTES // (1024 * 1024)} MB")
         return v
 
 class SubmissionResponse(SubmissionBase):
@@ -237,35 +297,6 @@ class SubmissionListItem(SubmissionResponse):
     # Only present once status == "uploaded" — a still-pending submission
     # has nothing in R2 yet to generate a link for.
     download_url: Optional[str] = None
-
-class EventBase(BaseModel):
-    title: str
-    start_at: datetime
-    end_at: datetime
-    gates_apps: bool = False
-    location_or_link: Optional[str] = None
-    source: str = "manual"
-    category: Optional[str] = None
-    note: Optional[str] = None
-    recurrence: str = "none"
-
-class EventCreate(EventBase):
-    # Every event belongs to one child; there are no family-wide events.
-    child_id: UUID
-    # Made on the phone (see TaskCreate.id). Ignored by updates.
-    id: Optional[UUID] = None
-
-class EventResponse(EventBase):
-    id: UUID
-    child_id: UUID
-    ics_feed_id: Optional[UUID] = None
-    external_uid: Optional[str] = None
-    created_by: str = "parent"
-    status: str = "approved"
-    review_note: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 class PlanCreate(BaseModel):
     """A child's plan for one day: no repeats, no app gating."""
@@ -307,6 +338,41 @@ class ChildRuleUpdate(BaseModel):
     # tasks' own recurrence vocabulary. Omitted/None leaves it untouched;
     # an explicit {} clears it back to "use daily_limit_minutes every day".
     weekly_schedule: Optional[dict] = None
+    # The weekdays downtime runs on (["mon", ...]). Omitted/None leaves it
+    # untouched; an explicit [] (or all seven) means every day again.
+    downtime_days: Optional[List[str]] = None
+    # Each day's own hours: {"mon": {"start": "20:00", "end": "07:00"}, ...}.
+    # Omitted/None leaves it untouched; an explicit {} clears it (one set of
+    # hours, downtime_start/end, every day it runs).
+    downtime_schedule: Optional[Dict[str, Dict[str, str]]] = None
+
+    @field_validator("downtime_schedule")
+    @classmethod
+    def _day_hours(cls, v):
+        if v is None:
+            return v
+        codes = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        out = {}
+        for day, span in v.items():
+            if day not in codes:
+                raise ValueError("downtime_schedule days must be weekday codes: mon..sun")
+            start, end = span.get("start"), span.get("end")
+            try:
+                start_t, end_t = time.fromisoformat(start), time.fromisoformat(end)
+            except (TypeError, ValueError):
+                raise ValueError("downtime_schedule hours must be HH:MM")
+            out[day] = {"start": start_t.strftime("%H:%M"), "end": end_t.strftime("%H:%M")}
+        return {d: out[d] for d in codes if d in out}
+
+    @field_validator("downtime_days")
+    @classmethod
+    def _weekday_codes(cls, v):
+        if v is None:
+            return v
+        codes = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        if any(d not in codes for d in v):
+            raise ValueError("downtime_days must be weekday codes: mon..sun")
+        return [d for d in codes if d in v]
 
 class ChildRuleResponse(ChildRuleBase):
     # ORM rows hold time objects; the API exposes "HH:MM:SS" strings.
@@ -318,6 +384,8 @@ class ChildRuleResponse(ChildRuleBase):
     daily_limit_enabled: bool = True
     custom_rules: List[dict] = []
     weekly_schedule: Optional[dict] = None
+    downtime_days: Optional[List[str]] = None
+    downtime_schedule: Optional[dict] = None
     child_id: UUID
     updated_at: datetime
 
@@ -329,9 +397,11 @@ class ChildStateBase(BaseModel):
     task_gate_override: bool
 
 class ChildStateUpdate(ChildStateBase):
-    pass
+    # Left out (an older app): stays as it is.
+    instant_unlock: Optional[bool] = None
 
 class ChildStateResponse(ChildStateBase):
+    instant_unlock: bool = False
     child_id: UUID
     updated_at: datetime
 
@@ -387,8 +457,23 @@ class ChildAppsUpdate(BaseModel):
     app_ids: List[UUID]
 
 
+class ParentSetupStage(BaseModel):
+    """The parent's side of Family Sharing's hand-off: "I've created the
+    account", tapped on the parent's phone instead of the kid's device."""
+    setup_stage: Literal["account_created"]
+
+
 class DeviceUpdate(BaseModel):
     timezone: Optional[str] = None
+    # The child's name, typed on the kid's device after pairing (the kid's
+    # setup pairs first, then asks the name, 2026-11-09).
+    name: Optional[str] = None
+    # The kid's device has finished its setup. Only ever true.
+    setup_complete: Optional[bool] = None
+    # Family Sharing's hand-off (models.Device.setup_stage); "" clears it.
+    # "creating_account": the kid's device shows how to make the child's
+    # Apple Account; "account_created": it's made, sign the device in.
+    setup_stage: Optional[Literal["", "creating_account", "account_created", "signed_in"]] = None
 
     @field_validator("timezone")
     @classmethod
@@ -478,8 +563,8 @@ class ChatSendRequest(BaseModel):
     # the running one instead of silently starting a new thread per message
     # and losing all continuity.
     new_conversation: bool = False
-    # Which assistant this message is for: the main chat, or the YouTube
-    # agent the parent switched to with the YouTube tile. Same thread.
+    # Always "chat" from the app now. "youtube" is still accepted from
+    # older builds (the removed YouTube agent) and answered by chat.
     agent: Literal["chat", "youtube"] = "chat"
     # The parent's phone's IANA zone ("America/Los_Angeles"). Only used when
     # the child has no zone yet: a kid's device reports theirs, and that wins.
@@ -487,11 +572,7 @@ class ChatSendRequest(BaseModel):
     # Set by a chat tile whose first reply is always the same question
     # ("Add a task", "Update the calendar"): the server asks it straight
     # away instead of waiting seconds for the model to. Older servers ignore it.
-    shortcut: Optional[Literal["add_task", "add_event", "suggest_activity"]] = None
-    # "Try again": answer the parent's last message in this conversation
-    # afresh, replacing the reply it got. No new parent message is stored:
-    # the saved one is answered, whatever `text` says. Needs conversation_id.
-    regenerate: bool = False
+    shortcut: Optional[Literal["add_task", "suggest_activity", "block_app"]] = None
 
     @field_validator("text")
     @classmethod
@@ -612,134 +693,19 @@ class RefreshResponse(BaseModel):
     refresh_token: Optional[str] = None
 
 
-# ---- Today's videos -------------------------------------------------------
-
-class VideoChannel(BaseModel):
-    id: str
-    title: str = ""
-
-
-class VideoProfileResponse(BaseModel):
-    child_id: UUID
-    allowed_categories: List[str]
-    blocked_keywords: List[str]
-    allowed_channels: List[VideoChannel]
-    blocked_channels: List[VideoChannel]
-    daily_minutes: int
-    max_video_minutes: int
-    # Every category a parent can choose from, so the app's chips come from
-    # the same list the server filters by.
-    all_categories: List[str]
+class AccessCodeResponse(BaseModel):
+    """The parent's screen time access code (routers/access_codes.py)."""
+    code: str
+    expires_at: datetime
+    # From the server's clock, so a phone whose clock is off still counts
+    # down right.
+    seconds_left: float
+    lifetime: float
 
 
-class VideoProfileUpdate(BaseModel):
-    allowed_categories: Optional[List[str]] = None
-    blocked_keywords: Optional[List[str]] = None
-    allowed_channels: Optional[List[VideoChannel]] = None
-    blocked_channels: Optional[List[VideoChannel]] = None
-    daily_minutes: Optional[int] = None
-    max_video_minutes: Optional[int] = None
-
-    @field_validator("daily_minutes")
-    @classmethod
-    def _daily(cls, v):
-        if v is not None and not 5 <= v <= 240:
-            raise ValueError("daily_minutes must be between 5 and 240")
-        return v
-
-    @field_validator("max_video_minutes")
-    @classmethod
-    def _per_video(cls, v):
-        if v is not None and not 1 <= v <= 60:
-            raise ValueError("max_video_minutes must be between 1 and 60")
-        return v
-
-    @field_validator("blocked_keywords")
-    @classmethod
-    def _keywords(cls, v):
-        if v is None:
-            return v
-        out = []
-        for k in v:
-            k = " ".join(k.split())[:40]
-            if k and k.lower() not in (o.lower() for o in out):
-                out.append(k)
-        return out[:50]
+class AccessCodeCheck(BaseModel):
+    code: str
 
 
-class VideoQueueAdd(BaseModel):
-    """One video the parent approved, as the chat card showed it."""
-    video_id: str
-    title: str
-    channel_id: Optional[str] = None
-    channel_title: Optional[str] = None
-    thumbnail_url: Optional[str] = None
-    duration_seconds: int
-    category: Optional[str] = None
-
-    @field_validator("video_id")
-    @classmethod
-    def _real_id(cls, v):
-        # A YouTube id: 11 URL-safe characters. Anything else would only
-        # fail later, inside the child's player.
-        import re
-        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", v or ""):
-            raise ValueError("not a YouTube video id")
-        return v
-
-    @field_validator("duration_seconds")
-    @classmethod
-    def _length(cls, v):
-        if not 1 <= v <= 4 * 3600:
-            raise ValueError("duration_seconds out of range")
-        return v
-
-
-class VideoQueueCreate(BaseModel):
-    videos: List[VideoQueueAdd]
-    # True replaces whatever is still unwatched today; false adds to the end.
-    replace: bool = False
-
-
-class VideoQueueOrder(BaseModel):
-    item_ids: List[UUID]
-
-
-class VideoProgress(BaseModel):
-    watched_seconds: int
-    completed: bool = False
-
-    @field_validator("watched_seconds")
-    @classmethod
-    def _non_negative(cls, v):
-        if v < 0:
-            raise ValueError("watched_seconds can't be negative")
-        return v
-
-
-class VideoQueueItemResponse(BaseModel):
-    id: UUID
-    child_id: UUID
-    local_date: date
-    position: int
-    video_id: str
-    title: str
-    channel_id: Optional[str] = None
-    channel_title: Optional[str] = None
-    thumbnail_url: Optional[str] = None
-    duration_seconds: int
-    category: Optional[str] = None
-    watched_seconds: int
-    completed_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-class VideoQueueResponse(BaseModel):
-    child_id: UUID
-    local_date: date
-    daily_minutes: int
-    watched_seconds: int
-    remaining_seconds: int
-    items: List[VideoQueueItemResponse]
+class AccessCodeCheckResponse(BaseModel):
+    ok: bool

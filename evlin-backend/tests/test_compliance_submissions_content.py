@@ -75,20 +75,26 @@ def _occurrence(client, db_session):
     return kid, occ
 
 
-def test_submission_upload_flow_generates_a_url_and_marks_uploaded(client, db_session):
+def test_submission_upload_flow_generates_a_url_and_marks_uploaded(client, db_session, r2_files):
     kid, occ = _occurrence(client, db_session)
     r = client.post(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid"),
                      json={"kind": "photo", "content_type": "image/jpeg"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["upload_url"].startswith("https://") and body["submission"]["status"] == "pending"
-    sub_id = body["submission"]["id"]
+    sub = body["submission"]
 
-    done = client.post(f"/submissions/{sub_id}/complete", headers=auth("dev-kid"))
+    # Not in R2 yet: complete is refused, not taken on the phone's word.
+    assert client.post(f"/submissions/{sub['id']}/complete", headers=auth("dev-kid")).status_code == 409
+
+    r2_files[sub["r2_key"]] = 1234
+    done = client.post(f"/submissions/{sub['id']}/complete", headers=auth("dev-kid"))
     assert done.status_code == 200 and done.json()["status"] == "uploaded" and done.json()["uploaded_at"]
+    assert done.json()["bytes_size"] == 1234
 
+    # Only the kid's Send sends the task in, never a photo arriving.
     occ_after = client.get(f"/children/{kid.id}/occurrences?target_date={TODAY}", headers=auth("dev-kid")).json()[0]
-    assert occ_after["status"] == "submitted"  # completing a submission moves the occurrence forward
+    assert occ_after["status"] == "pending"
 
 
 def test_submission_requires_owning_the_occurrence(client, db_session):
@@ -124,7 +130,7 @@ def test_unknown_occurrence_and_submission_404(client, db_session):
 
 # ---- list submissions -----------------------------------------------------
 
-def test_list_submissions_includes_download_url_only_once_uploaded(client, db_session):
+def test_list_submissions_includes_download_url_only_once_uploaded(client, db_session, r2_files):
     kid, occ = _occurrence(client, db_session)
     sub = client.post(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid"),
                        json={"kind": "photo", "content_type": "image/jpeg"}).json()["submission"]
@@ -132,6 +138,7 @@ def test_list_submissions_includes_download_url_only_once_uploaded(client, db_se
     pending = client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid")).json()
     assert len(pending) == 1 and pending[0]["status"] == "pending" and pending[0]["download_url"] is None
 
+    r2_files[sub["r2_key"]] = 1000
     client.post(f"/submissions/{sub['id']}/complete", headers=auth("dev-kid"))
     done = client.get(f"/occurrences/{occ['id']}/submissions", headers=auth("dev-kid")).json()
     assert done[0]["status"] == "uploaded" and done[0]["download_url"].startswith("https://")

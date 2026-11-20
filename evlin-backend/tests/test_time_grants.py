@@ -85,6 +85,49 @@ def test_weekly_schedule_empty_dict_clears_the_override(client, db_session):
     assert r.json()["weekly_schedule"] is None
 
 
+def test_downtime_days_saved_and_every_day_is_null(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    base = {"daily_limit_minutes": 60, "downtime_enabled": True,
+            "downtime_start": "20:00:00", "downtime_end": "07:00:00"}
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"), json={**base, "downtime_days": ["fri", "mon"]})
+    assert r.status_code == 200 and r.json()["downtime_days"] == ["mon", "fri"]
+    # Left out: untouched.
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"), json=base)
+    assert r.json()["downtime_days"] == ["mon", "fri"]
+    # All seven, or none picked, is every day again.
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"),
+                   json={**base, "downtime_days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]})
+    assert r.json()["downtime_days"] is None
+    assert client.put(f"/children/{c.id}/rules", headers=auth("pa"),
+                      json={**base, "downtime_days": ["someday"]}).status_code == 422
+
+
+def test_downtime_schedule_by_day(client, db_session):
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    base = {"daily_limit_minutes": 60, "downtime_enabled": True,
+            "downtime_start": "20:00:00", "downtime_end": "07:00:00"}
+    week = {"sat": {"start": "21:30", "end": "08:00:00"}, "mon": {"start": "19:45", "end": "07:00"}}
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"), json={**base, "downtime_schedule": week})
+    assert r.status_code == 200
+    assert r.json()["downtime_schedule"] == {"mon": {"start": "19:45", "end": "07:00"},
+                                             "sat": {"start": "21:30", "end": "08:00"}}
+    # Left out: untouched. {} goes back to one set of hours.
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"), json=base)
+    assert r.json()["downtime_schedule"]["sat"] == {"start": "21:30", "end": "08:00"}
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"), json={**base, "downtime_schedule": {}})
+    assert r.json()["downtime_schedule"] is None
+    # Deleting downtime forgets them too.
+    client.put(f"/children/{c.id}/rules", headers=auth("pa"), json={**base, "downtime_schedule": week})
+    r = client.put(f"/children/{c.id}/rules", headers=auth("pa"),
+                   json={"daily_limit_minutes": 60, "downtime_enabled": False, "downtime_clear": True})
+    assert r.json()["downtime_schedule"] is None
+    for bad in ({"someday": {"start": "20:00", "end": "07:00"}}, {"mon": {"start": "late", "end": "07:00"}}):
+        assert client.put(f"/children/{c.id}/rules", headers=auth("pa"),
+                          json={**base, "downtime_schedule": bad}).status_code == 422
+
+
 def test_grant_access_control(client, db_session):
     a, b = make_parent(db_session, "pa"), make_parent(db_session, "pb")
     kid = make_child(db_session, a)

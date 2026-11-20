@@ -69,7 +69,7 @@ def test_a_duration_block_gets_a_fixed_end(client, db_session, fam):
 def test_an_indefinite_block_lasts_until_lifted(client, db_session, fam):
     _, c, apps = fam
     [b] = _block(client, c, apps, "TikTok", block_type="indefinite").json()
-    assert b["description"] == "until you lift it"
+    assert b["description"] == "no end time"
     lifted = client.post(f"/app-blocks/{b['id']}/lift", headers=auth("pa")).json()
     assert (lifted["state"], lifted["resolved_reason"]) == ("lifted", "parent_lifted")
     assert _in_force(client, c) == []

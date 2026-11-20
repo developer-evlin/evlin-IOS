@@ -494,3 +494,48 @@ def test_a_task_icon_is_one_emoji(client, db_session, icon, ok):
     assert (r.status_code == 200) == ok
     if ok:
         assert r.json()["icon"] == (icon or None)
+
+
+def test_editing_repeat_days_drops_today_and_later_days_it_left(client, db_session):
+    """Moving a repeating task off today takes today's occurrence (and any
+    later one already made for a day it left) out of the database; work the
+    kid sent in, and days it still falls on, stay."""
+    from datetime import timedelta
+    from blocks import local_now
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    today = local_now(c).date()
+    task = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={
+        "title": "Water the plants", "recurrence": "daily", "due_date": (today - timedelta(days=7)).isoformat()}).json()
+    days = [today - timedelta(days=1), today, today + timedelta(days=1), today + timedelta(days=2)]
+    for d in days:
+        assert client.get(f"/children/{c.id}/occurrences", headers=auth("pa"), params={"target_date": d.isoformat()}).status_code == 200
+    codes = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    keep = codes[(today + timedelta(days=2)).weekday()]
+
+    # A different task's sent-in work today is untouched; this task's own
+    # sent-in day is kept too.
+    sent = db_session.query(models.Occurrence).filter_by(task_id=uuid.UUID(task["id"]), due_date=today + timedelta(days=1)).one()
+    sent.status = "submitted"
+    db_session.commit()
+
+    r = client.put(f"/tasks/{task['id']}", headers=auth("pa"), json={"title": "Water the plants", "recurrence": keep})
+    assert r.status_code == 200, r.text
+    db_session.expire_all()
+    left = {o.due_date for o in db_session.query(models.Occurrence).filter_by(task_id=uuid.UUID(task["id"]))}
+    # Yesterday is history; today is gone; tomorrow was sent in; the day it
+    # still falls on stays.
+    assert left == {today - timedelta(days=1), today + timedelta(days=1), today + timedelta(days=2)}
+
+
+def test_title_only_edit_leaves_occurrences_alone(client, db_session):
+    from blocks import local_now
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p)
+    today = local_now(c).date()
+    task = client.post(f"/children/{c.id}/tasks", headers=auth("pa"), json={
+        "title": "Read", "recurrence": "daily", "due_date": today.isoformat()}).json()
+    client.get(f"/children/{c.id}/occurrences", headers=auth("pa"), params={"target_date": today.isoformat()})
+    client.put(f"/tasks/{task['id']}", headers=auth("pa"), json={"title": "Read a book", "recurrence": "daily"})
+    db_session.expire_all()
+    assert db_session.query(models.Occurrence).filter_by(task_id=uuid.UUID(task["id"])).count() == 1

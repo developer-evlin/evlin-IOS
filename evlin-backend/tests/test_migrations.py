@@ -49,7 +49,7 @@ def test_every_new_table_has_a_migration_matching_its_model():
 
     sql = "\n".join(main._MIGRATIONS)
     for model in (models.AppBlock, models.App, models.ChildApp, models.ChatConversation,
-                  models.ChildMemory, models.TimeGrant, models.ChildVideoProfile, models.VideoQueueItem,
+                  models.ChildMemory, models.TimeGrant,
                   models.EmailVerification):
         table = model.__tablename__
         assert f"app.{table}" in sql, f"{table} has a model but no migration"
@@ -116,22 +116,3 @@ def test_the_library_tables_are_dropped_and_voice_kinds_retired():
     assert "ALTER TABLE app.submissions DROP COLUMN IF EXISTS duration_seconds" in sql
 
 
-def test_parent_and_family_events_are_removed_and_every_event_gets_a_child():
-    """Evlin keeps the children's calendars only. Parent events go, family-wide
-    ones move to the only child if there is exactly one, the rest go, and
-    only then can child_id become required. Nothing may add the parent
-    column back."""
-    sql = main._MIGRATIONS
-    joined = "\n".join(sql)
-    assert "ADD COLUMN IF NOT EXISTS is_parent_only" not in joined
-
-    def at(fragment):
-        return next(i for i, s in enumerate(sql) if fragment in s)
-
-    parent_events = at("DELETE FROM app.events WHERE child_id IS NULL AND is_parent_only")
-    attach = at("UPDATE app.events SET child_id = (SELECT id FROM app.children)")
-    leftovers = sql.index("DELETE FROM app.events WHERE child_id IS NULL")
-    drop = sql.index("ALTER TABLE app.events DROP COLUMN IF EXISTS is_parent_only")
-    required = sql.index("ALTER TABLE app.events ALTER COLUMN child_id SET NOT NULL")
-    assert parent_events < attach < leftovers < required
-    assert parent_events < drop

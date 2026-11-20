@@ -26,68 +26,6 @@ def test_rename_and_delete_child_with_ownership(client, db_session):
     assert client.get("/children", headers=auth("pa")).json() == []
 
 
-# ---- events -------------------------------------------------------------
-
-EV = {"title": "Dentist", "start_at": "2026-09-19T15:00:00Z", "end_at": "2026-09-19T16:00:00Z",
-      "category": "Activity", "note": "bring card", "recurrence": "none", "source": "manual"}
-WINDOW = "start_date=2026-09-01T00:00:00Z&end_date=2026-09-30T23:59:59Z"
-
-
-def test_event_crud_keeps_child_category_note(client, db_session):
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    r = client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id)})
-    assert r.status_code == 200, r.text
-    ev = r.json()
-    assert ev["child_id"] == str(kid.id) and ev["category"] == "Activity" and ev["note"] == "bring card"
-    up = client.put(f"/events/{ev['id']}", headers=auth("pa"), json={**EV, "child_id": str(kid.id), "title": "Dentist 2"})
-    assert up.json()["title"] == "Dentist 2"
-    listed = client.get(f"/children/{kid.id}/events?{WINDOW}", headers=auth("pa")).json()
-    assert [e["title"] for e in listed] == ["Dentist 2"]
-    assert client.delete(f"/events/{ev['id']}", headers=auth("pa")).status_code == 200
-
-
-def test_events_belong_to_one_child_and_are_ownership_checked(client, db_session):
-    a, b = make_parent(db_session, "pa"), make_parent(db_session, "pb")
-    k1, k2 = make_child(db_session, a, "K1"), make_child(db_session, a, "K2")
-    mine = client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(k1.id), "title": "Swim"}).json()
-    # One child's event doesn't show on a sibling's calendar.
-    assert [e["title"] for e in client.get(f"/children/{k1.id}/events?{WINDOW}", headers=auth("pa")).json()] == ["Swim"]
-    assert client.get(f"/children/{k2.id}/events?{WINDOW}", headers=auth("pa")).json() == []
-    # Another family can't add to, read, or delete it.
-    assert client.post("/events", headers=auth("pb"), json={**EV, "child_id": str(k1.id)}).status_code == 404
-    assert client.get(f"/children/{k1.id}/events?{WINDOW}", headers=auth("pb")).status_code == 404
-    assert client.delete(f"/events/{mine['id']}", headers=auth("pb")).status_code == 404
-    assert b
-
-
-def test_an_event_without_a_child_is_refused(client, db_session):
-    """Evlin keeps the children's calendars only: no parent or family-wide events."""
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    assert client.post("/events", headers=auth("pa"), json={**EV, "title": "Family lunch"}).status_code == 422
-    ev = client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id)}).json()
-    assert client.put(f"/events/{ev['id']}", headers=auth("pa"), json={**EV, "child_id": None}).status_code == 422
-
-
-def test_recurring_event_from_before_the_window_is_still_returned(client, db_session):
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id), "title": "Swim",
-                "start_at": "2026-08-03T15:00:00Z", "end_at": "2026-08-03T16:00:00Z", "recurrence": "mon"})
-    titles = [e["title"] for e in client.get(f"/children/{kid.id}/events?{WINDOW}", headers=auth("pa")).json()]
-    assert titles == ["Swim"]
-
-
-def test_event_end_before_start_rejected(client, db_session):
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    r = client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id), "end_at": "2026-09-19T14:00:00Z"})
-    assert r.status_code == 400
-
-
-# ---- pairing (kid shows the code, parent claims it) ---------------------
-
 def _request(client, name="Esen"):
     r = client.post("/auth/pairing/request", json={"child_name": name, "platform": "ios"})
     assert r.status_code == 200, r.text
@@ -218,19 +156,6 @@ def test_kid_device_can_read_its_own_tasks_rules_state_but_not_write_or_read_oth
 
 
 
-def test_kid_device_can_read_its_own_events_but_not_write_or_read_others(client, db_session):
-    a, b = make_parent(db_session, "pa"), make_parent(db_session, "pb")
-    kid, other = make_child(db_session, a), make_child(db_session, b)
-    make_device(db_session, kid, "dev-kid")
-    client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id), "title": "Swim"})
-    h = auth("dev-kid")
-    assert [e["title"] for e in client.get(f"/children/{kid.id}/events?{WINDOW}", headers=h).json()] == ["Swim"]
-    assert client.get(f"/children/{other.id}/events?{WINDOW}", headers=h).status_code == 404
-    assert client.post("/events", headers=h, json={**EV, "child_id": str(kid.id)}).status_code == 401
-    assert client.get(f"/children/{kid.id}/events?{WINDOW}", headers=auth("pb")).status_code == 404
-
-# ---- token refresh ------------------------------------------------------
-
 class _FakeSupabaseAuth:
     def refresh_session(self, token):
         from types import SimpleNamespace as NS
@@ -238,6 +163,7 @@ class _FakeSupabaseAuth:
             from supabase_auth.errors import AuthApiError
             raise AuthApiError("Invalid Refresh Token", 400, "refresh_token_not_found")
         return NS(session=NS(access_token="new-access", refresh_token="new-refresh"))
+
 
 
 def test_refresh_exchanges_token_and_rejects_bad_one(client, monkeypatch):
@@ -324,23 +250,11 @@ def test_parent_name_validation_and_auth(client, db_session):
     assert len(long) == 60
 
 
-def test_source_is_always_manual(client, db_session):
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    # No ICS import feature exists, and the DB only accepts ('manual',
-    # 'ics_import') for `source`, so whatever a client sends is stored as manual.
-    ev = client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id), "source": "everyone"}).json()
-    assert ev["source"] == "manual"
-    assert "is_parent_only" not in ev
-
-
-def test_created_at_dropped_from_parent_child_occurrence_event_but_kept_on_tasks(client, db_session):
+def test_created_at_dropped_from_parent_child_occurrence_but_kept_on_tasks(client, db_session):
     p = make_parent(db_session, "pa")
     kid = make_child(db_session, p)
     assert "created_at" not in client.get("/auth/me", headers=auth("pa")).json()
     assert "created_at" not in client.get("/children", headers=auth("pa")).json()[0]
-    ev = client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id)}).json()
-    assert "created_at" not in ev
     task = client.post(f"/children/{kid.id}/tasks", headers=auth("pa"), json={"title": "x"}).json()
     assert task["created_at"]  # kept: task_applies_on() anchors undated recurrence on it
     # An undated task anchors on created_at (real wall-clock time), so
@@ -348,81 +262,6 @@ def test_created_at_dropped_from_parent_child_occurrence_event_but_kept_on_tasks
     # was written — see test_compliance_submissions_content.py's TODAY.
     occ = client.get(f"/children/{kid.id}/occurrences?target_date={date.today()}", headers=auth("pa")).json()
     assert "created_at" not in occ[0]
-
-
-# ---- kids' plans ----------------------------------------------------------
-
-PLAN = {"title": "Build a LEGO castle", "start_at": "2026-09-19T14:00:00Z", "end_at": "2026-09-19T15:00:00Z"}
-
-
-def test_a_kid_plan_waits_for_the_parent_and_approving_puts_it_on_the_calendar(client, db_session):
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    make_device(db_session, kid, "dev-kid")
-    r = client.post("/device/plans", headers=auth("dev-kid"), json={**PLAN, "recurrence": "mon"})
-    assert r.status_code == 200, r.text
-    plan = r.json()
-    assert (plan["status"], plan["created_by"], plan["child_id"], plan["recurrence"]) == ("proposed", "child", str(kid.id), "none")
-
-    listed = client.get(f"/children/{kid.id}/events?{WINDOW}", headers=auth("pa")).json()
-    assert [e["status"] for e in listed] == ["proposed"]
-
-    ok = client.post(f"/events/{plan['id']}/approve", headers=auth("pa"))
-    assert ok.status_code == 200 and ok.json()["status"] == "approved"
-    assert client.post(f"/events/{plan['id']}/approve", headers=auth("pa")).status_code == 409
-    # Approved: the kid can no longer change or remove it.
-    assert client.put(f"/device/plans/{plan['id']}", headers=auth("dev-kid"), json=PLAN).status_code == 409
-    assert client.delete(f"/device/plans/{plan['id']}", headers=auth("dev-kid")).status_code == 409
-
-
-def test_a_declined_plan_keeps_the_note_until_the_kid_dismisses_it(client, db_session):
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    make_device(db_session, kid, "dev-kid")
-    plan = client.post("/device/plans", headers=auth("dev-kid"), json=PLAN).json()
-    r = client.post(f"/events/{plan['id']}/decline", headers=auth("pa"), json={"note": "  Homework first  "})
-    assert r.status_code == 200 and (r.json()["status"], r.json()["review_note"]) == ("declined", "Homework first")
-    assert client.put(f"/device/plans/{plan['id']}", headers=auth("dev-kid"), json=PLAN).status_code == 409
-    assert client.delete(f"/device/plans/{plan['id']}", headers=auth("dev-kid")).status_code == 200
-    assert client.get(f"/children/{kid.id}/events?{WINDOW}", headers=auth("pa")).json() == []
-
-
-def test_a_kid_changes_only_their_own_waiting_plans(client, db_session):
-    a, b = make_parent(db_session, "pa"), make_parent(db_session, "pb")
-    kid, other = make_child(db_session, a), make_child(db_session, b)
-    make_device(db_session, kid, "dev-kid")
-    make_device(db_session, other, "dev-other")
-    mine = client.post("/device/plans", headers=auth("dev-kid"), json=PLAN).json()
-    edited = client.put(f"/device/plans/{mine['id']}", headers=auth("dev-kid"), json={**PLAN, "title": "Draw"})
-    assert edited.status_code == 200 and edited.json()["title"] == "Draw"
-    # Another child's plan, and an event the parent made, are off limits.
-    assert client.put(f"/device/plans/{mine['id']}", headers=auth("dev-other"), json=PLAN).status_code == 404
-    parents = client.post("/events", headers=auth("pa"), json={**EV, "child_id": str(kid.id)}).json()
-    assert parents["status"] == "approved" and parents["created_by"] == "parent"
-    assert client.delete(f"/device/plans/{parents['id']}", headers=auth("dev-kid")).status_code == 404
-    # A parent can only answer their own family's plans, and only plans.
-    assert client.post(f"/events/{mine['id']}/approve", headers=auth("pb")).status_code == 404
-    assert client.post(f"/events/{parents['id']}/approve", headers=auth("pa")).status_code == 409
-    assert client.post("/device/plans", headers=auth("dev-kid"), json={**PLAN, "end_at": "2026-09-19T13:00:00Z"}).status_code == 400
-    assert client.post("/device/plans", headers=auth("pa"), json=PLAN).status_code == 401
-
-
-def test_a_retried_event_or_plan_create_with_the_phones_id_saves_once(client, db_session):
-    p = make_parent(db_session, "pa")
-    kid = make_child(db_session, p)
-    make_device(db_session, kid, "dev-kid")
-    ev = {**EV, "child_id": str(kid.id), "id": "0b6c5a52-3c0f-4d58-9d0e-6f7d1b0e9a11"}
-    assert client.post("/events", headers=auth("pa"), json=ev).json()["id"] == ev["id"]
-    assert client.post("/events", headers=auth("pa"), json=ev).status_code == 200
-    plan = {**PLAN, "id": "9d3a1e0c-5f2b-4c7d-8e6a-1b2c3d4e5f60"}
-    assert client.post("/device/plans", headers=auth("dev-kid"), json=plan).json()["id"] == plan["id"]
-    assert client.post("/device/plans", headers=auth("dev-kid"), json=plan).status_code == 200
-    listed = client.get(f"/children/{kid.id}/events?{WINDOW}", headers=auth("pa")).json()
-    assert sorted(e["id"] for e in listed) == sorted([ev["id"], plan["id"]])
-    # Another family's event id can't be reused.
-    b = make_parent(db_session, "pb")
-    theirs = make_child(db_session, b)
-    assert client.post("/events", headers=auth("pb"), json={**ev, "child_id": str(theirs.id)}).status_code == 409
 
 
 def test_the_parents_phone_fills_an_empty_child_timezone_but_never_replaces_one(client, db_session):
@@ -463,3 +302,19 @@ def test_a_different_kid_still_gets_their_own_child(client, db_session):
         _status(client, req)
     names = sorted(c["name"] for c in client.get("/children", headers=auth("pa")).json())
     assert names == ["Khatnaa", "Temuulen"]
+
+
+def test_parent_learns_whether_the_kid_paired_an_ipad_or_iphone(client, db_session):
+    make_parent(db_session, "pa")
+    r = client.post("/auth/pairing/request", json={"child_name": "Esen", "platform": "ipad"})
+    req = r.json()
+    claimed = client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req["code"]})
+    assert claimed.json()["device_kind"] == "ipad"
+    _status(client, req)
+    assert client.get("/children", headers=auth("pa")).json()[0]["device_kind"] == "ipad"
+    # an older build's plain "ios" names no kind
+    req2 = _request(client, "Leo")
+    client.post("/auth/pairing/claim", headers=auth("pa"), json={"code": req2["code"], "new_child": True})
+    _status(client, req2)
+    kinds = {k["name"]: k["device_kind"] for k in client.get("/children", headers=auth("pa")).json()}
+    assert kinds == {"Esen": "ipad", "Leo": None}

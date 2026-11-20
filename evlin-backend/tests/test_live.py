@@ -116,19 +116,6 @@ def test_a_submission_is_traced_to_its_child_through_the_occurrence(db_session, 
     assert child_topic(c.id) in _heard(announced)
 
 
-def test_an_event_is_announced_to_its_childs_family(db_session, family, announced):
-    # Every event belongs to a child, so its family is always known.
-    p, c = family
-    announced.clear()
-    now = datetime.now(timezone.utc)
-
-    db_session.add(models.Event(child_id=c.id, title="Swim", start_at=now, end_at=now))
-    db_session.commit()
-
-    assert child_topic(c.id) in _heard(announced)
-    assert parent_topic(p.id) in _heard(announced)
-
-
 def test_a_parent_hears_about_a_child_joining_their_family(db_session, family, announced):
     p, _ = family
     newcomer = models.Child(name="New", birth_year=2016, color_index=1, avatar_url="")

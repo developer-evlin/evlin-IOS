@@ -140,4 +140,6 @@ def describe(block: models.AppBlock, now_local: datetime, task_title: str | None
         return f"until '{task_title}' is approved" if task_title else "until a task is approved"
     if kind == "scheduled":
         return f"{_day_span(_days_of(block))} {_clock(block.schedule_start)}–{_clock(block.schedule_end)}"
-    return "until you lift it"
+    # Neutral, and true for whoever reads it: the parent, the kid's
+    # device, the chat model.
+    return "no end time"

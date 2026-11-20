@@ -47,6 +47,15 @@ def update_child_rules(child_id: UUID, rules_update: schemas.ChildRuleUpdate, cu
         # day" — store None, not an empty dict, so _base_limit_for's own
         # `if rule.weekly_schedule:` check treats it as absent.
         rules.weekly_schedule = rules_update.weekly_schedule or None
+    if rules_update.downtime_days is not None:
+        # Every day is stored as NULL, as before there were days to pick.
+        days = rules_update.downtime_days
+        rules.downtime_days = days if 0 < len(days) < 7 else None
+    if rules_update.downtime_schedule is not None:
+        # {} goes back to one set of hours.
+        rules.downtime_schedule = rules_update.downtime_schedule or None
+    if rules_update.downtime_clear:
+        rules.downtime_schedule = None
     rules.updated_at = datetime.now(timezone.utc)
     
     db.commit()
@@ -77,6 +86,8 @@ def update_child_state(child_id: UUID, state_update: schemas.ChildStateUpdate, c
         
     state.manual_lock = state_update.manual_lock
     state.task_gate_override = state_update.task_gate_override
+    if state_update.instant_unlock is not None:
+        state.instant_unlock = state_update.instant_unlock
     state.updated_at = datetime.now(timezone.utc)
 
     db.commit()

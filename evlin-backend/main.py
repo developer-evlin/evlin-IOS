@@ -5,7 +5,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
 from database import get_db
-from routers import auth, tasks, occurrences, submissions, rules, calendar, children, compliance, time_grants, chat, app_blocks, live, apps, policy, videos
+from routers import auth, tasks, occurrences, submissions, rules, children, compliance, time_grants, chat, app_blocks, live, apps, policy, access_codes
 from routers.auth import limiter
 from storage import storage_configured
 import app_catalog
@@ -34,9 +34,6 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 _MIGRATIONS = [
     "ALTER TABLE app.parents ADD COLUMN IF NOT EXISTS name text",
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS due_date date",
-    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS category text",
-    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS note text",
-    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS recurrence text NOT NULL DEFAULT 'none'",
     "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS daily_limit_enabled boolean NOT NULL DEFAULT true",
     "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS custom_rules jsonb NOT NULL DEFAULT '[]'::jsonb",
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS category text",
@@ -92,7 +89,6 @@ _MIGRATIONS = [
     "ALTER TABLE app.parents DROP COLUMN IF EXISTS created_at",
     "ALTER TABLE app.children DROP COLUMN IF EXISTS created_at",
     "ALTER TABLE app.occurrences DROP COLUMN IF EXISTS created_at",
-    "ALTER TABLE app.events DROP COLUMN IF EXISTS created_at",
     # Reserved for a future kid-side per-task icon — see models.py.
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS icon text",
     """CREATE TABLE IF NOT EXISTS app.device_pairings (
@@ -124,6 +120,10 @@ _MIGRATIONS = [
     # plan doc. All additive; NULL/'parent' defaults keep every existing
     # row's meaning unchanged.
     "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS weekly_schedule jsonb",
+    # Downtime on chosen weekdays only; NULL keeps it every day.
+    "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS downtime_days jsonb",
+    # Downtime hours of its own on each day; NULL keeps one set of hours.
+    "ALTER TABLE app.child_rules ADD COLUMN IF NOT EXISTS downtime_schedule jsonb",
     "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT 'parent'",
     "ALTER TABLE app.time_grants ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT 'parent'",
     # Phase C: real Chat AI — one running conversation per child.
@@ -267,6 +267,9 @@ _MIGRATIONS = [
     # Apps get Evlin's own identity — see app_catalog.py. The catalog is
     # global; child_apps is each child's lockable list.
     "ALTER TABLE app.children ADD COLUMN IF NOT EXISTS timezone text",
+    # The screen time access code moved to the server (app.access_codes,
+    # 2026-11-19): the per-child secret the devices worked it out from goes.
+    "ALTER TABLE app.children DROP COLUMN IF EXISTS access_secret",
     """CREATE TABLE IF NOT EXISTS app.apps (
         id uuid PRIMARY KEY,
         name text NOT NULL,
@@ -301,58 +304,10 @@ _MIGRATIONS = [
                           WHERE lower(al) = lower(b.app_name)))""",
     """UPDATE app.app_blocks SET ends_at = created_at + make_interval(mins => duration_minutes)
         WHERE block_type = 'duration' AND ends_at IS NULL AND duration_minutes IS NOT NULL""",
-    # Evlin keeps the children's calendars only: no parent events, no
-    # family-wide ones. Every event gets a child, in this order, each step a
-    # no-op on reruns:
-    # 1. The parent's own events go (only while the column that marks them
-    #    still exists).
-    """DO $$
-    BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema = 'app' AND table_name = 'events' AND column_name = 'is_parent_only') THEN
-            DELETE FROM app.events WHERE child_id IS NULL AND is_parent_only;
-        END IF;
-    END $$""",
-    # 2. Family-wide events have no owner column, so the family can't be
-    #    traced. With exactly one child in the whole database they can only
-    #    be that child's, and move there; otherwise step 3 removes them.
-    """UPDATE app.events SET child_id = (SELECT id FROM app.children)
-        WHERE child_id IS NULL AND (SELECT count(*) FROM app.children) = 1""",
-    "DELETE FROM app.events WHERE child_id IS NULL",
-    "ALTER TABLE app.events DROP COLUMN IF EXISTS is_parent_only",
-    "ALTER TABLE app.events ALTER COLUMN child_id SET NOT NULL",
-    # Today's videos: a parent-approved list per child per day, filtered by
-    # the child's video profile. Not the removed courses — no shared course
-    # content, no lessons; see models.py's VideoQueueItem.
-    """CREATE TABLE IF NOT EXISTS app.child_video_profiles (
-        child_id uuid PRIMARY KEY REFERENCES app.children(id) ON DELETE CASCADE,
-        allowed_categories jsonb NOT NULL DEFAULT '[]',
-        blocked_keywords jsonb NOT NULL DEFAULT '[]',
-        allowed_channels jsonb NOT NULL DEFAULT '[]',
-        blocked_channels jsonb NOT NULL DEFAULT '[]',
-        daily_minutes integer NOT NULL DEFAULT 30,
-        max_video_minutes integer NOT NULL DEFAULT 10,
-        updated_at timestamptz NOT NULL DEFAULT now()
-    )""",
-    """CREATE TABLE IF NOT EXISTS app.video_queue_items (
-        id uuid PRIMARY KEY,
-        child_id uuid NOT NULL REFERENCES app.children(id) ON DELETE CASCADE,
-        local_date date NOT NULL,
-        position integer NOT NULL DEFAULT 0,
-        video_id text NOT NULL,
-        title text NOT NULL,
-        channel_id text,
-        channel_title text,
-        thumbnail_url text,
-        duration_seconds integer NOT NULL,
-        category text,
-        added_by_parent_id uuid REFERENCES app.parents(id) ON DELETE SET NULL,
-        watched_seconds integer NOT NULL DEFAULT 0,
-        completed_at timestamptz,
-        created_at timestamptz NOT NULL DEFAULT now()
-    )""",
-    """CREATE INDEX IF NOT EXISTS video_queue_items_child_date_idx
-        ON app.video_queue_items(child_id, local_date, position)""",
+    # The YouTube video pipeline (video profiles, a daily video list) was
+    # removed. Its tables go, if a deploy ever created them.
+    "DROP TABLE IF EXISTS app.video_queue_items",
+    "DROP TABLE IF EXISTS app.child_video_profiles",
     # Email sign-up codes (email_verification.py). The account is created
     # only after the code matches; one row per address and purpose.
     """CREATE TABLE IF NOT EXISTS app.email_verifications (
@@ -372,14 +327,12 @@ _MIGRATIONS = [
     # Sign in with Apple: the encrypted refresh token that account deletion
     # revokes (apple_auth.py).
     "ALTER TABLE app.parents ADD COLUMN IF NOT EXISTS apple_refresh_token_enc text",
-    # Kids' plans: events a child proposes and the parent approves or
-    # declines (routers/calendar.py). Existing events are the parent's and
-    # already on the calendar.
-    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS created_by text NOT NULL DEFAULT 'parent'",
-    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'approved'",
-    "ALTER TABLE app.events ADD COLUMN IF NOT EXISTS review_note text",
-    # Never used; kids' plans live in app.events.
+    # Never used.
     "DROP TABLE IF EXISTS app.event_proposals",
+    # The calendar was removed (2026-10-28): events (kids' plans included)
+    # and calendar feeds go. Tasks are untouched.
+    "DROP TABLE IF EXISTS app.events",
+    "DROP TABLE IF EXISTS app.ics_feeds",
     # One occurrence per task per day. Two requests in the same sync (the
     # occurrences list and the policy) both made today's occurrences, check
     # then insert, so a task could end up with two: one approved, one still
@@ -413,6 +366,32 @@ _MIGRATIONS = [
         revoked_at timestamptz
     )""",
     """CREATE INDEX IF NOT EXISTS parent_sessions_parent_idx ON app.parent_sessions(parent_id)""",
+    # A one-line goal on the child, briefly; goals (below) replaced it.
+    "ALTER TABLE app.children DROP COLUMN IF EXISTS active_goal",
+    # Server-side goals were removed, with the rest of milestones. Column
+    # first, then the table it points at.
+    "ALTER TABLE app.tasks DROP COLUMN IF EXISTS goal_id",
+    "DROP TABLE IF EXISTS app.goals",
+    # The kid finished setting their device up (models.Device).
+    "ALTER TABLE app.devices ADD COLUMN IF NOT EXISTS setup_completed_at timestamptz",
+    # Family Sharing's hand-off between the two devices (models.Device).
+    "ALTER TABLE app.devices ADD COLUMN IF NOT EXISTS setup_stage text",
+    # Instant unlock: work sent in opens the device (models.ChildState).
+    "ALTER TABLE app.child_state ADD COLUMN IF NOT EXISTS instant_unlock boolean NOT NULL DEFAULT false",
+    # One day of a repeating task, or the rest of it, deleted or edited on
+    # its own (models.Task; routers/tasks.py cut and split).
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS skipped_dates jsonb",
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS repeat_until date",
+    # The screen time access code (models.AccessCode, routers/access_codes.py).
+    """CREATE TABLE IF NOT EXISTS app.access_codes (
+        id uuid PRIMARY KEY,
+        parent_id uuid NOT NULL REFERENCES app.parents(id) ON DELETE CASCADE,
+        code text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        expires_at timestamptz NOT NULL,
+        used_at timestamptz
+    )""",
+    "CREATE INDEX IF NOT EXISTS access_codes_parent_idx ON app.access_codes (parent_id, expires_at)",
 ]
 
 
@@ -446,10 +425,10 @@ def run_migrations():
 app.include_router(auth.router)
 app.include_router(children.router)
 app.include_router(tasks.router)
+app.include_router(access_codes.router)
 app.include_router(occurrences.router)
 app.include_router(submissions.router)
 app.include_router(rules.router)
-app.include_router(calendar.router)
 app.include_router(compliance.router)
 app.include_router(time_grants.router)
 app.include_router(chat.router)
@@ -457,7 +436,6 @@ app.include_router(app_blocks.router)
 app.include_router(live.router)
 app.include_router(apps.router)
 app.include_router(policy.router)
-app.include_router(videos.router)
 
 @app.get("/")
 def read_root():
@@ -470,8 +448,7 @@ from sqlalchemy import text
 # hits a 500 on the feature that needs it.
 _EXPECTED_COLUMNS = [
     ("app.parents", "name"), ("app.tasks", "due_date"),
-    ("app.events", "category"), ("app.events", "note"), ("app.events", "recurrence"),
-    ("app.events", "created_by"), ("app.events", "status"), ("app.events", "review_note"),
+    ("app.child_state", "instant_unlock"),
     ("app.child_rules", "daily_limit_enabled"), ("app.child_rules", "custom_rules"),
     # A model with no matching migration is a table that doesn't exist in
     # production — the failure shows up as a 500 in whatever feature needed
@@ -480,9 +457,12 @@ _EXPECTED_COLUMNS = [
     ("app.app_blocks", "block_type"), ("app.child_memory", "fact"),
     ("app.children", "timezone"), ("app.apps", "aliases"), ("app.child_apps", "app_id"),
     ("app.app_blocks", "app_id"), ("app.app_blocks", "schedule_days"),
-    ("app.child_video_profiles", "allowed_categories"), ("app.video_queue_items", "local_date"),
     ("app.email_verifications", "code_hash"), ("app.parents", "apple_refresh_token_enc"),
     ("app.chat_messages", "agent"), ("app.parent_sessions", "token_hash"),
+    ("app.child_rules", "downtime_days"), ("app.devices", "setup_completed_at"),
+    ("app.child_rules", "downtime_schedule"), ("app.devices", "setup_stage"),
+    ("app.tasks", "skipped_dates"), ("app.tasks", "repeat_until"),
+    ("app.access_codes", "code"),
 ]
 
 

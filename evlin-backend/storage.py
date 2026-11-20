@@ -30,8 +30,12 @@ def get_s3_client():
         region_name="auto",
     )
 
-def generate_presigned_upload_url(object_name: str, content_type: str, expiration=3600):
+def generate_presigned_upload_url(object_name: str, content_type: str, expiration=3600,
+                                  content_length: int | None = None):
     """
+    `content_length`, when known, is signed into the link: R2 then refuses
+    an upload of any other size, so a link can't be used to store more.
+
     Generate a presigned URL to upload a file directly to R2. Returns None on
     any failure — including missing/misconfigured credentials (get_s3_client
     raises before this even reaches R2), which used to propagate uncaught
@@ -41,13 +45,12 @@ def generate_presigned_upload_url(object_name: str, content_type: str, expiratio
     """
     try:
         s3_client = get_s3_client()
+        params = {'Bucket': R2_BUCKET_NAME, 'Key': object_name, 'ContentType': content_type}
+        if content_length is not None:
+            params['ContentLength'] = content_length
         response = s3_client.generate_presigned_url(
             'put_object',
-            Params={
-                'Bucket': R2_BUCKET_NAME,
-                'Key': object_name,
-                'ContentType': content_type
-            },
+            Params=params,
             ExpiresIn=expiration
         )
         return response
@@ -74,6 +77,24 @@ def generate_presigned_download_url(object_name: str, expiration=3600):
     except Exception as e:
         print(f"Error generating presigned download URL: {e}")
         return None
+
+
+class StorageUnavailable(Exception):
+    """R2 couldn't be asked (down, or misconfigured): not an answer about
+    the file, so the caller should try again rather than decide anything."""
+
+
+def object_size(key: str) -> int | None:
+    """The size of a file in R2, or None when there's no such file. Raises
+    StorageUnavailable when R2 couldn't be asked."""
+    try:
+        head = get_s3_client().head_object(Bucket=R2_BUCKET_NAME, Key=key)
+    except Exception as e:
+        code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise StorageUnavailable(str(e)) from e
+    return int(head.get("ContentLength") or 0)
 
 
 def delete_objects(keys: list[str]) -> None:

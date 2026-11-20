@@ -47,9 +47,10 @@ def _stringify_tool_args(args: dict | None) -> dict:
 
 def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: list[models.Occurrence],
                    rule: models.ChildRule | None, memories: list | None = None,
-                   now: datetime | None = None, completed: list | None = None) -> str:
+                   now: datetime | None = None, completed: list | None = None,
+                   apps: list[str] | None = None, blocked: list[str] | None = None) -> str:
     today_occ_by_task = {o.task_id: o for o in occurrences}
-    lines = [f"You are Evlin, a parental-control assistant helping a parent manage {child.name}'s tasks and calendar."]
+    lines = [f"You are Evlin, a parental-control assistant helping a parent manage {child.name}'s tasks and screen time."]
     # Without this the model resolves "tomorrow at 6pm" against its training
     # cutoff — i.e. guesses. Most of what a parent says about scheduling is
     # relative, so every date it produces was unreliable until this was here.
@@ -70,22 +71,26 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
     lines.append("If the parent asks for several things in one message, call the tool once for each of them, "
                   "all in the same reply. Never pick a day or time the parent didn't give: if you'd have to "
                   "guess when, call ask_follow_up and ask.")
-    # One chat is about one child. Evlin manages the children's tasks and
-    # calendars only, never the parent's own schedule, so there's nothing
-    # to ask about whose a task or event is.
-    lines.append(f"Everything you draft is for {child.name}: every task and every calendar event. "
-                  f"Don't ask who it's for, and don't offer to add anything to the parent's own calendar "
-                  f"or a family calendar; Evlin only keeps {child.name}'s.")
-    lines.append("Never claim you created a task or added an event — you draft them, and the parent confirms. "
-                  "If asked for something you have no tool for — blocking an app (the parent can use the Block an app card "
-                  "in this chat), a bedtime/downtime rule, or extra screen time (both in the child's profile) — say plainly "
-                  "that you can't do that and where in the app it's done, rather than pretending it's done.")
-    # Videos belong to the YouTube agent, a separate pipeline behind the
-    # Library tab. This assistant has no video tools and no video context,
-    # so it hands the parent over rather than half-answering.
-    lines.append(f"Finding, choosing or changing YouTube videos for {child.name} isn't done here: it's the Library tab, "
-                  "which has its own assistant for videos. If the parent asks about videos, say so in one sentence; "
-                  "never suggest or name specific videos or channels yourself.")
+    # One chat is about one child, so there's nothing to ask about whose a
+    # task is. Evlin has no calendar: events and appointments aren't kept.
+    lines.append(f"Everything you draft is for {child.name}. Don't ask who it's for. Evlin has no calendar: "
+                  "if the parent wants to add an event or appointment, say in one sentence that Evlin keeps tasks, "
+                  "not a calendar, and offer a task instead only if it's something the child does.")
+    lines.append("Never claim you created a task — you draft it, and the parent confirms. "
+                  "If asked for something you have no tool for — a bedtime/downtime rule, or extra screen time (both in "
+                  "the child's profile) — say plainly that you can't do that and where in the app it's done, rather than "
+                  "pretending it's done.")
+    # Blocking: what the child's phone can block and what already is, so the
+    # agent names a real app and doesn't block one twice.
+    if apps is not None:
+        lines.append(f"Apps on {child.name}'s list: {', '.join(apps) if apps else 'none yet'}. "
+                      "Any app in Evlin's catalog can be blocked; Block adds it to the list.")
+    if blocked:
+        lines.append(f"Blocked right now: {'; '.join(blocked)}.")
+    # Videos are lessons in the kid's Library, not something this assistant
+    # finds or picks, so it says so rather than half-answering.
+    lines.append(f"Choosing YouTube videos for {child.name} isn't done in this chat. If the parent asks about videos, "
+                  "say so in one sentence; never suggest or name specific videos or channels yourself.")
     # The chat shows replies as plain text, so a markdown list with bold
     # labels reads as a wall. The app already lists what Evlin can do, with
     # icons, behind the ? button.
@@ -93,11 +98,11 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
     # happening, and beside each task's name, never as decoration. A task
     # drafted with draft_task carries its own emoji for the child's phone.
     lines.append("Write with emoji the way Notion's assistant does: start each reply with one emoji that says what "
-                  "you're doing (📝 drafting a task, 📅 an event, ❓ asking, 💡 suggesting), and put a task's emoji "
+                  "you're doing (📝 drafting a task, ⛔ blocking an app, ❓ asking, 💡 suggesting), and put a task's emoji "
                   "beside its name when you mention it. One or two per reply, never a row of them, never mid-word. "
                   "Every draft_task gets an emoji for the child's phone: the most specific one for the task.")
     lines.append("Keep replies short and conversational: one to three sentences, no bullet lists, headings or bold labels. "
-                  "If asked what you can do, say in one sentence that you draft tasks and calendar events "
+                  "If asked what you can do, say in one sentence that you draft tasks and app blocks "
                   "for the parent to confirm, and that the ? button at the top of the chat lists everything.")
     # Suggesting something to do: a real habit a parent can check, built on
     # what the child already does. The tile has its own faster path
@@ -106,6 +111,8 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
     if age is not None:
         lines.append(f"\n{child.name} is about {age} years old.")
     lines.append(ACTIVITY_RULE.format(name=child.name))
+    lines.append(TASK_RULE.format(name=child.name,
+                                  age=f"a {age}-year-old" if age is not None else "the child's age"))
     if completed:
         lines.append(f"{child.name} already does: {', '.join(completed)}.")
 
@@ -120,7 +127,12 @@ def _system_prompt(child: models.Child, tasks: list[models.Task], occurrences: l
     if rule:
         lines.append(f"\nDaily screen time limit: {rule.daily_limit_minutes} minutes.")
         if rule.downtime_enabled:
-            lines.append(f"Downtime: {rule.downtime_start}–{rule.downtime_end}.")
+            days = ", ".join(rule.downtime_days) if rule.downtime_days else "every day"
+            if rule.downtime_schedule:
+                hours = "; ".join(f"{d} {s['start']}–{s['end']}" for d, s in rule.downtime_schedule.items())
+                lines.append(f"Downtime, by day: {hours}.")
+            else:
+                lines.append(f"Downtime: {rule.downtime_start}–{rule.downtime_end}, {days}.")
 
     # Everything above is current state, queried live. This is the only part
     # that's remembered rather than looked up, so it's labelled as such —
@@ -279,15 +291,9 @@ async def send_chat_message(
         db.add(conversation)
         db.flush()
 
-    parent_text = body.text
-    if body.regenerate:
-        if body.conversation_id is None:
-            raise HTTPException(status_code=400, detail="Try again needs the conversation")
-        parent_text = _drop_reply_to_last_message(db, conversation, body.agent)
-    else:
-        db.add(models.ChatMessage(child_id=child_id, conversation_id=conversation.id,
-                                  parent_id=current_parent.id, role="user", text=body.text,
-                                  agent=body.agent))
+    db.add(models.ChatMessage(child_id=child_id, conversation_id=conversation.id,
+                              parent_id=current_parent.id, role="user", text=body.text,
+                              agent=body.agent))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -296,8 +302,6 @@ async def send_chat_message(
         return await _suggest_activities(db, child, conversation, now)
     if body.shortcut and body.agent == "chat":
         return _shortcut_reply(db, child, conversation, body.shortcut)
-    if body.agent == "youtube":
-        return await _youtube_turn(db, child, conversation, now)
 
     tasks = db.query(models.Task).filter(models.Task.child_id == child_id, models.Task.active == True).all()  # noqa: E712
     occurrences = db.query(models.Occurrence).filter(
@@ -328,7 +332,9 @@ async def send_chat_message(
     from memory import facts_for
     memories = facts_for(db, child_id)
     try:
-        text, calls = await generate_all(_system_prompt(child, tasks, occurrences, rule, memories, now, completed),
+        apps, blocked = _app_context(db, child, now)
+        text, calls = await generate_all(_system_prompt(child, tasks, occurrences, rule, memories, now, completed,
+                                                        apps, blocked),
                                          messages, tools=_TOOLS)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Chat request failed: {e}")
@@ -341,7 +347,7 @@ async def send_chat_message(
     from memory import extract_memories
     background.add_task(
         extract_memories, child_id,
-        [{"role": "parent", "text": parent_text},
+        [{"role": "parent", "text": body.text},
          {"role": "assistant", "text": rows[0].text}],
         rows[0].id,
     )
@@ -355,8 +361,24 @@ ACTIVITY_RULE = (
     "When asked for an activity or something {name} can do instead of screen time, draft 2 or 3 tasks with "
     "draft_task: real habits a parent can check by eye or photo (chores, self-care, tidying, helping at home, "
     "pet or plant care, practice that leaves something to show). Never play, games, walks or screens. Build on "
-    "what {name} already does without repeating it. Each repeats daily or on set weekdays; its instructions say "
-    "in one sentence what done looks like."
+    "what {name} already does without repeating it. Each repeats daily or on set weekdays. Keep it short: a "
+    "title of 2 to 5 words naming the exact thing, never a vague one ('Fold and put away laundry', not 'Help "
+    "with chores'; 'Wipe the kitchen table', not 'Clean up'), and instructions of at most 8 words saying what "
+    "done looks like, or none if the title already says it. No explanation of why unless the parent asks."
+)
+
+
+# What any task has to be, and what to do with a request that doesn't say.
+# "Add three tasks" used to come back as three invented ones; vague titles
+# ("Be productive") gave a parent nothing to check.
+TASK_RULE = (
+    "Every task is a physical thing {name} does that a parent can check by eye or photo, sized for {age}: "
+    "'Read 10 pages', 'Wipe the kitchen table', 'Make your bed', 'Practise piano 15 minutes'. Never vague or "
+    "abstract ('Be productive', 'Learn something', 'Help out', 'Practise mindfulness'). If the parent asks for "
+    "tasks without saying what kind ('add three tasks'), don't invent them: call ask_follow_up with one short "
+    "question, like 'What kind: chores, reading, homework, or should I pick?'. If they're unsure or say you "
+    "pick, draft that many chores that fit {age}, one card each, with titles of 2 to 5 words, repeating daily "
+    "or on set weekdays unless they gave a day."
 )
 
 
@@ -416,8 +438,20 @@ async def _suggest_activities(db: Session, child: models.Child, conversation: mo
 # time, after 4-5 seconds: a tile's sentence never says what or when.
 SHORTCUT_QUESTIONS = {
     "add_task": "What should {name} do, and when?",
-    "add_event": "What's going on {name}'s calendar, and when?",
+    "block_app": "Which app should I block for {name}, and for how long?",
 }
+
+
+def _app_context(db: Session, child: models.Child, now: datetime) -> tuple[list[str], list[str]]:
+    """The child's lockable apps by name, and what's blocked right now in
+    the app's own words ("YouTube: for 40 more minutes")."""
+    import blocks
+    from routers.app_blocks import blocks_in_force
+    from routers.apps import child_apps
+    names = [a.name for a in child_apps(db, child.id)]
+    by_id = {a.id: a.name for a in db.query(models.App).all()}
+    blocked = [f"{by_id.get(b.app_id, 'an app')}: {blocks.describe(b, now)}" for b in blocks_in_force(db, child, now)]
+    return names, blocked
 
 
 def _shortcut_reply(db: Session, child: models.Child, conversation: models.ChatConversation,
@@ -431,36 +465,6 @@ def _shortcut_reply(db: Session, child: models.Child, conversation: models.ChatC
     question = SHORTCUT_QUESTIONS[shortcut].format(name=child.name)
     rows = _store_replies(db, child, conversation, [(question, "ask_follow_up", {"question": question})], "chat")
     return _send_response(rows)
-
-
-def _drop_reply_to_last_message(db: Session, conversation: models.ChatConversation, agent: str) -> str:
-    """For "Try again": remove the reply to the parent's last message, and
-    anything memory learned from it, so the thread keeps one answer per
-    question rather than every attempt. Returns that message's text.
-    Drafts already turned into tasks or events stay: those were the parent's
-    own taps, and live in their own tables.
-    """
-    last = db.query(models.ChatMessage).filter(
-        models.ChatMessage.conversation_id == conversation.id,
-        models.ChatMessage.role == "user",
-        models.ChatMessage.agent == agent,
-    ).order_by(models.ChatMessage.created_at.desc()).first()
-    if last is None:
-        raise HTTPException(status_code=400, detail="There's no message to try again")
-    replies = db.query(models.ChatMessage).filter(
-        models.ChatMessage.conversation_id == conversation.id,
-        models.ChatMessage.role != "user",
-        models.ChatMessage.created_at >= last.created_at,
-        models.ChatMessage.id != last.id,
-    ).all()
-    ids = [r.id for r in replies]
-    if ids:
-        db.query(models.ChildMemory).filter(
-            models.ChildMemory.source_message_id.in_(ids)
-        ).delete(synchronize_session=False)
-        for r in replies:
-            db.delete(r)
-    return last.text
 
 
 def _store_replies(db: Session, child: models.Child, conversation: models.ChatConversation,
@@ -486,44 +490,6 @@ def _send_response(rows: list[models.ChatMessage]) -> schemas.ChatSendResponse:
     response = schemas.ChatSendResponse.model_validate(rows[0])
     response.extra_messages = [schemas.ChatMessageResponse.model_validate(r) for r in rows[1:]]
     return response
-
-
-# Until the YouTube agent exists, its turns get this honest answer instead.
-YOUTUBE_NOT_READY = "The YouTube agent isn't set up yet, so I can't look for videos right now."
-
-
-async def _youtube_turn(db: Session, child: models.Child, conversation: models.ChatConversation,
-                        now: datetime) -> schemas.ChatSendResponse:
-    """One turn of the YouTube agent, inside this thread.
-
-    It's given its own short memory (agent_sessions.youtube_context), never
-    the main chat's. And its turns don't feed chat's long-term memory
-    (memory.py): what it should remember between sessions is outcomes,
-    which are its own data.
-
-    The agent itself lives in the youtube_agent package, built separately
-    (docs/youtube-agent-handoff.md). It exports
-    `async def respond(db, child, context, now) -> list[(text, tool_call, tool_args)]`
-    with the same shape as _replies: one entry per message, the first with
-    the text. Like every assistant here, it drafts; the parent's tap writes.
-    """
-    from agent_sessions import youtube_context
-    try:
-        from youtube_agent import respond
-    except ModuleNotFoundError as e:
-        if e.name != "youtube_agent":
-            raise
-        respond = None
-
-    if respond is None:
-        replies = [(YOUTUBE_NOT_READY, None, None)]
-    else:
-        try:
-            replies = await respond(db, child, youtube_context(db, conversation.id), now)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"YouTube agent request failed: {e}")
-        replies = replies or [("...", None, None)]
-    return _send_response(_store_replies(db, child, conversation, replies, "youtube"))
 
 
 async def _replies(db: Session, child: models.Child, text: str | None, calls: list[FunctionCall],
@@ -553,13 +519,17 @@ async def _replies(db: Session, child: models.Child, text: str | None, calls: li
             return [(question, call.name, args)]
         check = tool_calls.FOLLOW_UPS.get(call.name)
         question = check(args, child.name, today) if check else None
+        resolve = tool_calls.RESOLVERS.get(call.name)
+        if not question and resolve is not None:
+            question = resolve(db, child, args)
         if question:
             return [(question, "ask_follow_up", {"question": question})]
         drafts.append((call.name, args))
 
     out = []
     for name, args in drafts:
-        out.append((tool_calls.REPLIES.get(name, tool_calls.DEFAULT_REPLY), name, args))
+        said = str(args.get(tool_calls.REPLY_ARGS.get(name, "")) or "").strip()
+        out.append((said or tool_calls.REPLIES.get(name, tool_calls.DEFAULT_REPLY), name, args))
 
     if len(out) > 1:
         # One line above the cards, not the same canned line repeated under

@@ -142,6 +142,16 @@ def deleted_r2_keys(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def r2_files(monkeypatch):
+    """What R2 holds, as a test puts it there (key -> size): checks for a
+    photo read this, never the network. Empty unless a test uploads."""
+    import storage
+    files: dict[str, int] = {}
+    monkeypatch.setattr(storage, "object_size", lambda key: files.get(key))
+    return files
+
+
+@pytest.fixture(autouse=True)
 def _no_real_memory_extraction(monkeypatch):
     """Memory extraction runs as a background task with its own session, so
     it bypasses the get_db override and would talk to a different database —

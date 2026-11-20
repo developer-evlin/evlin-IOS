@@ -8,6 +8,7 @@ from database import get_db
 from routers.auth import get_current_parent, get_current_device
 from access import assert_child_access, get_occurrence_for_parent
 from routers.time_grants import award_time_grant
+from routers.submissions import confirm_in_storage
 import storage
 
 router = APIRouter(tags=["occurrences"])
@@ -23,8 +24,19 @@ def task_applies_on(task: models.Task, day: date) -> bool:
     """
     start = task.due_date or (task.created_at.date() if task.created_at else day)
     rec = (task.recurrence or "none").strip().lower()
+    # Taken out of the series, or past its last day (routers/tasks.py cut
+    # and split). The phones' CalendarSync.RepeatRule reads the same.
+    if task.repeat_until is not None and day > task.repeat_until:
+        return False
+    if task.skipped_dates and day.isoformat() in task.skipped_dates:
+        return False
     if rec in ("", "none"):
         return day == start
+    # A repeating task falls on the day it was added for too, repeat day or
+    # not, then on its repeat days (2026-11-17): added on a Tuesday to
+    # repeat on Fridays, it's on that Tuesday and every Friday after.
+    if task.due_date is not None and day == task.due_date:
+        return True
     # created_at is a UTC server timestamp, so a device west of UTC can
     # still be on the previous local calendar day when it's already
     # "tomorrow" in UTC (e.g. 6pm Pacific = 1am UTC the next day). Without
@@ -136,23 +148,42 @@ def request_bypass(occurrence_id: UUID, bypass_req: schemas.OccurrenceBypassRequ
 
 # --- Endpoints the iOS client calls under /tasks/occurrences/... ---------
 
-@router.post("/tasks/occurrences/{occurrence_id}/submit", response_model=schemas.OccurrenceResponse)
-def submit_occurrence(occurrence_id: UUID, body: schemas.OccurrenceBypassRequest,
+@router.post("/tasks/occurrences/{occurrence_id}/submit", response_model=schemas.OccurrenceSubmitResponse)
+def submit_occurrence(occurrence_id: UUID, body: schemas.OccurrenceSubmitRequest,
                       current_device: models.Device = Depends(get_current_device),
                       db: Session = Depends(get_db)):
-    """Child marks a task done; it then waits for the parent's review."""
+    """Child marks a task done; it then waits for the parent's review.
+
+    The task and its photos arrive together: each of `photo_ids` is checked
+    in R2 and counts in the same commit that sends the task in, so the
+    parent never sees it sent in while its photos are still on the way. A
+    photo R2 doesn't have is answered in `missing_photo_ids` (the phone
+    uploads it again and sends again); the task is sent in regardless, so a
+    lost upload never leaves the kid's work unsent. Photos are optional."""
     occurrence = db.query(models.Occurrence).filter(models.Occurrence.id == occurrence_id).first()
     if not occurrence or occurrence.child_id != current_device.child_id:
         raise HTTPException(status_code=404, detail="Occurrence not found")
 
-    occurrence.status = "submitted"
-    occurrence.rejection_note = None   # a resubmission answers the earlier redo request
-    occurrence.completed_at = datetime.now(timezone.utc)
+    missing: list[UUID] = []
+    for photo_id in dict.fromkeys(body.photo_ids or []):
+        photo = db.query(models.Submission).filter(models.Submission.id == photo_id,
+                                                   models.Submission.occurrence_id == occurrence.id).first()
+        if photo is None or not confirm_in_storage(photo):
+            missing.append(photo_id)
+
+    # Sent again (a retry, or a photo that arrived late) after the parent
+    # approved: the approval stands.
+    if occurrence.status != "approved":
+        occurrence.status = "submitted"
+        occurrence.rejection_note = None   # a resubmission answers the earlier redo request
+        occurrence.completed_at = datetime.now(timezone.utc)
     if body.bypass_note:
         occurrence.bypass_note = body.bypass_note
     db.commit()
     db.refresh(occurrence)
-    return occurrence
+    answer = schemas.OccurrenceSubmitResponse.model_validate(occurrence)
+    answer.missing_photo_ids = missing
+    return answer
 
 
 def _award_task_bonus(occurrence: models.Occurrence, task: models.Task | None,

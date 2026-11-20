@@ -143,9 +143,10 @@ def test_system_prompt_lists_the_tools_actually_passed(client, db_session, monke
     assert "two tools" not in captured["prompt"]
 
 
-def test_the_assistant_has_exactly_the_task_and_calendar_tools(client, db_session, monkeypatch):
-    # Courses, reflections and app blocks are off the assistant: it assigns
-    # tasks and manages the calendar, and asks when it can't tell which.
+def test_the_assistant_has_exactly_the_task_calendar_and_block_tools(client, db_session, monkeypatch):
+    # Courses and reflections are off the assistant: it assigns tasks,
+    # manages the calendar, drafts app blocks (by time) and asks when it
+    # can't tell which.
     captured = {}
 
     async def _capture(system_prompt, messages, tools=None):
@@ -159,10 +160,10 @@ def test_the_assistant_has_exactly_the_task_and_calendar_tools(client, db_sessio
     c = make_child(db_session, p)
     client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "hi"})
 
-    assert captured["tools"] == ["draft_task", "draft_event", "ask_follow_up"]
-    # Blocking still exists in the app, so the model points there rather
-    # than claiming it did it — and no longer says it can't do calendars.
-    assert "Block an app card" in captured["prompt"]
+    assert captured["tools"] == ["draft_task", "draft_app_block", "ask_follow_up"]
+    # It knows what can be blocked, and no longer sends parents to a card.
+    assert "Apps on Kid's list:" in captured["prompt"]
+    assert "Block an app card" not in captured["prompt"]
     assert "adding a calendar event" not in captured["prompt"]
 
 
@@ -429,24 +430,23 @@ def test_several_requests_in_one_message_become_one_card_each(client, db_session
     monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
     fake_chat_model(monkeypatch, _calls(
         FunctionCall(name="draft_task", args={"title": "Piano practice", "due_date": SOON, "due_time": "17:00"}),
-        FunctionCall(name="draft_event", args={"title": "Dentist", "start_date": SOON, "start_time": "15:00"}),
+        FunctionCall(name="draft_task", args={"title": "Tidy room", "due_date": SOON, "due_time": "15:00"}),
     ))
     p = make_parent(db_session, "pa")
     c = make_child(db_session, p)
 
-    body = _send(client, c, "piano practice at 5 and the dentist at 3")
+    body = _send(client, c, "piano practice at 5 and tidy her room at 3")
     assert body["tool_call"] == "draft_task"
-    assert [m["tool_call"] for m in body["extra_messages"]] == ["draft_event"]
+    assert [m["tool_call"] for m in body["extra_messages"]] == ["draft_task"]
     # One line above the cards, not the canned reply under each.
     assert "2 things" in body["text"]
     assert body["extra_messages"][0]["text"] == ""
 
     # A reopened thread shows the same cards in the same order.
     history = client.get(f"/children/{c.id}/chat", headers=auth("pa")).json()
-    assert [m["tool_call"] for m in history] == [None, "draft_task", "draft_event"]
+    assert [m["tool_call"] for m in history] == [None, "draft_task", "draft_task"]
     # Still nothing written until the parent taps.
     assert db_session.query(models.Task).filter(models.Task.child_id == c.id).count() == 0
-    assert db_session.query(models.Event).filter(models.Event.child_id == c.id).count() == 0
 
 
 def test_the_same_card_twice_is_shown_once(client, db_session, monkeypatch):
@@ -492,27 +492,17 @@ def test_a_past_day_is_asked_about_not_drafted(client, db_session, monkeypatch):
     assert body["tool_call"] == "ask_follow_up" and "already passed" in body["text"]
 
 
-def test_an_event_without_a_start_time_asks_for_it(client, db_session, monkeypatch):
-    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
-    fake_chat_model(monkeypatch, _calls(FunctionCall(name="draft_event", args={"title": "Dentist", "start_date": SOON})))
-    p = make_parent(db_session, "pa")
-    c = make_child(db_session, p)
-    body = _send(client, c, "dentist on friday")
-    assert body["tool_call"] == "ask_follow_up"
-    assert body["text"] == "What time does “Dentist” start?"
-
-
 def test_one_incomplete_item_means_a_question_and_no_cards(client, db_session, monkeypatch):
     # Half the request as cards and half as a question leaves the parent
     # unsure what's been set up; the model redrafts all of it from the answer.
     monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
     fake_chat_model(monkeypatch, _calls(
-        FunctionCall(name="draft_event", args={"title": "Dentist", "start_date": SOON, "start_time": "15:00"}),
+        FunctionCall(name="draft_task", args={"title": "Piano practice", "due_date": SOON, "due_time": "15:00"}),
         FunctionCall(name="draft_task", args={"title": "Homework"}),
     ))
     p = make_parent(db_session, "pa")
     c = make_child(db_session, p, name="Mia")
-    body = _send(client, c, "dentist at 3 and homework")
+    body = _send(client, c, "piano at 3 and homework")
     assert body["tool_call"] == "ask_follow_up" and body["extra_messages"] == []
     assert "Homework" in body["text"]
 
@@ -608,9 +598,9 @@ def test_the_model_sees_only_the_newest_50_messages_of_a_thread(client, db_sessi
     assert len(shown) == 122
 
 
-def test_chat_has_no_video_tools_and_hands_videos_to_the_library(client, db_session, monkeypatch):
-    # Videos are the YouTube agent's, behind the Library tab — a separate
-    # pipeline. Chat neither drafts them nor names any.
+def test_chat_has_no_video_tools_and_names_no_videos(client, db_session, monkeypatch):
+    # Videos are the kid's Library lessons, not chat's. Chat neither drafts
+    # them nor names any.
     captured = {}
 
     async def _capture(system_prompt, messages, tools=None):
@@ -625,7 +615,7 @@ def test_chat_has_no_video_tools_and_hands_videos_to_the_library(client, db_sess
     client.post(f"/children/{c.id}/chat", headers=auth("pa"), json={"text": "find her some videos"})
 
     assert not any("video" in name for name in captured["tools"])
-    assert "Library tab" in captured["prompt"]
+    assert "never suggest or name specific videos" in captured["prompt"]
 
 
 # ---- whose "today" chat uses -------------------------------------------------
@@ -727,60 +717,6 @@ def test_an_unknown_shortcut_is_refused(client, db_session, monkeypatch):
     assert r.status_code == 422
 
 
-# ---- "Try again" ---------------------------------------------------------------
-
-def test_try_again_replaces_the_reply_instead_of_repeating_the_question(client, db_session, monkeypatch):
-    replies = iter(["First answer.", "Second answer."])
-    seen = {}
-
-    async def _model(system_prompt, messages, tools=None):
-        seen["messages"] = [m["text"] for m in messages]
-        return next(replies), None
-
-    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
-    fake_chat_model(monkeypatch, _model)
-    p = make_parent(db_session, "pa")
-    c = make_child(db_session, p)
-    conv = _send(client, c, "what should she do today?")["conversation_id"]
-
-    again = client.post(f"/children/{c.id}/chat", headers=auth("pa"),
-                        json={"text": "what should she do today?", "conversation_id": conv, "regenerate": True})
-    assert again.status_code == 200, again.text
-    assert again.json()["text"] == "Second answer."
-    # The model saw the question once, not the first answer.
-    assert seen["messages"] == ["what should she do today?"]
-    # The thread holds one question and one answer.
-    thread = client.get(f"/conversations/{conv}/messages", headers=auth("pa")).json()
-    assert [m["text"] for m in thread] == ["what should she do today?", "Second answer."]
-
-
-def test_try_again_forgets_what_the_replaced_reply_taught(client, db_session, monkeypatch):
-    async def _model(system_prompt, messages, tools=None):
-        return "ok", None
-
-    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
-    fake_chat_model(monkeypatch, _model)
-    p = make_parent(db_session, "pa")
-    c = make_child(db_session, p)
-    first = _send(client, c, "she loves dinosaurs")
-    db_session.add(models.ChildMemory(child_id=c.id, fact="Loves dinosaurs", category="preference",
-                                      source_message_id=uuid.UUID(first["id"])))
-    db_session.commit()
-
-    client.post(f"/children/{c.id}/chat", headers=auth("pa"),
-                json={"text": "she loves dinosaurs", "conversation_id": first["conversation_id"], "regenerate": True})
-    db_session.expire_all()
-    assert db_session.query(models.ChildMemory).filter(models.ChildMemory.child_id == c.id).count() == 0
-
-
-def test_try_again_needs_a_conversation_with_a_question(client, db_session, monkeypatch):
-    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
-    p = make_parent(db_session, "pa")
-    c = make_child(db_session, p)
-    assert client.post(f"/children/{c.id}/chat", headers=auth("pa"),
-                       json={"text": "again", "regenerate": True}).status_code == 400
-
-
 # ---- suggesting real activities ----------------------------------------------
 
 def _child_with_history(db_session):
@@ -847,3 +783,24 @@ def test_the_activity_tile_uses_a_short_prompt_and_only_the_task_tool(client, db
     assert [m["tool_call"] for m in body["extra_messages"]] == ["draft_task"]
     # Still nothing created until the parent taps.
     assert db_session.query(models.Task).filter(models.Task.title == "Tidy bedroom floor").count() == 0
+
+
+def test_tasks_must_be_concrete_and_vague_requests_get_asked(client, db_session, monkeypatch):
+    # "Add three tasks" used to come back as three invented tasks; vague
+    # titles gave a parent nothing to check.
+    captured = {}
+
+    async def _capture(system_prompt, messages, tools=None):
+        captured["prompt"] = system_prompt
+        return "ok", None
+
+    monkeypatch.setattr(chat_router, "gemini_configured", lambda: True)
+    fake_chat_model(monkeypatch, _capture)
+    p = make_parent(db_session, "pa")
+    c = make_child(db_session, p, name="Mia")  # born 2015
+    _send(client, c, "add three tasks")
+    prompt = captured["prompt"]
+    assert "physical thing Mia does that a parent can check" in prompt
+    assert "year-old" in prompt
+    assert "don't invent them: call ask_follow_up" in prompt
+    assert "If they're unsure or say you pick, draft that many chores" in prompt

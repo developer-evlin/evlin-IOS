@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import models, schemas
 from database import get_db
 from routers.auth import get_current_device
+import storage
 from storage import generate_presigned_upload_url, storage_configured, generate_presigned_download_url
 from access import get_occurrence_for_device_or_parent
 
@@ -30,50 +31,76 @@ def list_submissions(
         out.append(item)
     return out
 
+def confirm_in_storage(submission: models.Submission) -> bool:
+    """Marks a photo uploaded once R2 really has it (not on the phone's
+    word alone). False when the file isn't there. Doesn't commit; raises
+    503 when R2 couldn't be asked, so the phone tries again."""
+    if submission.status == "uploaded":
+        return True
+    if not storage_configured():
+        return False
+    try:
+        size = storage.object_size(submission.r2_key)
+    except storage.StorageUnavailable:
+        raise HTTPException(status_code=503, detail="Couldn't check the photo just now")
+    if size is None:
+        return False
+    submission.status = "uploaded"
+    submission.bytes_size = size
+    submission.uploaded_at = datetime.now(timezone.utc)
+    return True
+
+
 @router.post("/occurrences/{occurrence_id}/submissions", response_model=schemas.SubmissionUploadResponse)
 def create_submission(
-    occurrence_id: UUID, 
+    occurrence_id: UUID,
     sub_req: schemas.SubmissionCreate,
     current_device: models.Device = Depends(get_current_device),
     db: Session = Depends(get_db)
 ):
-    """Child begins a photo submission and gets a presigned Cloudflare R2 upload URL"""
-    
-    # 1. Verify the occurrence exists and belongs to this child
+    """A place for one photo, and a link to upload it straight to R2. The
+    photo isn't the task's until R2 has it: Send (or complete) checks.
+
+    The phone names the photo (`id`), so asking again, a retry or a link
+    that expired, answers with the same photo and a fresh link."""
     occurrence = db.query(models.Occurrence).filter(models.Occurrence.id == occurrence_id).first()
     if not occurrence:
         raise HTTPException(status_code=404, detail="Occurrence not found")
     if occurrence.child_id != current_device.child_id:
         raise HTTPException(status_code=403, detail="Not your occurrence")
-        
-    # 2. Generate a secure, unique R2 object key
-    ext = sub_req.content_type.split('/')[-1] if '/' in sub_req.content_type else 'bin'
-    r2_key = f"submissions/{occurrence.child_id}/{occurrence_id}/{uuid4()}.{ext}"
-    
-    # 3. Generate the presigned URL via our storage module
     if not storage_configured():
         raise HTTPException(status_code=503, detail="Photo uploads aren't configured on the server yet (missing R2 credentials).")
-    presigned_url = generate_presigned_upload_url(r2_key, sub_req.content_type)
-    if not presigned_url:
+
+    submission = None
+    if sub_req.id is not None:
+        submission = db.query(models.Submission).filter(models.Submission.id == sub_req.id).first()
+        if submission is not None and submission.occurrence_id != occurrence.id:
+            raise HTTPException(status_code=409, detail="That photo belongs to another task")
+    if submission is None:
+        photo_id = sub_req.id or uuid4()
+        ext = sub_req.content_type.split('/')[-1] if '/' in sub_req.content_type else 'bin'
+        submission = models.Submission(
+            id=photo_id,
+            occurrence_id=occurrence.id,
+            kind=sub_req.kind,
+            r2_key=f"submissions/{occurrence.child_id}/{occurrence.id}/{photo_id}.{ext}",
+            content_type=sub_req.content_type,
+            bytes_size=sub_req.bytes_size,
+            status="pending",
+        )
+        db.add(submission)
+    elif sub_req.bytes_size is not None and submission.status != "uploaded":
+        # The same photo, saved again on the phone (a different size).
+        submission.bytes_size = sub_req.bytes_size
+
+    upload_url = generate_presigned_upload_url(submission.r2_key, submission.content_type,
+                                               content_length=sub_req.bytes_size)
+    if not upload_url:
         raise HTTPException(status_code=500, detail="Failed to generate upload URL")
-        
-    # 4. Create the pending submission row in the database
-    submission = models.Submission(
-        occurrence_id=occurrence_id,
-        kind=sub_req.kind,
-        r2_key=r2_key,
-        content_type=sub_req.content_type,
-        bytes_size=sub_req.bytes_size,
-        status="pending"
-    )
-    db.add(submission)
     db.commit()
     db.refresh(submission)
-    
-    return {
-        "submission": submission,
-        "upload_url": presigned_url
-    }
+    return {"submission": submission, "upload_url": upload_url}
+
 
 @router.post("/submissions/{submission_id}/complete", response_model=schemas.SubmissionResponse)
 def complete_submission(
@@ -81,25 +108,20 @@ def complete_submission(
     current_device: models.Device = Depends(get_current_device),
     db: Session = Depends(get_db)
 ):
-    """Child notifies the backend that they successfully uploaded the file to R2"""
+    """The photo is in R2, checked there. It doesn't send the task in: only
+    the kid's Send does (POST /tasks/occurrences/{id}/submit). Apps that
+    send photo_ids with Send never call this."""
     submission = db.query(models.Submission).filter(models.Submission.id == submission_id).first()
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
-        
-    # Verify ownership
     occurrence = db.query(models.Occurrence).filter(models.Occurrence.id == submission.occurrence_id).first()
     if not occurrence or occurrence.child_id != current_device.child_id:
         raise HTTPException(status_code=403, detail="Not your submission")
-        
-    # Mark as uploaded
-    submission.status = "uploaded"
-    submission.uploaded_at = datetime.now(timezone.utc)
-    
-    # Automatically move the occurrence to "submitted" if it was pending or rejected
-    if occurrence.status in ["pending", "rejected"]:
-        occurrence.status = "submitted"
-        
+    if storage_configured() and not confirm_in_storage(submission):
+        raise HTTPException(status_code=409, detail="The photo hasn't arrived")
+    if not storage_configured():
+        submission.status = "uploaded"
+        submission.uploaded_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(submission)
-    
     return submission

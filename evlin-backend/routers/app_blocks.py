@@ -1,4 +1,4 @@
-"""Blocking apps: for a while, until a task is done, until lifted, or on a
+"""Blocking apps: for a while, until a task is done, with no end time, or on a
 weekly schedule.
 
 A block is a row per catalog app (see app_catalog.py), not the free-text

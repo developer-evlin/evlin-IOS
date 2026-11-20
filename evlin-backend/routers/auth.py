@@ -575,6 +575,8 @@ def claim_pairing(request: Request, body: schemas.PairingClaimRequest,
     db.commit()
     db.refresh(child)
     child.is_paired = False  # becomes true once the device collects its token
+    from routers.children import device_kind
+    child.device_kind = device_kind(pairing.platform)
     return child
 
 

@@ -13,7 +13,9 @@ would do.
 
 The database is the backend's own: DATABASE_URL, loaded from .env the same
 way the backend loads it, unless --database-url is given. That is normally
-the live database, so preview first.
+the live database, so add refuses to run without --database-url: a test
+child there reaches real phones. For the multi-child app on the Simulator,
+use the Evlin Demo build (CLAUDE.md).
 
 A child is added by the backend's own helper
 (routers.auth._create_placeholder_child), so it gets the same rules, lock
@@ -208,6 +210,12 @@ def main():
     p.add_argument("--yes", action="store_true", help="Actually write; otherwise just preview.")
 
     args = ap.parse_args()
+    # .env's database is the live one, and a test child there reaches real
+    # phones. Adding needs a database named on purpose; removing a leftover
+    # still works against .env, so it can be cleaned up.
+    if args.command == "add" and not args.database_url:
+        sys.exit("add needs --database-url (a non-live database). To see more "
+                 "than one child, use the Evlin Demo build instead.")
     database, models = _connect(args.database_url)
     db = database.SessionLocal()
     try:

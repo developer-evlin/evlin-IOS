@@ -15,7 +15,8 @@ TOOL = {
         "Work out the concrete date, time and recurrence from what the parent said; the card is meant to "
         "arrive correct, not to be filled in by hand afterwards. If the parent didn't say which day (or "
         "that it repeats), don't pick one — call ask_follow_up to ask when. If the parent asks for several "
-        "tasks, call this once per task in the same reply."
+        "tasks, call this once per task in the same reply. The title names one physical thing the child does "
+        "that a parent can check ('Read 10 pages', 'Wipe the table'), never something vague ('Be productive')."
     ),
     "parameters": {
         "type": "OBJECT",

@@ -75,13 +75,28 @@ def get_child_tasks(child_id: UUID, db: Session = Depends(get_db), _access: None
 def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
     """Create a new task for a child"""
     assert_parent_owns_child(db, current_parent, child_id)
-    if task.id is not None:
-        existing = db.query(models.Task).filter(models.Task.id == task.id).first()
-        if existing is not None:
-            # A retry of a create that already went through.
-            if existing.child_id != child_id:
-                raise HTTPException(status_code=409, detail="That id is already in use")
-            return existing
+    existing = _existing_create(db, child_id, task)
+    if existing is not None:
+        return existing
+    new_task = _new_task(db, child_id, task)
+    db.add(new_task)
+    _lock_again_for_new_task(db, child_id, new_task)
+    _commit_or_400(db)
+    db.refresh(new_task)
+    return new_task
+
+
+def _existing_create(db: Session, child_id: UUID, task: schemas.TaskCreate) -> Optional[models.Task]:
+    """A retry of a create that already went through: the row it made."""
+    if task.id is None:
+        return None
+    existing = db.query(models.Task).filter(models.Task.id == task.id).first()
+    if existing is not None and existing.child_id != child_id:
+        raise HTTPException(status_code=409, detail="That id is already in use")
+    return existing
+
+
+def _new_task(db: Session, child_id: UUID, task: schemas.TaskCreate) -> models.Task:
     parsed_time, parsed_date = _parse_due(task)
     if parsed_date is None and (task.recurrence or "none").strip().lower() in ("", "none"):
         # A one-off with no day is for today — the child's today. Left
@@ -91,7 +106,7 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         child = db.query(models.Child).filter(models.Child.id == child_id).first()
         parsed_date = local_now(child).date()
 
-    new_task = models.Task(
+    return models.Task(
         **({"id": task.id} if task.id is not None else {}),
         child_id=child_id,
         title=task.title,
@@ -108,11 +123,6 @@ def create_task(child_id: UUID, task: schemas.TaskCreate, current_parent: models
         bonus_minutes=task.bonus_minutes,
         created_by=task.created_by,
     )
-    db.add(new_task)
-    _lock_again_for_new_task(db, child_id, new_task)
-    _commit_or_400(db)
-    db.refresh(new_task)
-    return new_task
 
 
 def _lock_again_for_new_task(db: Session, child_id: UUID, task: models.Task):
@@ -136,6 +146,7 @@ def update_task(task_id: UUID, task_update: schemas.TaskCreate, current_parent: 
     """Update an existing task"""
     db_task = get_task_for_parent(db, current_parent, task_id)
     parsed_time, parsed_date = _parse_due(task_update)
+    schedule_before = (db_task.recurrence, db_task.due_date, db_task.active)
 
     db_task.title = task_update.title
     db_task.instructions = task_update.instructions
@@ -157,9 +168,35 @@ def update_task(task_id: UUID, task_update: schemas.TaskCreate, current_parent: 
     if "bonus_minutes" in task_update.model_fields_set:
         db_task.bonus_minutes = task_update.bonus_minutes
 
+    if (db_task.recurrence, db_task.due_date, db_task.active) != schedule_before:
+        _drop_days_it_no_longer_falls_on(db, db_task)
     _commit_or_400(db)
     db.refresh(db_task)
     return db_task
+
+
+def _drop_days_it_no_longer_falls_on(db: Session, task: models.Task):
+    """An edit that moves a task off a day (its repeat days changed, or it
+    was switched off) takes it off that day from today on: today's and any
+    later occurrence already made for a day it no longer falls on is
+    deleted, so it leaves today's list and stops locking the kid's phone.
+    Only ones the kid hasn't sent in (pending, or a redo): work waiting for
+    review or approved stays, as do earlier days."""
+    from blocks import local_now
+    from routers.occurrences import task_applies_on
+    child = db.query(models.Child).filter(models.Child.id == task.child_id).first()
+    if child is None:
+        return
+    db.flush()
+    today = local_now(child).date()
+    rows = db.query(models.Occurrence).filter(
+        models.Occurrence.task_id == task.id,
+        models.Occurrence.due_date >= today,
+        models.Occurrence.status.in_(("pending", "rejected")),
+    ).all()
+    for row in rows:
+        if not task.active or not task_applies_on(task, row.due_date):
+            db.delete(row)
 
 @router.delete("/tasks/{task_id}")
 def delete_task(task_id: UUID, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
@@ -168,3 +205,83 @@ def delete_task(task_id: UUID, current_parent: models.Parent = Depends(get_curre
     db.delete(db_task)
     db.commit()
     return {"detail": "Task deleted"}
+
+
+# --- One day of a repeating task, or the rest of it ------------------------
+#
+# As calendars do it: "This task" takes the day out of the series
+# (skipped_dates), "This and following tasks" ends the series the day before
+# (repeat_until). An edit puts those days on a new task of their own (split),
+# carrying whatever was sent in or approved on them; a delete takes them off
+# (cut), whatever was done on them. Both are safe to send twice: the phone's
+# outbox retries.
+
+
+def _check_cut(task: models.Task, cut: schemas.TaskCut):
+    if cut.through is not None and cut.through != cut.from_:
+        raise HTTPException(status_code=400, detail="through must be the same day as from, or left out")
+
+
+def _cut_series(task: models.Task, cut: schemas.TaskCut):
+    """Writes the exception on the task: the day skipped, or the series'
+    last day set to the day before `from` (skips after it go with it)."""
+    if cut.through is not None:
+        days = set(task.skipped_dates or [])
+        days.add(cut.from_.isoformat())
+        task.skipped_dates = sorted(days)
+        return
+    last = cut.from_ - timedelta(days=1)
+    if task.repeat_until is None or task.repeat_until > last:
+        task.repeat_until = last
+    kept = [d for d in (task.skipped_dates or []) if d <= last.isoformat()]
+    task.skipped_dates = kept or None
+
+
+def _days(db: Session, task_id: UUID, cut: schemas.TaskCut):
+    q = db.query(models.Occurrence).filter(models.Occurrence.task_id == task_id,
+                                           models.Occurrence.due_date >= cut.from_)
+    if cut.through is not None:
+        q = q.filter(models.Occurrence.due_date <= cut.through)
+    return q
+
+
+@router.post("/tasks/{task_id}/cut", response_model=schemas.TaskResponse)
+def cut_task(task_id: UUID, cut: schemas.TaskCut, current_parent: models.Parent = Depends(get_current_parent),
+             db: Session = Depends(get_db)):
+    """A repeating task deleted for one day, or from a day on: those days
+    leave every list, whatever was done on them."""
+    task = get_task_for_parent(db, current_parent, task_id)
+    _check_cut(task, cut)
+    _cut_series(task, cut)
+    _days(db, task.id, cut).delete(synchronize_session=False)
+    _commit_or_400(db)
+    db.refresh(task)
+    return task
+
+
+@router.post("/tasks/{task_id}/split", response_model=schemas.TaskResponse)
+def split_task(task_id: UUID, split: schemas.TaskSplit, current_parent: models.Parent = Depends(get_current_parent),
+               db: Session = Depends(get_db)):
+    """A repeating task edited for one day, or from a day on: `split.task`
+    (made on the phone, with the edits) takes those days, with whatever was
+    sent in or approved on them, and the series keeps the rest. Answers
+    the new task. A day it doesn't take stays only where it was done: the
+    new task's own row for a day already made is dropped for the old one's."""
+    task = get_task_for_parent(db, current_parent, task_id)
+    _check_cut(task, split)
+    new_task = _existing_create(db, task.child_id, split.task)
+    if new_task is None:
+        new_task = _new_task(db, task.child_id, split.task)
+        db.add(new_task)
+        db.flush()
+    _cut_series(task, split)
+    for row in _days(db, task.id, split).all():
+        made = db.query(models.Occurrence).filter(models.Occurrence.task_id == new_task.id,
+                                                  models.Occurrence.due_date == row.due_date).first()
+        if made is not None:
+            db.delete(made)
+            db.flush()
+        row.task_id = new_task.id
+    _commit_or_400(db)
+    db.refresh(new_task)
+    return new_task

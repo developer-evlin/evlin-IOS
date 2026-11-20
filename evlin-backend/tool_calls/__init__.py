@@ -9,9 +9,9 @@ Adding a tool means adding one module here and listing it in _MODULES —
 chat.py reads only what this package exports, so the tool set the model is
 given, the prompt's description of it, and the replies can't drift apart.
 """
-from tool_calls import ask_follow_up, draft_event, draft_task
+from tool_calls import ask_follow_up, draft_app_block, draft_task
 
-_MODULES = (draft_task, draft_event, ask_follow_up)
+_MODULES = (draft_task, draft_app_block, ask_follow_up)
 
 # The declarations sent to the model, in this order.
 TOOLS: list[dict] = [m.TOOL for m in _MODULES]
@@ -30,3 +30,12 @@ NAMES: list[str] = [t["name"] for t in TOOLS]
 # when the draft is complete. The prompt asks the model not to guess a day;
 # this is what holds it to that.
 FOLLOW_UPS: dict = {m.TOOL["name"]: m.follow_up_for for m in _MODULES if hasattr(m, "follow_up_for")}
+
+# Tools whose draft needs the database before it can be a card (matching
+# "yt" to the YouTube row). Each takes (db, child, args), may add to args,
+# and returns a question to ask instead, or None. Still never writes.
+RESOLVERS: dict = {m.TOOL["name"]: m.resolve for m in _MODULES if hasattr(m, "resolve")}
+
+# Tools whose card is introduced by the model's own sentence (one of its
+# args) rather than the canned REPLY, when it wrote one.
+REPLY_ARGS: dict = {m.TOOL["name"]: m.REPLY_ARG for m in _MODULES if getattr(m, "REPLY_ARG", None)}
