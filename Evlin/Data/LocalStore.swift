@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import Sentry
 import SwiftUI
 
 // The phone's database, on both the parent's and the kid's phone (see
@@ -398,8 +399,17 @@ final class LocalStore {
     /// write here ends with this, so a screen is never behind its data.
     private func commit() {
         guard batchDepth == 0 else { return }
-        try? context.save()
+        save()
         TaskStore.shared.reload()
+    }
+
+    /// Writes the database to disk. A failure was swallowed before; it's
+    /// reported now, since it means a change may not survive a relaunch.
+    private func save() {
+        do { try context.save() } catch {
+            print("LocalStore: save failed: \(error)")
+            SentrySDK.capture(error: error)
+        }
     }
 
     // MARK: - Write-through (called by AppSync after a successful fetch)
@@ -673,7 +683,7 @@ final class LocalStore {
     // three times, for the change, the queued write, and its removal.
     func queueWrite(_ write: PendingWrite) {
         context.insert(write)
-        try? context.save()
+        save()
         ConnectionStatus.shared.setWaiting(pendingRequests().count)
     }
 

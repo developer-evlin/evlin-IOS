@@ -772,8 +772,9 @@ public class SessionManager {
 /// is live, so a parent never sets something the server silently drops.
 ///
 /// After deploying the backend, flip the matching line to `true` (or the
-/// whole set) and build the app. Checked against the live server on
-/// 2026-11-17 (its /openapi.json): none of these were there.
+/// whole set) and build the app. All on since 2026-11-19: the backend was
+/// deployed (commit 633ea8d) and the live server's /openapi.json has every
+/// field and route these need. A new flag starts as `demo` again.
 enum ServerSupport {
     #if EVLIN_DEMO
     private static let demo = true
@@ -783,24 +784,24 @@ enum ServerSupport {
 
     /// Chat drafts app blocks (`draft_app_block`, the `block_app` shortcut).
     /// Off: Chat's "Block an app" opens the Block an app sheet, as Profile's does.
-    static let chatBlocks = demo
+    static let chatBlocks = true
 
     /// Downtime on some days, or different hours by day
     /// (`downtime_days`, `downtime_schedule`). Off: Every Day only.
-    static let downtimeByDay = demo
+    static let downtimeByDay = true
 
     /// Instant unlock (`child_state.instant_unlock`). Off: the row is hidden.
-    static let instantUnlock = demo
+    static let instantUnlock = true
 
     /// The kid's name sent from their device after pairing (`PUT /device/me`
     /// `name`). Off: the kid's device asks the name before showing its code,
     /// and it travels with the pairing request, which the live server takes.
-    static let nameAfterPairing = demo
+    static let nameAfterPairing = true
 
     /// The two devices passing Family Sharing setup between them
     /// (`devices.setup_stage`, `PUT /children/{id}/setup-stage`). Off: each
     /// device carries on by its own taps.
-    static let familySharingHandOff = demo
+    static let familySharingHandOff = true
     /// Editing or deleting one day of a repeating task, or the rest of it
     /// (`ApiTask.skippedDates`, `repeatUntil`; `POST /tasks/{id}/cut` and
     /// `/split`). On everywhere since 2026-11-19: needs the backend

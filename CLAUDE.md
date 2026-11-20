@@ -339,6 +339,14 @@ Shadow tours for habits (2026-11-16, the user's call), both on the shared `TourS
 
 ## Phone database (local-first)
 
+Deployed 2026-11-19 (commits 633ea8d and 5b82687 on `main`; Render built it
+in about 100 s and its start-up migrations ran on Supabase): the repeat
+exceptions, cut and split, access codes, setup hand-off, Downtime by day and
+Instant unlock are live, and every `ServerSupport` flag is on in the real app.
+The live database was wiped to a clean slate the same day at the user's call
+(accounts and all their data; the app catalogue kept); a backup of the app
+data from before is in ~/Evlin-backups.
+
 The goal: screens show what's saved on the phone straight away, a tap
 changes the screen at once, and the network catches up behind it. Nothing a
 parent or kid does is lost to a bad connection or a closed app.
@@ -350,6 +358,16 @@ parent or kid does is lost to a bad connection or a closed app.
 - **"Today" is live.** `CalendarData.todayYear`, `todayMonth` and `dataDay`
   read the clock. `DayClock` notices midnight and a return to the
   foreground on a new day, rebuilds today's lists, and syncs.
+- **Leaving the app never loses a write** (2026-11-19, Apple's practice):
+  every change and its queued request are saved to disk as they're made
+  (`LocalStore.save`, a failure reported to Sentry); each outbox send asks
+  iOS for background time when it starts (`Outbox.drain`, `BackgroundWork`,
+  `beginBackgroundTask` with an expiration handler that ends it), so a
+  parent who taps and leaves at once still has it go out; going to the
+  background sends first and fetches only with 10 s or more left
+  (`BackgroundSync.finishPendingWork`); a background refresh
+  (`com.evlin.ios.refresh`) wakes the app now and then. Not sent in time,
+  it's still in the outbox for the next launch or wake-up.
 - **Every write goes through the outbox** (`Data/Outbox.swift`): one
   write = one saved HTTP request (`APIClient.Write`), in a `PendingWrite`
   row, sent in order, retried with backoff while offline or while the

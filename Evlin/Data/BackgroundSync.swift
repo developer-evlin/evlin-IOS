@@ -30,26 +30,40 @@ enum BackgroundSync {
         await AppSync.shared.syncBackendData()
     }
 
-    /// Going to the background: finish sending, within the time iOS gives.
+    /// Going to the background: finish sending, within the time iOS gives
+    /// (about 30 seconds). The writes come first: the outbox drains under
+    /// its own background time (`Outbox.drain`), and the latest is fetched
+    /// only if time is left, so a slow fetch never costs a parent's change.
     @MainActor static func finishPendingWork() {
         guard SessionManager.shared.activeToken != nil else { return }
-        let task = BackgroundWork()
+        let task = BackgroundWork(name: "Fetch the latest")
         task.begin()
         Task { @MainActor in
-            await AppSync.shared.syncBackendData()
+            let sent = await Outbox.drain()
+            if sent.isEmpty, UIApplication.shared.backgroundTimeRemaining > minimumForFetch {
+                await AppSync.shared.syncBackendData()
+            }
             task.end()
         }
     }
+
+    /// Seconds of background time worth starting a fetch with.
+    private static let minimumForFetch: TimeInterval = 10
 }
 
 /// One stretch of extra background time, ended exactly once: by the work
-/// finishing, or by iOS when the time runs out.
+/// finishing, or by iOS when the time runs out (its expiration handler must
+/// end it, or iOS ends the app).
 @MainActor
-private final class BackgroundWork {
+final class BackgroundWork {
     private var id: UIBackgroundTaskIdentifier = .invalid
+    private let name: String
+
+    init(name: String = "Send changes") { self.name = name }
 
     func begin() {
-        id = UIApplication.shared.beginBackgroundTask(withName: "Send changes") { [weak self] in
+        guard id == .invalid else { return }
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
             Task { @MainActor in self?.end() }
         }
     }

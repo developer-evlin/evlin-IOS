@@ -321,10 +321,17 @@ enum Outbox {
         // A kid's photos go first, alongside: a Send waits for its own.
         PhotoUploads.shared.run()
         if let draining { return await draining.value }
+        // Asked for when the sending starts, not when the app is reported
+        // as left (Apple's practice): a parent who taps and leaves at once
+        // still has the write go out, while iOS allows (about 30 seconds).
+        // Not sent in time, it's still saved in the outbox for next time.
+        let time = BackgroundWork()
+        time.begin()
         let task = Task { await run() }
         draining = task
         let result = await task.value
         draining = nil
+        time.end()
         return result
     }
 
