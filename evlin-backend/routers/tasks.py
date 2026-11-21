@@ -292,6 +292,9 @@ def split_task(task_id: UUID, split: schemas.TaskSplit, current_parent: models.P
     new_task = _existing_create(db, task.child_id, split.task)
     if new_task is None:
         new_task = _new_task(db, task.child_id, split.task)
+        # Named, so a send-in for those days under the old id can be
+        # followed here (models.Task.split_from).
+        new_task.split_from = task.id
         db.add(new_task)
         db.flush()
     _cut_series(task, split)

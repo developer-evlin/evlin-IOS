@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from uuid import UUID
-import models, schemas
+import edits, models, schemas
 from database import get_db
 from routers.auth import get_current_parent
 from access import assert_parent_owns_child
@@ -36,14 +36,30 @@ def get_children(current_parent: models.Parent = Depends(get_current_parent), db
 
 @router.post("/children", response_model=schemas.ChildResponse)
 def create_child(child: schemas.ChildCreate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
-    """Create a new child and link them to the current parent"""
-    
+    """Create a new child and link them to the current parent. A retry of
+    the same create (the phone's id) answers with the child it made."""
+    if child.id is not None:
+        existing = db.query(models.Child).filter(models.Child.id == child.id).first()
+        if existing is not None:
+            linked = db.query(models.ParentChild).filter(models.ParentChild.child_id == existing.id,
+                                                         models.ParentChild.parent_id == current_parent.id).first()
+            if linked is None:
+                raise HTTPException(status_code=409, detail="That id is already in use")
+            existing.is_paired = db.query(models.Device).filter(models.Device.child_id == existing.id).count() > 0
+            return existing
+    name = (child.name or "").strip()[:60]
+    if not name:
+        raise HTTPException(status_code=400, detail="name must not be blank")
+
     # 1. Create Child
     new_child = models.Child(
-        name=child.name,
+        **({"id": child.id} if child.id is not None else {}),
+        name=name,
         birth_year=child.birth_year,
         color_index=child.color_index,
-        avatar_url=child.avatar_url
+        avatar_url=child.avatar_url,
+        age_range=child.age_range,
+        gender=child.gender,
     )
     db.add(new_child)
     db.commit()
@@ -78,20 +94,26 @@ def create_child(child: schemas.ChildCreate, current_parent: models.Parent = Dep
 
 
 @router.put("/children/{child_id}", response_model=schemas.ChildResponse)
-def update_child(child_id: UUID, update: schemas.ChildUpdate, current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
-    """Rename / recolor a child."""
+def update_child(child_id: UUID, update: schemas.ChildUpdate, request: Request,
+                 current_parent: models.Parent = Depends(get_current_parent), db: Session = Depends(get_db)):
+    """A change to a child's profile: name, colour, age range, gender. Only
+    the fields sent change, each only if this edit is at least as new as
+    that field's last change (edits.py), so two parents editing at once
+    never undo each other."""
     assert_parent_owns_child(db, current_parent, child_id)
     child = db.query(models.Child).filter(models.Child.id == child_id).first()
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
+    values = {}
     if update.name is not None:
         if not update.name.strip():
             raise HTTPException(status_code=400, detail="name must not be blank")
-        child.name = update.name.strip()[:60]
-    if update.color_index is not None:
-        child.color_index = update.color_index
-    if update.birth_year is not None:
-        child.birth_year = update.birth_year
+        values["name"] = update.name.strip()[:60]
+    for field in ("color_index", "birth_year", "age_range", "gender"):
+        value = getattr(update, field)
+        if value is not None:
+            values[field] = value
+    edits.apply(child, values, edits.edited_at(request))
     # Only fills an empty one: until the kid's device has reported its zone,
     # the parent's phone stands in for it (a family nearly always shares
     # one), so "today" on the server isn't UTC's.
@@ -181,6 +203,12 @@ def update_my_device(body: schemas.DeviceUpdate, device: models.Device = Depends
     if name and name != child.name:
         child.name = name
         changed = True
+    # The age bracket and gender picked in the kid's setup.
+    for field in ("age_range", "gender"):
+        value = getattr(body, field)
+        if value is not None and value != getattr(child, field):
+            setattr(child, field, value)
+            changed = True
     # Once only: later syncs send it again, and an unchanged write would
     # announce a live update for nothing.
     if body.setup_complete and device.setup_completed_at is None:

@@ -1,5 +1,6 @@
 import uuid
-from sqlalchemy import UniqueConstraint, Column, String, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON
+from sqlalchemy import (UniqueConstraint, CheckConstraint, ForeignKeyConstraint, Index, Column, String, Integer,
+                        BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, text)
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -59,6 +60,18 @@ class Child(Base):
     # "today" and "right now" mean for this child — a scheduled block's
     # window, which day a grant lands on — rather than the server's UTC.
     timezone = Column(String)
+    # The child's profile as picked on their device in setup (2026-11-20):
+    # an age bracket ("4-6", "7-9", "10-12", "13-17"), never a birthdate,
+    # and "female" | "male" | "other". The parent can change both.
+    age_range = Column(String)
+    gender = Column(String)
+    # When the family added the child: the free plan covers the first one.
+    # Not "created_at": an old migration drops children.created_at on every
+    # boot (main.py), and a rolled-back server would run it again.
+    added_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    # Per-field last write wins, as on tasks (edits.py).
+    field_edits = Column(JSON)
 
 class AccessCode(Base):
     """The screen time access code (2026-11-19): six random digits a parent
@@ -96,7 +109,6 @@ class Device(Base):
     child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"), nullable=False)
     platform = Column(String, nullable=False)
     token_hash = Column(String, nullable=False)
-    push_token = Column(String)
     desired_version = Column(Integer, nullable=False, default=0)
     acked_version = Column(Integer, nullable=False, default=0)
     paired_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -110,6 +122,18 @@ class Device(Base):
     # (the parent's phone then shows how to sign this device in with it);
     # NULL otherwise. Only onboarding reads it.
     setup_stage = Column(String)
+    # Whether Evlin still has Screen Time access on this device, as the
+    # device last reported it (NULL: not reported yet). A change to false
+    # tells the parents (notifications, "screen_time_off").
+    screen_time_access = Column(Boolean)
+    # Who signed it out, with revoked_at: "child_device" (Log out on it) or
+    # "parent", so a parent isn't told about their own unpair.
+    signed_out_by = Column(String)
+    # When the device last synced, for "Mia's iPad · updated 2 h ago". Must
+    # be written with a plain UPDATE, never through the ORM object: a
+    # Device change announces a live update, which makes the device sync,
+    # which would write it again.
+    last_synced_at = Column(DateTime(timezone=True))
 
 class ParentSession(Base):
     """A parent's phone, signed in. Like a kid's device token: issued once
@@ -180,6 +204,10 @@ class Task(Base):
     # none. Written only by routers/tasks.py's cut and split.
     skipped_dates = Column(JSON)
     repeat_until = Column(Date)
+    # The task this one was split from ("This task" or "This and following
+    # tasks" edited), so a child's device that sends in a day under the old
+    # task's id, offline meanwhile, can be followed to this one.
+    split_from = Column(UUID(as_uuid=True), ForeignKey("app.tasks.id", ondelete="SET NULL"))
     gates_apps = Column(Boolean, nullable=False, default=True)
     submission_kind = Column(String, nullable=False, default="none")
     active = Column(Boolean, nullable=False, default=True)
@@ -545,4 +573,274 @@ class HabitCheckIn(Base):
     status = Column(String, nullable=False, default="waiting")
     reviewed_at = Column(DateTime(timezone=True))
     reviewed_by = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+# ---- Notifications to parents (2026-11-20) ---------------------------------
+# Parents only, about their children: the day's chores sent in, a habit
+# checked in, and the child's device signed out of Evlin (Log out, Screen
+# Time access off, Evlin deleted). Children never get one; their devices
+# get silent "sync now" pushes only.
+
+class PushToken(Base):
+    """Where to send: one phone or iPad. A parent's phone hangs off its
+    sign-in (Sign out ends it); a child's device off the device (unpairing
+    ends it), for silent pushes only."""
+    __tablename__ = "push_tokens"
+    __table_args__ = (CheckConstraint("(parent_session_id IS NULL) <> (device_id IS NULL)",
+                                      name="push_tokens_one_owner"),
+                      {"schema": "app"})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_session_id = Column(UUID(as_uuid=True), ForeignKey("app.parent_sessions.id", ondelete="CASCADE"))
+    device_id = Column(UUID(as_uuid=True), ForeignKey("app.devices.id", ondelete="CASCADE"))
+    # The APNs device token.
+    token = Column(String, nullable=False, unique=True)
+    # "sandbox" (run from Xcode) or "production" (TestFlight, App Store).
+    environment = Column(String, nullable=False, default="production")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Apple said the token is dead (410, BadDeviceToken): never sent to again.
+    disabled_at = Column(DateTime(timezone=True))
+
+
+class Notification(Base):
+    """What to send a parent, and what happened: the outbox and the log.
+    Written in the same transaction as the change that causes it, sent
+    after the commit, kept 30 days."""
+    __tablename__ = "notifications"
+    __table_args__ = (Index("notifications_pending_idx", "send_after",
+                            postgresql_where=text("status = 'pending'"),
+                            sqlite_where=text("status = 'pending'")),
+                      {"schema": "app"})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # "all_sent_in" | "habit_checked_in" | "device_signed_out" |
+    # "screen_time_off" | "evlin_removed" (checked in code, so a new kind
+    # needs no migration).
+    kind = Column(String, nullable=False)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), nullable=False)
+    # Who it's about.
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="CASCADE"))
+    device_id = Column(UUID(as_uuid=True), ForeignKey("app.devices.id", ondelete="SET NULL"))
+    # The child's day.
+    day = Column(Date)
+    # Unique: an insert that hits it does nothing (sent once).
+    dedupe_key = Column(String, nullable=False, unique=True)
+    title = Column(String, nullable=False)
+    body = Column(String, nullable=False, default="")
+    # Where a tap opens.
+    data = Column(JSON)
+    send_after = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # "pending" | "sent" | "skipped" (turned off, no phone) | "failed"
+    status = Column(String, nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(String)
+    sent_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class NotificationPref(Base):
+    """A kind a parent turned off ("tasks", "habits"). Only changes from
+    the default (on) have a row. Signed-out warnings can't be turned off."""
+    __tablename__ = "notification_prefs"
+    __table_args__ = {"schema": "app"}
+
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), primary_key=True)
+    kind = Column(String, primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+# ---- Payments: entitlements (2026-11-20; tables only, not wired yet) --------
+# The server decides what a family may do; Apple only takes the money. The
+# code asks "what is this family allowed?" (limits by key), never "which
+# product did they buy?". Plans are versioned so a subscriber keeps what they
+# bought; the free trial and promos are grants; usage is metered.
+
+class Plan(Base):
+    """A plan at one version ("free" v1, "pro" v1). New limits are a new
+    version; a subscription points at the version it bought."""
+    __tablename__ = "plans"
+    __table_args__ = {"schema": "app"}
+
+    code = Column(String, primary_key=True)
+    version = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    is_free = Column(Boolean, nullable=False, default=False)
+    # Offered to new buyers; an older version stays for those who have it.
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class PlanLimit(Base):
+    """One limit of a plan version, by key ("children", "ai_tokens",
+    "notify:tasks" …). value NULL is unlimited."""
+    __tablename__ = "plan_limits"
+    __table_args__ = (ForeignKeyConstraint(["plan_code", "plan_version"], ["app.plans.code", "app.plans.version"],
+                                           ondelete="CASCADE"),
+                      {"schema": "app"})
+
+    plan_code = Column(String, primary_key=True)
+    plan_version = Column(Integer, primary_key=True)
+    key = Column(String, primary_key=True)
+    value = Column(BigInteger)
+
+
+class StoreProduct(Base):
+    """A store's product (an App Store product id) and the plan version it
+    buys. `offered`: shown on the plan page, so prices can change without an
+    app release."""
+    __tablename__ = "store_products"
+    __table_args__ = (ForeignKeyConstraint(["plan_code", "plan_version"], ["app.plans.code", "app.plans.version"]),
+                      {"schema": "app"})
+
+    store = Column(String, primary_key=True, default="app_store")
+    product_id = Column(String, primary_key=True)
+    plan_code = Column(String, nullable=False)
+    plan_version = Column(Integer, nullable=False)
+    # "monthly" | "yearly"
+    period = Column(String, nullable=False)
+    offered = Column(Boolean, nullable=False, default=True)
+
+
+class BillingAccount(Base):
+    """Who pays: a family's account. Each parent gets one; later two
+    parents can share one (billing_account_members). A purchase's
+    appAccountToken is this id, not a parent's."""
+    __tablename__ = "billing_accounts"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class BillingAccountMember(Base):
+    """A parent in a billing account; one account per parent."""
+    __tablename__ = "billing_account_members"
+    __table_args__ = {"schema": "app"}
+
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="CASCADE"), primary_key=True)
+    billing_account_id = Column(UUID(as_uuid=True), ForeignKey("app.billing_accounts.id", ondelete="CASCADE"),
+                                nullable=False, index=True)
+    # "owner" | "member"
+    role = Column(String, nullable=False, default="owner")
+    joined_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class Subscription(Base):
+    """A store subscription as it is now, kept current from Apple's own
+    answer (Get All Subscription Statuses) on every notification, verify
+    and restore. A purchase covers one account at a time; a family-shared
+    copy (Apple's Family Sharing) may cover another."""
+    __tablename__ = "subscriptions"
+    __table_args__ = (ForeignKeyConstraint(["plan_code", "plan_version"], ["app.plans.code", "app.plans.version"]),
+                      Index("subscriptions_purchase_uniq", "store", "original_transaction_id", unique=True,
+                            postgresql_where=text("ownership = 'purchased'"),
+                            sqlite_where=text("ownership = 'purchased'")),
+                      {"schema": "app"})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    billing_account_id = Column(UUID(as_uuid=True), ForeignKey("app.billing_accounts.id", ondelete="CASCADE"),
+                                index=True)
+    store = Column(String, nullable=False, default="app_store")
+    original_transaction_id = Column(String, nullable=False)
+    product_id = Column(String, nullable=False)
+    plan_code = Column(String, nullable=False)
+    plan_version = Column(Integer, nullable=False)
+    # "active" | "grace" | "billing_retry" | "expired" | "revoked"
+    status = Column(String, nullable=False)
+    # "purchased" | "family_shared"
+    ownership = Column(String, nullable=False, default="purchased")
+    # "sandbox" | "production"
+    environment = Column(String, nullable=False, default="production")
+    app_account_token = Column(UUID(as_uuid=True))
+    auto_renews = Column(Boolean, nullable=False, default=True)
+    current_period_ends_at = Column(DateTime(timezone=True))
+    grace_ends_at = Column(DateTime(timezone=True))
+    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class SubscriptionEvent(Base):
+    """Every store event, stored once: Apple's notifications (by their
+    notificationUUID, so a resend is recognised), and our own verify,
+    restore, transfer and daily reconcile. The current state can be rebuilt
+    from them."""
+    __tablename__ = "subscription_events"
+    __table_args__ = {"schema": "app"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store = Column(String, nullable=False, default="app_store")
+    # "notification" | "verify" | "restore" | "transfer" | "reconcile"
+    source = Column(String, nullable=False)
+    notification_uuid = Column(String, unique=True)
+    type = Column(String)
+    subtype = Column(String)
+    original_transaction_id = Column(String, index=True)
+    billing_account_id = Column(UUID(as_uuid=True), ForeignKey("app.billing_accounts.id", ondelete="SET NULL"))
+    signed_payload = Column(String)
+    received_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    processed_at = Column(DateTime(timezone=True))
+    error = Column(String)
+
+
+class EntitlementGrant(Base):
+    """Access given without a purchase: the free trial (once per account,
+    ever), a promo, support extending a trial, a referral. Either a whole
+    plan version for a while, or one limit raised."""
+    __tablename__ = "entitlement_grants"
+    __table_args__ = (CheckConstraint("plan_code IS NOT NULL OR limit_key IS NOT NULL", name="entitlement_grants_what"),
+                      ForeignKeyConstraint(["plan_code", "plan_version"], ["app.plans.code", "app.plans.version"]),
+                      Index("entitlement_grants_one_trial", "billing_account_id", unique=True,
+                            postgresql_where=text("source = 'trial'"), sqlite_where=text("source = 'trial'")),
+                      {"schema": "app"})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    billing_account_id = Column(UUID(as_uuid=True), ForeignKey("app.billing_accounts.id", ondelete="CASCADE"),
+                                nullable=False)
+    # "trial" | "promo" | "support" | "referral"
+    source = Column(String, nullable=False)
+    plan_code = Column(String)
+    plan_version = Column(Integer)
+    limit_key = Column(String)
+    limit_value = Column(BigInteger)
+    starts_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    ends_at = Column(DateTime(timezone=True))
+    note = Column(String)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class UsageEvent(Base):
+    """One metered use (a Chat reply's tokens), append-only. The id is made
+    by the caller, so a retry counts once."""
+    __tablename__ = "usage_events"
+    __table_args__ = (Index("usage_events_account_meter_idx", "billing_account_id", "meter", "occurred_at"),
+                      {"schema": "app"})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    billing_account_id = Column(UUID(as_uuid=True), ForeignKey("app.billing_accounts.id", ondelete="CASCADE"),
+                                nullable=False)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("app.parents.id", ondelete="SET NULL"))
+    child_id = Column(UUID(as_uuid=True), ForeignKey("app.children.id", ondelete="SET NULL"))
+    # "ai_tokens", later others.
+    meter = Column(String, nullable=False)
+    quantity = Column(BigInteger, nullable=False)
+    occurred_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Model, input and output tokens, and the like.
+    meta = Column(JSON)
+
+
+class UsageCounter(Base):
+    """The running total per account, meter and billing period, updated in
+    the same transaction as each usage event: a limit check is one row."""
+    __tablename__ = "usage_counters"
+    __table_args__ = {"schema": "app"}
+
+    billing_account_id = Column(UUID(as_uuid=True), ForeignKey("app.billing_accounts.id", ondelete="CASCADE"),
+                                primary_key=True)
+    meter = Column(String, primary_key=True)
+    period_start = Column(DateTime(timezone=True), primary_key=True)
+    total = Column(BigInteger, nullable=False, default=0)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

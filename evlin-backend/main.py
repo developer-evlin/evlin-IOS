@@ -447,6 +447,185 @@ _MIGRATIONS = [
         CONSTRAINT habit_checkins_habit_day_uniq UNIQUE (habit_id, day)
     )""",
     "CREATE INDEX IF NOT EXISTS habit_checkins_child_day_idx ON app.habit_checkins (child_id, day)",
+    # The child's profile from their device's setup, kept on the server, and
+    # per-field edits on children (models.Child), 2026-11-20.
+    "ALTER TABLE app.children ADD COLUMN IF NOT EXISTS age_range text",
+    "ALTER TABLE app.children ADD COLUMN IF NOT EXISTS gender text",
+    # When the family added the child (not "created_at", which an earlier
+    # statement here drops on every boot).
+    "ALTER TABLE app.children ADD COLUMN IF NOT EXISTS added_at timestamptz NOT NULL DEFAULT now()",
+    # Children made before the column: when they were activated, if earlier.
+    "UPDATE app.children SET added_at = activated_at WHERE activated_at IS NOT NULL AND activated_at < added_at",
+    "ALTER TABLE app.children ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()",
+    "ALTER TABLE app.children ADD COLUMN IF NOT EXISTS field_edits jsonb",
+    # A split task names the task it came from (models.Task.split_from).
+    "ALTER TABLE app.tasks ADD COLUMN IF NOT EXISTS split_from uuid REFERENCES app.tasks(id) ON DELETE SET NULL",
+    # The child's device: Screen Time access, who signed it out, last sync.
+    "ALTER TABLE app.devices ADD COLUMN IF NOT EXISTS screen_time_access boolean",
+    "ALTER TABLE app.devices ADD COLUMN IF NOT EXISTS signed_out_by text",
+    "ALTER TABLE app.devices ADD COLUMN IF NOT EXISTS last_synced_at timestamptz",
+    # Notifications to parents (models.PushToken, Notification,
+    # NotificationPref), 2026-11-20. The old design file's push tables were
+    # never used: dropped, and devices.push_token moves to push_tokens.
+    "DROP TABLE IF EXISTS app.push_outbox",
+    "DROP TABLE IF EXISTS app.parent_devices",
+    "ALTER TABLE app.devices DROP COLUMN IF EXISTS push_token",
+    """CREATE TABLE IF NOT EXISTS app.push_tokens (
+        id uuid PRIMARY KEY,
+        parent_session_id uuid REFERENCES app.parent_sessions(id) ON DELETE CASCADE,
+        device_id uuid REFERENCES app.devices(id) ON DELETE CASCADE,
+        token text NOT NULL UNIQUE,
+        environment text NOT NULL DEFAULT 'production' CHECK (environment IN ('sandbox', 'production')),
+        created_at timestamptz NOT NULL DEFAULT now(),
+        last_seen_at timestamptz NOT NULL DEFAULT now(),
+        disabled_at timestamptz,
+        CONSTRAINT push_tokens_one_owner CHECK ((parent_session_id IS NULL) <> (device_id IS NULL))
+    )""",
+    "CREATE INDEX IF NOT EXISTS push_tokens_session_idx ON app.push_tokens (parent_session_id)",
+    "CREATE INDEX IF NOT EXISTS push_tokens_device_idx ON app.push_tokens (device_id)",
+    """CREATE TABLE IF NOT EXISTS app.notifications (
+        id uuid PRIMARY KEY,
+        kind text NOT NULL,
+        parent_id uuid NOT NULL REFERENCES app.parents(id) ON DELETE CASCADE,
+        child_id uuid REFERENCES app.children(id) ON DELETE CASCADE,
+        device_id uuid REFERENCES app.devices(id) ON DELETE SET NULL,
+        day date,
+        dedupe_key text NOT NULL UNIQUE,
+        title text NOT NULL,
+        body text NOT NULL DEFAULT '',
+        data jsonb,
+        send_after timestamptz NOT NULL DEFAULT now(),
+        status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'skipped', 'failed')),
+        attempts integer NOT NULL DEFAULT 0,
+        last_error text,
+        sent_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS notifications_pending_idx ON app.notifications (send_after) WHERE status = 'pending'",
+    "CREATE INDEX IF NOT EXISTS notifications_created_idx ON app.notifications (created_at)",
+    "CREATE INDEX IF NOT EXISTS notifications_parent_idx ON app.notifications (parent_id)",
+    """CREATE TABLE IF NOT EXISTS app.notification_prefs (
+        parent_id uuid NOT NULL REFERENCES app.parents(id) ON DELETE CASCADE,
+        kind text NOT NULL,
+        enabled boolean NOT NULL DEFAULT true,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (parent_id, kind)
+    )""",
+    # Payments: entitlements, versioned plans, grants and metered usage
+    # (models.Plan … UsageCounter), 2026-11-20. Tables only; nothing reads
+    # them yet.
+    """CREATE TABLE IF NOT EXISTS app.plans (
+        code text NOT NULL,
+        version integer NOT NULL,
+        name text NOT NULL,
+        is_free boolean NOT NULL DEFAULT false,
+        active boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (code, version)
+    )""",
+    """CREATE TABLE IF NOT EXISTS app.plan_limits (
+        plan_code text NOT NULL,
+        plan_version integer NOT NULL,
+        key text NOT NULL,
+        value bigint,
+        PRIMARY KEY (plan_code, plan_version, key),
+        FOREIGN KEY (plan_code, plan_version) REFERENCES app.plans(code, version) ON DELETE CASCADE
+    )""",
+    """CREATE TABLE IF NOT EXISTS app.store_products (
+        store text NOT NULL DEFAULT 'app_store',
+        product_id text NOT NULL,
+        plan_code text NOT NULL,
+        plan_version integer NOT NULL,
+        period text NOT NULL CHECK (period IN ('monthly', 'yearly')),
+        offered boolean NOT NULL DEFAULT true,
+        PRIMARY KEY (store, product_id),
+        FOREIGN KEY (plan_code, plan_version) REFERENCES app.plans(code, version)
+    )""",
+    """CREATE TABLE IF NOT EXISTS app.billing_accounts (
+        id uuid PRIMARY KEY,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    """CREATE TABLE IF NOT EXISTS app.billing_account_members (
+        parent_id uuid PRIMARY KEY REFERENCES app.parents(id) ON DELETE CASCADE,
+        billing_account_id uuid NOT NULL REFERENCES app.billing_accounts(id) ON DELETE CASCADE,
+        role text NOT NULL DEFAULT 'owner' CHECK (role IN ('owner', 'member')),
+        joined_at timestamptz NOT NULL DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_app_billing_account_members_billing_account_id ON app.billing_account_members (billing_account_id)",
+    """CREATE TABLE IF NOT EXISTS app.subscriptions (
+        id uuid PRIMARY KEY,
+        billing_account_id uuid REFERENCES app.billing_accounts(id) ON DELETE CASCADE,
+        store text NOT NULL DEFAULT 'app_store',
+        original_transaction_id text NOT NULL,
+        product_id text NOT NULL,
+        plan_code text NOT NULL,
+        plan_version integer NOT NULL,
+        status text NOT NULL CHECK (status IN ('active', 'grace', 'billing_retry', 'expired', 'revoked')),
+        ownership text NOT NULL DEFAULT 'purchased' CHECK (ownership IN ('purchased', 'family_shared')),
+        environment text NOT NULL DEFAULT 'production' CHECK (environment IN ('sandbox', 'production')),
+        app_account_token uuid,
+        auto_renews boolean NOT NULL DEFAULT true,
+        current_period_ends_at timestamptz,
+        grace_ends_at timestamptz,
+        started_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        FOREIGN KEY (plan_code, plan_version) REFERENCES app.plans(code, version)
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_purchase_uniq ON app.subscriptions (store, original_transaction_id) WHERE ownership = 'purchased'",
+    "CREATE INDEX IF NOT EXISTS ix_app_subscriptions_billing_account_id ON app.subscriptions (billing_account_id)",
+    """CREATE TABLE IF NOT EXISTS app.subscription_events (
+        id uuid PRIMARY KEY,
+        store text NOT NULL DEFAULT 'app_store',
+        source text NOT NULL CHECK (source IN ('notification', 'verify', 'restore', 'transfer', 'reconcile')),
+        notification_uuid text UNIQUE,
+        type text,
+        subtype text,
+        original_transaction_id text,
+        billing_account_id uuid REFERENCES app.billing_accounts(id) ON DELETE SET NULL,
+        signed_payload text,
+        received_at timestamptz NOT NULL DEFAULT now(),
+        processed_at timestamptz,
+        error text
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_app_subscription_events_original_transaction_id ON app.subscription_events (original_transaction_id)",
+    """CREATE TABLE IF NOT EXISTS app.entitlement_grants (
+        id uuid PRIMARY KEY,
+        billing_account_id uuid NOT NULL REFERENCES app.billing_accounts(id) ON DELETE CASCADE,
+        source text NOT NULL CHECK (source IN ('trial', 'promo', 'support', 'referral')),
+        plan_code text,
+        plan_version integer,
+        limit_key text,
+        limit_value bigint,
+        starts_at timestamptz NOT NULL DEFAULT now(),
+        ends_at timestamptz,
+        note text,
+        created_by uuid REFERENCES app.parents(id) ON DELETE SET NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT entitlement_grants_what CHECK (plan_code IS NOT NULL OR limit_key IS NOT NULL),
+        FOREIGN KEY (plan_code, plan_version) REFERENCES app.plans(code, version)
+    )""",
+    # The free trial, once per account, ever.
+    "CREATE UNIQUE INDEX IF NOT EXISTS entitlement_grants_one_trial ON app.entitlement_grants (billing_account_id) WHERE source = 'trial'",
+    "CREATE INDEX IF NOT EXISTS entitlement_grants_account_idx ON app.entitlement_grants (billing_account_id)",
+    """CREATE TABLE IF NOT EXISTS app.usage_events (
+        id uuid PRIMARY KEY,
+        billing_account_id uuid NOT NULL REFERENCES app.billing_accounts(id) ON DELETE CASCADE,
+        parent_id uuid REFERENCES app.parents(id) ON DELETE SET NULL,
+        child_id uuid REFERENCES app.children(id) ON DELETE SET NULL,
+        meter text NOT NULL,
+        quantity bigint NOT NULL CHECK (quantity >= 0),
+        occurred_at timestamptz NOT NULL DEFAULT now(),
+        meta jsonb
+    )""",
+    "CREATE INDEX IF NOT EXISTS usage_events_account_meter_idx ON app.usage_events (billing_account_id, meter, occurred_at)",
+    """CREATE TABLE IF NOT EXISTS app.usage_counters (
+        billing_account_id uuid NOT NULL REFERENCES app.billing_accounts(id) ON DELETE CASCADE,
+        meter text NOT NULL,
+        period_start timestamptz NOT NULL,
+        total bigint NOT NULL DEFAULT 0,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (billing_account_id, meter, period_start)
+    )""",
 ]
 
 
@@ -523,6 +702,14 @@ _EXPECTED_COLUMNS = [
     ("app.occurrences", "updated_at"), ("app.child_state", "field_edits"),
     ("app.child_state", "instant_unlock_earned_at"), ("app.child_state", "instant_unlock_reset_on"),
     ("app.habits", "done"), ("app.habit_checkins", "status"),
+    ("app.children", "age_range"), ("app.children", "gender"), ("app.children", "added_at"),
+    ("app.children", "field_edits"), ("app.tasks", "split_from"),
+    ("app.devices", "screen_time_access"), ("app.devices", "signed_out_by"), ("app.devices", "last_synced_at"),
+    ("app.push_tokens", "token"), ("app.notifications", "dedupe_key"), ("app.notification_prefs", "enabled"),
+    ("app.plans", "version"), ("app.plan_limits", "value"), ("app.store_products", "product_id"),
+    ("app.billing_accounts", "id"), ("app.billing_account_members", "billing_account_id"),
+    ("app.subscriptions", "original_transaction_id"), ("app.subscription_events", "notification_uuid"),
+    ("app.entitlement_grants", "source"), ("app.usage_events", "meter"), ("app.usage_counters", "total"),
 ]
 
 

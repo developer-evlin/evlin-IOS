@@ -30,14 +30,23 @@ class ParentResponse(ParentBase):
     class Config:
         from_attributes = True
 
+# The child's profile as setup asks it (2026-11-20): an age bracket, never
+# a birthdate, and a gender.
+AgeRange = Literal["4-6", "7-9", "10-12", "13-17"]
+Gender = Literal["female", "male", "other"]
+
+
 class ChildBase(BaseModel):
     name: str
     birth_year: Optional[int] = None
     color_index: int = 0
     avatar_url: Optional[str] = None
+    age_range: Optional[AgeRange] = None
+    gender: Optional[Gender] = None
 
 class ChildCreate(ChildBase):
-    pass
+    # Made on the phone, so a retried create answers with the same child.
+    id: Optional[UUID] = None
 
 class ChildResponse(ChildBase):
     id: UUID
@@ -72,6 +81,8 @@ class ChildUpdate(BaseModel):
     name: Optional[str] = None
     color_index: Optional[int] = None
     birth_year: Optional[int] = None
+    age_range: Optional[AgeRange] = None
+    gender: Optional[Gender] = None
     # The parent phone's own zone, used only while the child has none
     # (update_child): the kid's device, which reports its own on every
     # sync, always has the last word.
@@ -515,6 +526,9 @@ class DeviceUpdate(BaseModel):
     # The child's name, typed on the kid's device after pairing (the kid's
     # setup pairs first, then asks the name, 2026-11-09).
     name: Optional[str] = None
+    # The age bracket and gender picked on the kid's device in setup.
+    age_range: Optional[AgeRange] = None
+    gender: Optional[Gender] = None
     # The kid's device has finished its setup. Only ever true.
     setup_complete: Optional[bool] = None
     # Family Sharing's hand-off (models.Device.setup_stage); "" clears it.

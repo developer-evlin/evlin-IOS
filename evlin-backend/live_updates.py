@@ -35,7 +35,11 @@ HEARTBEAT_SECONDS = 20
 # Written by the request that shows them, and never displayed on the other
 # device: chat is request/response, memory is internal. Announcing these
 # would only wake every device for a sync that finds nothing new.
-_SILENT = (models.ChatMessage, models.ChatConversation, models.ChildMemory, models.AuditLog, models.AccessCode, models.IdempotencyKey)
+# Notifications, push tokens and metered usage are the server's own
+# bookkeeping: nothing on either device shows them.
+_SILENT = (models.ChatMessage, models.ChatConversation, models.ChildMemory, models.AuditLog, models.AccessCode,
+           models.IdempotencyKey, models.PushToken, models.Notification, models.NotificationPref,
+           models.UsageEvent, models.UsageCounter, models.SubscriptionEvent)
 
 _PENDING = "live_updates_topics"
 
